@@ -1,14 +1,18 @@
 """The bank pages: import statements, see which spending lines have their
 invoice, settle the rest by hand - the rules for payments that never have
 one - and, on « Dépenses », where everything that left the account went;
-on « Entrées d'argent », what came in, beside what the till was paid.
+on « Entrées d'argent », what came in, beside what the till was paid; on
+« Trésorerie », the account's balance on every day.
 
 « Dépenses » is deliberately a page of its own rather than a seventh filter
 of the operations: those are about a line's invoice, and that page is about
 the money, over a period, whether or not there is an invoice at all. The
-three pages are Banque's tabs (bank/_tabs.html). See bank/spending.py
-for what it counts and what it refuses to blend with « Marges », and
-bank/income.py for the money that came in.
+four pages are Banque's tabs (bank/_tabs.html): « Opérations »,
+« Dépenses par catégorie », « Entrées d'argent » and « Trésorerie ». See
+bank/spending.py for what « Dépenses » counts and what it refuses to blend
+with « Marges », bank/income.py for the money that came in, and
+bank/treasury.py for the balances typed and what the operations between
+them explain.
 """
 
 from __future__ import annotations
@@ -25,12 +29,14 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 from django.contrib import messages
-from django.core.exceptions import FieldDoesNotExist
+from django.contrib.messages import get_messages
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch, prefetch_related_objects
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.formats import localize
 from django.utils.html import escape
 from django.utils.http import urlencode
@@ -48,6 +54,7 @@ from common import (
     is_id,
     last_twelve_months,
     left_out_from,
+    read_date,
     safe_next,
     selection_too_big,
 )
@@ -57,8 +64,17 @@ from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 from returnables.patterns import PatternError
 
-from . import income, invoice_files, matching, recognition, reconcile, spending, statements
-from .forms import FORMAT_NAME_TAKEN, NAME_TAKEN, IgnoreRuleForm, OperationRuleForm, StatementFormatForm
+from . import income, invoice_files, matching, recognition, reconcile, spending, statements, treasury
+from .forms import (
+    FORMAT_NAME_TAKEN,
+    NAME_TAKEN,
+    REASON_MAX_LENGTH,
+    IgnoreRuleForm,
+    OperationRuleForm,
+    StatementFormatForm,
+    TreasuryAdjustmentForm,
+    TreasuryPointForm,
+)
 from .models import (
     BankTransaction,
     CounterpartyAlias,
@@ -68,6 +84,8 @@ from .models import (
     InvoicePayment,
     OperationRule,
     StatementFormat,
+    TreasuryAdjustment,
+    TreasuryCheckpoint,
 )
 from .rules import caught, ignoring_rule, reason_of, searcher
 
@@ -410,6 +428,8 @@ def bank_home(request):
             # those pages read dates and not months.
             "income_url": _bank_income_url(month, window),
             "spending_url": _spending_url(*_bank_period(month, window)),
+            # « Trésorerie » over the same period: its curve and its months.
+            "treasury_url": _treasury_page_url(*_bank_period(month, window)),
             # Banque's tabs (bank/_tabs.html): this one is the operations.
             "bank_url": _page_url(view, month, window),
             "bank_tab": "operations",
@@ -547,6 +567,7 @@ def spending_home(request):
             # Money that came IN, and what the till says it sold - the page
             # this one is not. Empty where it does not exist (yet).
             "income_url": _income_url(window),
+            "treasury_url": _other_page_url("bank:treasury", window),
             "spending_url": here,
             "bank_tab": "spending",
             "has_lines": BankTransaction.objects.exists(),
@@ -612,6 +633,7 @@ def income_home(request):
             "bank_url": _page_url(DEFAULT_VIEW, "", window),
             "spending_url": _other_page_url("bank:spending_home", window),
             "margins_url": _other_page_url("margins:margins_home", window),
+            "treasury_url": _other_page_url("bank:treasury", window),
             # Banque's tabs (bank/_tabs.html): this one is the money in.
             "income_url": here,
             "bank_tab": "income",
@@ -1941,7 +1963,21 @@ def _import_statements(request):
         )
     if created and not rules.kinds:
         messages.warning(request, NO_KIND_RULE)
+    if created:
+        _say_treasury_gaps(request)
     return redirect(back)
+
+
+def _say_treasury_gaps(request) -> None:
+    """« Trésorerie : 2 écarts à résoudre. » after an import that brought
+    lines, when a gap is now to resolve: the import completing a pending
+    stretch is the moment a gap becomes real (bank/treasury.py, « pending »),
+    and nobody opens « Trésorerie » to find out. The treasury is read here,
+    on the import's POST alone (`treasury.QUERIES` more queries), and says
+    nothing where there is no point at all."""
+    gaps = len(treasury.load().to_resolve)
+    if gaps:
+        messages.warning(request, f"Trésorerie : {_gaps_to_resolve(gaps)}.")
 
 
 def _period(request, months) -> tuple[str, DateRange]:
@@ -2120,6 +2156,13 @@ def _income_page_url(window: DateRange, showing_all: bool) -> str:
     - built here, for the reason `_page_url` is."""
     query = urlencode(_window_fields(window, showing_all))
     return f"{reverse('bank:income_home')}{'?' + query if query else ''}"
+
+
+def _treasury_page_url(window: DateRange, showing_all: bool) -> str:
+    """« Trésorerie » with the period the reader is looking through it - its
+    curve's and its months' - built here, for the reason `_page_url` is."""
+    query = urlencode(_window_fields(window, showing_all))
+    return f"{reverse('bank:treasury')}{'?' + query if query else ''}"
 
 
 def _covered_url(report, window: DateRange) -> str:
@@ -2655,3 +2698,663 @@ def invoice_search(request, pk):
             "page_url": _back(request),
         },
     )
+
+
+# -- « Trésorerie » ------------------------------------------------------------------------------------------------
+#
+# Banque's fourth tab: the account's balance on every day, from the balances a
+# person typed (« points ») and the operations imported. bank/treasury.py has
+# every rule of reading; these views read the request, call it, and say in
+# French what happened. Each write runs inside ONE transaction that reads the
+# treasury again first (SQLite's IMMEDIATE mode takes the write lock as it
+# opens): a page drawn before another tab wrote, or a double click, is
+# refused rather than acted on twice.
+
+#: Where a treasury message is said: each carries the section its redirect
+#: lands on (extra_tags) and is printed there - said at the top, two screens
+#: above « Écarts à résoudre », nobody saw it (CLAUDE.md, « Combler les
+#: écarts »). A message whose section is not drawn is said at the top.
+SAISIR, ECARTS, POINTS, AJUSTEMENTS = "saisir", "ecarts", "points", "ajustements"
+TREASURY_PLACES = (SAISIR, ECARTS, POINTS, AJUSTEMENTS)
+#: « Remplacer »: the balance of a date that already has one replaced - never
+#: without this button.
+REPLACE = "remplacer"
+#: « Dater ce point du … »: a point moved to the day before its own.
+EVE = "veille"
+#: The adjustment POST's fields: the two points and the gap the page showed.
+BEFORE_PARAM, AFTER_PARAM, GAP_PARAM = "avant", "apres", "ecart"
+#: `?date=` - the « Corriger » links prefilling the form - and the day
+#: « Dater ce point du … » posts.
+DATE_PARAM = "date"
+POINT_GONE = "Ce point n'existe plus."
+ADJUSTMENT_GONE = "Cet ajustement n'existe plus."
+PAIR_GONE = "Un des deux points n'existe plus : rien n'a été ajouté."
+PAIR_SPLIT = "Un autre point est maintenant entre ces deux-là : rien n'a été ajouté."
+GAP_NOT_FOUND = "Écart introuvable : rien n'a été ajouté."
+PAIR_AGREES = "Ces deux points concordent déjà : rien n'a été ajouté."
+PAIR_PENDING = "Ces deux points attendent un relevé à importer : rien n'a été ajouté."
+GAP_CHANGED = "L'écart a changé depuis l'affichage : rien n'a été ajouté."
+GAP_TOO_BIG = "Écart trop grand pour un ajustement : corrigez un des points. Rien n'a été ajouté."
+POINT_CHANGED = "Ce point a changé depuis l'affichage : rien n'a changé."
+#: « Dater ce point du … » from a page drawn before the gap changed (an
+#: import, an adjustment, a point corrected): the point is as it was, the
+#: hint no longer holds.
+MOVE_CHANGED = "L'écart a changé depuis l'affichage : rien n'a changé."
+#: A gap as the page posts it back (`GapCard.posted`): « -50.00 ».
+POSTED_GAP = re.compile(r"-?[0-9]{1,13}\.[0-9]{2}")
+
+
+@dataclass
+class TreasuryEnd:
+    """One of a gap's two points, on its card: its « Corriger » link, and
+    where its « Supprimer » posts with what it asks first."""
+
+    point: treasury.Point
+    correct_url: str
+    action_url: str
+    confirm: str
+
+
+@dataclass
+class AdjustmentRow:
+    """An adjustment, in a gap's card or in « Ajustements »: whether it
+    counts (between two points) and its « Supprimer »."""
+
+    correction: treasury.Correction
+    counts: bool
+    #: « +50.00 », as a sentence says it.
+    signed: str
+    action_url: str
+    confirm: str
+
+
+@dataclass
+class GapCard:
+    """A gap to resolve, as « Écarts à résoudre » draws it: what the
+    operations explain, the hints that apply, and the actions of
+    bank/treasury.py's « Resolving a gap »."""
+
+    gap: treasury.Gap
+    said: str
+    hints: list[str]
+    ends: list[TreasuryEnd]
+    #: Its counted adjustments, each with its « Supprimer » - and every one
+    #: its suspect hint names (`_gap_card`), oldest first, each once.
+    adjustments: list[AdjustmentRow]
+    #: What « Ajouter un ajustement de … » adds, « +50.00 », and what its
+    #: form posts back as the gap shown, « 50.00 » (`POSTED_GAP`).
+    signed: str
+    posted: str
+    #: « Dater ce point du … », offered only where the POST would take it.
+    move_target: date | None = None
+    move_url: str = ""
+    move_confirm: str = ""
+
+
+@dataclass
+class PointRow:
+    """A balance typed, as « Soldes saisis » draws it: what it says beside
+    the previous one (`state`: "", "agrees", "pending" or "to_resolve")."""
+
+    point: treasury.Point
+    state: str
+    said: str
+    correct_url: str
+    action_url: str
+    confirm: str
+
+
+def _gaps_to_resolve(count: int) -> str:
+    """« 1 écart à résoudre », « 3 écarts à résoudre »."""
+    return f"{count} écart{'s' if count > 1 else ''} à résoudre"
+
+
+def _signed(amount: Decimal) -> str:
+    """« +50.00 », « -1 234.56 »: an adjustment or a gap, as a sentence says it."""
+    return format_money(amount, "+.2f")
+
+
+def _more_or_less(gap: treasury.Gap) -> str:
+    """« 50.00 € de plus », « 12.30 € de moins » - the account against what
+    the operations explain, in the words `Gap` (a bank line's) uses."""
+    return f"{format_money(abs(gap.missing))} € {'de plus' if gap.missing > 0 else 'de moins'}"
+
+
+def _left_outside(orphans, *, future: bool) -> str:
+    """« 1 ajustement ne comptera plus. » - the adjustments a delete or a
+    move leaves outside every pair (bank/treasury.py, « orphans »)."""
+    if not orphans:
+        return ""
+    count = len(orphans)
+    many = count > 1
+    if future:
+        return f" {count} ajustement{'s' if many else ''} ne compter{'ont' if many else 'a'} plus."
+    return f" {count} ajustement{'s' if many else ''} ne compte{'nt' if many else ''} plus (voir « Ajustements »)."
+
+
+def _point_of_day(current: treasury.Treasury, day: date | None) -> treasury.Point | None:
+    """The point typed for `day`, among those `current` holds."""
+    return next((point for point in current.points if point.day == day), None) if day is not None else None
+
+
+def _sections_drawn(current: treasury.Treasury) -> set[str]:
+    """The sections the page draws for this treasury - where a message can
+    be said, and a redirect land."""
+    drawn = {SAISIR}
+    if current.to_resolve:
+        drawn.add(ECARTS)
+    if current.points:
+        drawn.add(POINTS)
+    if current.corrections or current.orphans:
+        drawn.add(AJUSTEMENTS)
+    return drawn
+
+
+def _treasury_messages(request, drawn: set[str]) -> dict[str, list]:
+    """{place: messages} - "top" the top of the page, each section its own
+    (its tag among the message's extra_tags), one whose section is not drawn
+    (its last adjustment deleted) at the top. Read once, which also marks
+    them said."""
+    said: dict[str, list] = {"top": [], **{place: [] for place in TREASURY_PLACES}}
+    for message in get_messages(request):
+        tags = (message.extra_tags or "").split()
+        said[next((tag for tag in TREASURY_PLACES if tag in tags and tag in drawn), "top")].append(message)
+    return said
+
+
+def _treasury_back(request) -> str:
+    """The page a treasury form was posted from - its window kept (`next`) -
+    without its anchor: each answer picks the section it lands on."""
+    return _back(request, "bank:treasury").split("#")[0]
+
+
+def _treasury_said(request, back: str, text: str, place: str, *, orphans_left: bool = False):
+    """One message per write, said where the redirect lands: in « Écarts à
+    résoudre », a warning, when a gap is to resolve once it is done; in the
+    section acted on otherwise (the top, where that section is no longer
+    drawn). `orphans_left` adds the adjustments still counting nowhere."""
+    current = treasury.load()
+    if orphans_left and current.orphans:
+        count = len(current.orphans)
+        text += f" {count} ajustement{'s' if count > 1 else ''} ne compte{'nt' if count > 1 else ''} toujours pas."
+    gaps = len(current.to_resolve)
+    if gaps:
+        messages.warning(request, f"{text} {_gaps_to_resolve(gaps)}.", extra_tags=ECARTS)
+        return redirect(f"{back}#{ECARTS}")
+    messages.success(request, text, extra_tags=place)
+    return redirect(f"{back}#{place}" if place in _sections_drawn(current) else back)
+
+
+def treasury_home(request):
+    """« Trésorerie », Banque's fourth tab: the account's balance on every
+    day, from the balances typed and the operations imported
+    (bank/treasury.py).
+
+    The window - `?du=&au=`, the last twelve months by default, `?tout=1` -
+    narrows the curve and the months alone: the headline, the gaps, the
+    points and the adjustments are the whole history. A POST saves a point
+    (`action` absent, « enregistrer » or « remplacer »; anything else is
+    refused): refused, the page is drawn again with the form's errors (200)
+    and its window; saved, one redirect to « Saisir un solde » - or to
+    « Écarts à résoudre », with a warning, when the balance disagrees with a
+    neighbour. A date that already has a balance is never replaced without
+    « Remplacer » (`_save_point`), and « Remplacer » is offered with that
+    balance said - a refusal of anything else on such a date included."""
+    asked = date_range(request)
+    showing_all = request.GET.get(ALL_PARAM) == "1"
+    window = DateRange() if showing_all else (asked or last_twelve_months())
+    here = _treasury_page_url(asked, showing_all)
+    today = timezone.localdate()
+    if request.method == "POST":
+        action = request.POST.get(RULE_ACTION, SAVE)
+        if action not in (SAVE, REPLACE):
+            messages.error(request, UNKNOWN_RULE_ACTION, extra_tags=SAISIR)
+            return redirect(f"{here}#{SAISIR}")
+        form = TreasuryPointForm(request.POST, today=today)
+        if form.is_valid():
+            answer = _save_point(request, form, here, replace=action == REPLACE)
+            if answer is not None:
+                return answer
+        current = treasury.load()
+        # « Remplacer » beside a date that has a balance - the one refused
+        # as taken, or a refusal of something else on such a date. Never
+        # without « Le JJ/MM/AAAA a déjà un solde : X € » (review C7): a stale
+        # tab refused for a typo offered « Remplacer » and never said what
+        # that date holds, and the typo fixed replaced it. Not when
+        # « Remplacer » was pressed already (« Corriger », then a typo): the
+        # person knows, and the date is not what is wrong.
+        day = form.taken_day or form.cleaned_data.get("date")
+        taken = _point_of_day(current, day)
+        if taken is not None and form.taken_day is None and action != REPLACE:
+            form.refuse_taken(taken.day, taken.balance)
+        form.replacing = taken is not None
+    else:
+        current = treasury.load()
+        form = _point_form(request, current, today)
+    return render(
+        request,
+        "bank/treasury.html",
+        _treasury_context(request, current, form, asked=asked, showing_all=showing_all, window=window, here=here),
+    )
+
+
+def _point_form(request, current: treasury.Treasury, today: date) -> TreasuryPointForm:
+    """« Saisir un solde » as a GET draws it: today's date - or `?date=`,
+    from a « Corriger » link, with that point's balance and « Remplacer »
+    offered at once."""
+    asked = read_date(request.GET.get(DATE_PARAM))
+    point = _point_of_day(current, asked)
+    initial = {"date": (asked or today).isoformat()}
+    if point is not None:
+        # Bare, as typed: an input's value is never grouped.
+        initial["solde"] = f"{point.balance:.2f}"
+    form = TreasuryPointForm(initial=initial, today=today)
+    form.replacing = point is not None
+    return form
+
+
+def _point_on(day: date) -> TreasuryCheckpoint | None:
+    """The point typed for `day`, if any - read inside the save's
+    transaction."""
+    return TreasuryCheckpoint.objects.filter(date=day).first()
+
+
+def _save_point(request, form: TreasuryPointForm, here: str, *, replace: bool):
+    """Save the point the form read, inside one transaction - or None, the
+    page to draw again: the date already has another balance and
+    « Remplacer » was not pressed (a phone tab left open for days posts a
+    stale date), or another tab gave it one between the check and the write
+    (the unique date's IntegrityError, never a 500). The same balance again
+    is « déjà enregistré », and nothing is written."""
+    day, balance = form.cleaned_data["date"], form.cleaned_data["solde"]
+    with transaction.atomic():
+        existing = _point_on(day)
+        if existing is not None and existing.balance == balance:
+            messages.info(
+                request, f"Solde du {day:%d/%m/%Y} déjà enregistré : {format_money(balance)} €.", extra_tags=SAISIR
+            )
+            return redirect(f"{here}#{SAISIR}")
+        if existing is not None and not replace:
+            form.refuse_taken(day, existing.balance)
+            return None
+        replaced = existing.balance if existing is not None else None
+        try:
+            with transaction.atomic():
+                if existing is None:
+                    TreasuryCheckpoint.objects.create(date=day, balance=balance)
+                else:
+                    existing.balance = balance
+                    existing.save(update_fields=["balance"])
+        except IntegrityError:
+            taken = TreasuryCheckpoint.objects.filter(date=day).first()
+            form.refuse_taken(day, taken.balance if taken is not None else None)
+            return None
+    return _point_saved(request, here, day, balance, replaced)
+
+
+def _point_saved(request, here: str, day: date, balance: Decimal, replaced: Decimal | None):
+    """ONE message for a point saved: « Solde du … enregistré : X € », what
+    it replaced, and « — concorde avec le point du … » when its gap with the
+    previous one agrees - in « Saisir un solde ». When it leaves a gap to
+    resolve beside it, a warning in « Écarts à résoudre » instead, where the
+    redirect lands. A pending gap (« relevé à importer ») adds nothing."""
+    current = treasury.load()
+    previous = current.gap_ending_on(day)
+    following = next((gap for gap in current.gaps if gap.before.day == day), None)
+    unsettled = next((gap for gap in (previous, following) if gap is not None and gap.to_resolve), None)
+    if unsettled is not None:
+        other = unsettled.before if unsettled.after.day == day else unsettled.after
+        messages.warning(
+            request,
+            f"Le solde du {day:%d/%m} ne concorde pas avec celui du {other.day:%d/%m} : à résoudre.",
+            extra_tags=ECARTS,
+        )
+        return redirect(f"{here}#{ECARTS}")
+    text = f"Solde du {day:%d/%m/%Y} enregistré : {format_money(balance)} €"
+    if replaced is not None:
+        text += f" (remplace {format_money(replaced)} €)"
+    if previous is not None and previous.agrees and not previous.pending:
+        text += f" — concorde avec le point du {previous.before.day:%d/%m}"
+    messages.success(request, f"{text}.", extra_tags=SAISIR)
+    return redirect(f"{here}#{SAISIR}")
+
+
+def _treasury_context(request, current: treasury.Treasury, form, *, asked, showing_all, window, here) -> dict:
+    """What treasury.html draws: every figure from `current`, every per-row
+    address reversed once for the page (`_by_pk`)."""
+    point_url, adjustment_url = _by_pk("bank:treasury_point"), _by_pk("bank:treasury_adjustment")
+    base, fields = reverse("bank:treasury"), _window_fields(asked, showing_all)
+
+    def correct_url(day: date) -> str:
+        # « Corriger »: the page, its window kept, the form prefilled.
+        return f"{base}?{urlencode([*fields, (DATE_PARAM, day.isoformat())])}#{SAISIR}"
+
+    adjustments = _adjustment_rows(current, adjustment_url)
+    by_pk = {row.correction.pk: row for row in adjustments}
+    cards = [_gap_card(gap, current, correct_url, point_url, by_pk) for gap in current.to_resolve]
+    # (« Septembre 2026 », the row), newest first.
+    months = [(_month_label(row.month), row) for row in reversed(current.months(window))]
+    latest = current.latest
+    return {
+        "said": _treasury_messages(request, _sections_drawn(current)),
+        "point_form": form,
+        "latest": latest,
+        # Amber only where the headline's own point ends a gap to resolve: a
+        # gap of last year must not light today's figure.
+        "headline_warn": latest is not None and current.unsettled(latest.reference),
+        "last_operation": current.last_operation,
+        "complete_through": current.complete_through,
+        "accounts": current.accounts,
+        "has_lines": current.last_operation is not None,
+        "gap_cards": cards,
+        "gaps_to_resolve": _gaps_to_resolve(len(cards)),
+        "point_rows": _point_rows(current, correct_url, point_url),
+        "adjustment_rows": adjustments,
+        "months": months,
+        # Columns drawn only when a row has something in them. « Écart » by
+        # the COUNT of gaps to resolve, never their sum: a suspect point's two
+        # gaps cancel out, and summed the column vanished (review C10). A row
+        # with one gap shows its figure, with several « N écarts » and their
+        # sum when it is not 0.
+        "months_adjusted": any(row.adjustments for _label, row in months),
+        "months_gaps": any(row.gaps_to_resolve for _label, row in months),
+        "chart_svg": _build_balance_svg(current.curve(window), label="Trésorerie"),
+        "provisional": current.curve_provisional(window),
+        "reason_max": REASON_MAX_LENGTH,
+        "adjustment_add_url": reverse("bank:treasury_adjustment_add"),
+        # The window, as « Entrées d'argent » draws it: what was typed for
+        # the inputs, `window` what the curve and the months are over.
+        "date_window": asked,
+        "window": window,
+        "is_default": not showing_all and not asked,
+        "showing_all": showing_all,
+        "all_url": _treasury_page_url(asked, True),
+        "period_url": _treasury_page_url(asked, False),
+        "clear_url": _treasury_page_url(DateRange(), False),
+        # Where every form comes back to, its window kept.
+        "page_url": here,
+        # Banque's tabs (bank/_tabs.html): this one is the treasury.
+        "bank_url": _page_url(DEFAULT_VIEW, "", window),
+        "spending_url": _other_page_url("bank:spending_home", window),
+        "income_url": _income_url(window),
+        "treasury_url": here,
+        "bank_tab": "treasury",
+    }
+
+
+def _adjustment_rows(current: treasury.Treasury, adjustment_url) -> list[AdjustmentRow]:
+    """Every adjustment, newest first - counting or not (`orphans`)."""
+    counted = {one.pk for one in current.corrections}
+    rows = [
+        AdjustmentRow(
+            one,
+            one.pk in counted,
+            _signed(one.amount),
+            adjustment_url(one.pk),
+            f"Supprimer l'ajustement du {one.day:%d/%m/%Y} ?",
+        )
+        for one in [*current.corrections, *current.orphans]
+    ]
+    rows.sort(key=lambda row: (row.correction.day, row.correction.pk or 0), reverse=True)
+    return rows
+
+
+def _adjustments_named(corrections: list[treasury.Correction]) -> str:
+    """« l'ajustement du 10/09 (+200.00 €) », « les ajustements du 05/09
+    (+50.00 €) et du 12/09 (+20.00 €) »."""
+    each = [f"du {one.day:%d/%m} ({_signed(one.amount)} €)" for one in corrections]
+    if len(each) == 1:
+        return f"l'ajustement {each[0]}"
+    return f"les ajustements {', '.join(each[:-1])} et {each[-1]}"
+
+
+def _gap_card(gap: treasury.Gap, current: treasury.Treasury, correct_url, point_url, adjustments) -> GapCard:
+    """One card of « Écarts à résoudre ».
+
+    A suspect point's hint is true of the point ALONE only when the counted
+    adjustments between its two neighbours (`Treasury.around`) add up to
+    0: the suspect is found on the raw gaps, so without the point its
+    neighbours are those adjustments apart. Otherwise the hint names them
+    and the card lists each with its « Supprimer » - one made on the
+    point's other side, or dated on its own day, is outside this card's
+    stretch and was listed on no card (review C2/C12)."""
+    said = f"Les opérations expliquent {_signed(gap.operations)} €"
+    if gap.adjusted:
+        said += f" et les ajustements {_signed(gap.adjusted)} €"
+    hints = []
+    listed = list(gap.corrections)
+    if gap.suspect is not None:
+        around = current.around(gap.suspect)
+        if sum((one.amount for one in around), Decimal("0")) == 0:
+            hints.append(f"Sans le point du {gap.suspect.day:%d/%m}, les points voisins concordent.")
+        else:
+            hints.append(
+                f"Sans le point du {gap.suspect.day:%d/%m} ni {_adjustments_named(around)}, "
+                "les points voisins concordent."
+            )
+            # The card's own adjustments are among them: each listed once.
+            by_pk = {one.pk: one for one in (*gap.corrections, *around)}
+            listed = sorted(by_pk.values(), key=lambda one: (one.day, one.pk or 0))
+    if gap.read_before is not None:
+        hints.append(f"L'écart vaut les opérations du {gap.read_before.day:%d/%m} : solde lu avant elles ?")
+    hints.append("Relevé manquant entre ces dates ? Importez-le.")
+    ends = [
+        TreasuryEnd(
+            point,
+            correct_url(point.day),
+            point_url(point.pk),
+            f"Supprimer le point du {point.day:%d/%m/%Y} ?"
+            + _left_outside(current.orphaned_by_deleting(point.pk), future=True),
+        )
+        for point in (gap.before, gap.after)
+    ]
+    card = GapCard(
+        gap,
+        f"{said}, l'écart est de {_more_or_less(gap)}.",
+        hints,
+        ends,
+        [adjustments[one.pk] for one in listed if one.pk in adjustments],
+        _signed(gap.missing),
+        f"{gap.missing:.2f}",
+    )
+    target, moving = gap.move_to, gap.read_before
+    # Offered only where the POST would take it: no point that day, and a
+    # day a statement can hold.
+    if (
+        target is not None
+        and moving is not None
+        and target >= statements.FIRST_DAY
+        and _point_of_day(current, target) is None
+    ):
+        card.move_target = target
+        card.move_url = point_url(moving.pk)
+        orphans = current.orphaned_by_moving(moving.pk, target)
+        if orphans:
+            card.move_confirm = f"Dater ce point du {target:%d/%m/%Y} ?" + _left_outside(orphans, future=True)
+    return card
+
+
+def _point_rows(current: treasury.Treasury, correct_url, point_url) -> list[PointRow]:
+    """« Soldes saisis », newest first, each with what it says beside the
+    previous one: « concorde », the gap « à résoudre », « relevé à
+    importer », or « — » for the first."""
+    rows = []
+    for point in reversed(current.points):
+        gap = current.gap_ending_on(point.day)
+        if gap is None:
+            state, said = "", "—"
+        elif gap.pending:
+            state, said = "pending", "relevé à importer"
+        elif gap.agrees:
+            state, said = "agrees", "concorde"
+        else:
+            state, said = "to_resolve", f"{_more_or_less(gap)} : à résoudre"
+        rows.append(
+            PointRow(
+                point,
+                state,
+                said,
+                correct_url(point.day),
+                point_url(point.pk),
+                f"Supprimer le point du {point.day:%d/%m/%Y} ?"
+                + _left_outside(current.orphaned_by_deleting(point.pk), future=True),
+            )
+        )
+    return rows
+
+
+def treasury_adjustment_add(request):
+    """« Ajouter un ajustement de ±X € » on a gap to resolve: exactly its
+    `missing`, dated on its later point's day, with an optional reason -
+    after which the pair agrees.
+
+    The POST trusts nothing: it names the two points (`avant`, `apres`, ids
+    through `common.is_id`) and the gap the page showed (`ecart`); inside ONE
+    transaction the treasury is read again and the adjustment refused,
+    nothing written, when a point is gone, another point now sits between
+    them, they agree already (a double click: the second is refused), the
+    pair waits for a statement, the gap is no longer the one shown, or it is
+    wider than an amount can be (refused, never truncated). A GET writes
+    nothing."""
+    back = _treasury_back(request)
+    if request.method != "POST":
+        return redirect(back)
+    form = TreasuryAdjustmentForm(request.POST)
+    gap = None
+    if not form.is_valid():
+        refused = str(form.errors["raison"][0])
+    else:
+        with transaction.atomic():
+            refused, gap = _adjustment_refused(
+                request.POST.get(BEFORE_PARAM), request.POST.get(AFTER_PARAM), request.POST.get(GAP_PARAM)
+            )
+            if gap is not None and not refused:
+                adjustment = TreasuryAdjustment(
+                    date=gap.after.day, amount=gap.missing, reason=form.cleaned_data["raison"]
+                )
+                try:
+                    adjustment.clean()
+                except ValidationError as error:
+                    refused = f"{error.messages[0]} Rien n'a été ajouté."
+                else:
+                    adjustment.save()
+    if refused or gap is None:
+        messages.error(request, refused, extra_tags=ECARTS)
+        return redirect(f"{back}#{ECARTS}")
+    text = (
+        f"Ajustement de {_signed(gap.missing)} € ajouté au {gap.after.day:%d/%m/%Y} : "
+        f"les points du {gap.before.day:%d/%m} et du {gap.after.day:%d/%m} concordent."
+    )
+    return _treasury_said(request, back, text, AJUSTEMENTS)
+
+
+def _adjustment_refused(before, after, shown) -> tuple[str, treasury.Gap | None]:
+    """(why the adjustment POST is refused - "" when it is not -, the gap
+    read again). Called inside the transaction that writes."""
+    if not (is_id(before) and is_id(after)):
+        return PAIR_GONE, None
+    current = treasury.load()
+    gap = current.gap_between(int(before), int(after))
+    if gap is None:
+        first, second = current.point(int(before)), current.point(int(after))
+        if first is None or second is None:
+            return PAIR_GONE, None
+        return (PAIR_SPLIT if first.day < second.day else GAP_NOT_FOUND), None
+    if gap.agrees:
+        return PAIR_AGREES, gap
+    if gap.pending:
+        return PAIR_PENDING, gap
+    if not isinstance(shown, str) or not POSTED_GAP.fullmatch(shown) or Decimal(shown) != gap.missing:
+        return GAP_CHANGED, gap
+    if gap.too_big:
+        return GAP_TOO_BIG, gap
+    return "", gap
+
+
+def treasury_point(request, pk):
+    """One point: « supprimer », or « veille » - « Dater ce point du … »,
+    offered when the gap it ends equals its day's operations (read before
+    them), and refused once that no longer holds (`_point_moved`). POST
+    only, inside one transaction; a point gone is said, never a
+    404 nor a 500. A delete or a move leaving adjustments outside every pair
+    says so."""
+    back = _treasury_back(request)
+    if request.method != "POST":
+        return redirect(back)
+    action = request.POST.get(RULE_ACTION)
+    place = ECARTS if action == EVE else POINTS
+    if action not in (DELETE, EVE):
+        messages.error(request, UNKNOWN_RULE_ACTION, extra_tags=place)
+        return redirect(f"{back}#{place}")
+    with transaction.atomic():
+        point = TreasuryCheckpoint.objects.filter(pk=pk).first() if is_id(str(pk)) else None
+        if point is None:
+            text, refused = "", POINT_GONE
+        elif action == DELETE:
+            orphans = treasury.load().orphaned_by_deleting(point.pk)
+            point.delete()
+            text, refused = f"Point du {point.date:%d/%m/%Y} supprimé.{_left_outside(orphans, future=False)}", ""
+        else:
+            text, refused = _point_moved(point, request.POST.get(DATE_PARAM))
+    if refused:
+        messages.error(request, refused, extra_tags=place)
+        return redirect(f"{back}#{place}")
+    # Done, it is said where the point is listed - the card asked from is
+    # gone when the pair now agrees.
+    return _treasury_said(request, back, text, POINTS)
+
+
+def _point_moved(point: TreasuryCheckpoint, posted) -> tuple[str, str]:
+    """« Dater ce point du … »: the point moved to the day before its own -
+    the day the page showed (`posted`), so a second click, or a page drawn
+    before another tab moved it, moves nothing. Refused when that day has a
+    point, or is before statements can exist - and unless the treasury,
+    read again inside the transaction, still has a gap TO RESOLVE whose
+    « read before » hint names this point and that day (`MOVE_CHANGED`):
+    drawn before an import, an adjustment or a correction settled the pair,
+    the page moved a right reading to the wrong day and made a gap of its
+    own (review C6). (the message, the refusal)."""
+    target = point.date - timedelta(days=1) if point.date > date.min else None
+    if target is None or read_date(posted) != target:
+        return "", POINT_CHANGED
+    if target < statements.FIRST_DAY:
+        return "", f"Le {target:%d/%m/%Y} est avant le {statements.FIRST_DAY:%d/%m/%Y} : rien n'a changé."
+    taken = f"Le {target:%d/%m/%Y} a déjà un solde : rien n'a changé."
+    if TreasuryCheckpoint.objects.filter(date=target).exists():
+        return "", taken
+    current = treasury.load()
+    if not any(
+        gap.read_before is not None and gap.read_before.pk == point.pk and gap.move_to == target
+        for gap in current.to_resolve
+    ):
+        return "", MOVE_CHANGED
+    orphans = current.orphaned_by_moving(point.pk, target)
+    was = point.date
+    point.date = target
+    try:
+        with transaction.atomic():
+            point.save(update_fields=["date"])
+    except IntegrityError:
+        return "", taken
+    return f"Point du {was:%d/%m/%Y} daté du {target:%d/%m/%Y}.{_left_outside(orphans, future=False)}", ""
+
+
+def treasury_adjustment(request, pk):
+    """One adjustment: « supprimer » - the fix when the real operation came
+    in after it, and the way out of one that counts nowhere. POST only,
+    inside one transaction; one gone is said, never a 404."""
+    back = _treasury_back(request)
+    if request.method != "POST":
+        return redirect(back)
+    if request.POST.get(RULE_ACTION) != DELETE:
+        messages.error(request, UNKNOWN_RULE_ACTION, extra_tags=AJUSTEMENTS)
+        return redirect(f"{back}#{AJUSTEMENTS}")
+    with transaction.atomic():
+        adjustment = TreasuryAdjustment.objects.filter(pk=pk).first() if is_id(str(pk)) else None
+        if adjustment is not None:
+            adjustment.delete()
+    if adjustment is None:
+        messages.error(request, ADJUSTMENT_GONE, extra_tags=AJUSTEMENTS)
+        return redirect(f"{back}#{AJUSTEMENTS}")
+    text = f"Ajustement de {_signed(adjustment.amount)} € du {adjustment.date:%d/%m/%Y} supprimé."
+    return _treasury_said(request, back, text, AJUSTEMENTS, orphans_left=True)

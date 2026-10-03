@@ -155,7 +155,7 @@ class NavigationTests(TestCase):
                 f"{gap_filler}?montant=50",
                 f"{gap_filler}?depuis={take.pk}&montant=50",
             ],
-            "Banque": [reverse("bank:bank_home")],
+            "Banque": [reverse("bank:bank_home"), reverse("bank:treasury")],
             "Marges": [reverse("margins:margins_home")],
             "Personnel": [
                 reverse("staff:home"),

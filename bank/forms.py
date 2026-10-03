@@ -3,11 +3,12 @@ from types import SimpleNamespace
 from django import forms
 from django.forms.models import construct_instance
 
+from common import format_money
 from returnables.forms import PATTERN_ATTRS
 from returnables.patterns import PatternError
 
-from . import recognition, rules, statements
-from .models import IgnoreRule, OperationRule, StatementFormat
+from . import recognition, rules, statements, treasury
+from .models import IgnoreRule, OperationRule, StatementFormat, TreasuryAdjustment
 
 Meaning = OperationRule.Meaning
 
@@ -318,3 +319,95 @@ class StatementFormatForm(forms.ModelForm):
         # model's own clean() would check the format again - on what the
         # instance held before where a field was refused here.
         self.instance = construct_instance(self, self.instance, self._meta.fields, self._meta.exclude)
+
+
+#: The widest balance read before `treasury.read_balance` says « illisible »:
+#: « -9 999 999 999,99 » and its spaces fit, and no typed figure is read whole
+#: past it.
+BALANCE_MAX_LENGTH = 40
+#: An adjustment's reason, as wide as its column.
+REASON_MAX_LENGTH = TreasuryAdjustment._meta.get_field("reason").max_length  # ty: ignore[unresolved-attribute] - a CharField
+
+
+class TreasuryPointForm(forms.Form):
+    """« Saisir un solde » on « Trésorerie »: a day and the balance the bank
+    showed for it - its field names are the page's HTTP interface (`date`,
+    `solde`).
+
+    A plain Form, never a ModelForm: the model's unique date would be refused
+    by `validate_unique` before the page could offer « Remplacer » (a date
+    that already has a balance is never replaced without that button - the
+    view decides). The date is ISO only, between 01/01/2000 and `today`
+    (`treasury.check_point_date`: en-us would read « 02/10/2026 » as 10
+    February, and a future point would move the headline into the future);
+    the balance is signed - an overdraft is negative - and read by
+    `treasury.read_balance` (« 12.500 » asked again rather than read as
+    12,50 €). Every refusal in French, on its field; a NUL is
+    `NUL_REFUSED`, as on the other bank forms."""
+
+    date = forms.CharField(
+        label="Date",
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+        error_messages={"required": treasury.DATE_UNREADABLE, "null_characters_not_allowed": NUL_REFUSED},
+    )
+    solde = forms.CharField(
+        label="Solde (€)",
+        max_length=BALANCE_MAX_LENGTH,
+        # No inputmode="decimal" (treasury.html says why): an overdraft is
+        # typed « -250 ».
+        widget=forms.TextInput(attrs={"autocomplete": "off", "placeholder": "1 234,56"}),
+        error_messages={
+            "required": treasury.BALANCE_UNREADABLE,
+            "max_length": treasury.BALANCE_UNREADABLE,
+            "null_characters_not_allowed": NUL_REFUSED,
+        },
+    )
+
+    def __init__(self, *args, today, **kwargs):
+        super().__init__(*args, **kwargs)
+        #: The caller's `timezone.localdate()`: the latest day a point may
+        #: have, and the date input's `max`.
+        self.today = today
+        self.fields["date"].widget.attrs["max"] = today.isoformat()
+        #: The day typed when it already has a balance - a refusal on the
+        #: date (`refuse_taken`) - so the page offers « Remplacer ».
+        self.taken_day = None
+        #: Whether the page offers « Remplacer » beside « Enregistrer »: the
+        #: view says, once it knows the date has a balance.
+        self.replacing = False
+
+    def clean_date(self):
+        day, refusal = treasury.check_point_date(self.cleaned_data["date"], today=self.today)
+        if refusal:
+            raise forms.ValidationError(refusal)
+        return day
+
+    def clean_solde(self):
+        balance, refusal = treasury.read_balance(self.cleaned_data["solde"])
+        if refusal:
+            raise forms.ValidationError(refusal)
+        return balance
+
+    def refuse_taken(self, day, balance) -> None:
+        """« Le 01/09/2026 a déjà un solde : 1 000.00 €. », on the date: what
+        « Enregistrer » says on a date that has another balance - or that
+        another tab gave one between the check and the write. `balance` is
+        None when that point is gone again."""
+        self.taken_day = day
+        said = f"Le {day:%d/%m/%Y} a déjà un solde"
+        self.add_error("date", f"{said} : {format_money(balance)} €." if balance is not None else f"{said}.")
+
+
+class TreasuryAdjustmentForm(forms.Form):
+    """The reason an adjustment of « Écarts à résoudre » may carry - optional,
+    as wide as its column. The rest of that POST (the two points, the gap
+    shown) is read by hand and trusted for nothing (`views.
+    treasury_adjustment_add`). Never « motif »: a regular expression on the
+    bank's pages."""
+
+    raison = forms.CharField(
+        label="Raison",
+        required=False,
+        max_length=REASON_MAX_LENGTH,
+        error_messages={"max_length": TOO_LONG, "null_characters_not_allowed": NUL_REFUSED},
+    )

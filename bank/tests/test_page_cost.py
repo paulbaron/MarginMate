@@ -19,7 +19,7 @@ from django.test.utils import CaptureQueriesContext, override_script_prefix
 from django.urls import reverse
 
 from bank import income, reconcile, views
-from bank.models import BankTransaction, IgnoreRule
+from bank.models import BankTransaction, IgnoreRule, TreasuryAdjustment, TreasuryCheckpoint
 from bank.rules import check, compile_rules, ignoring_rule, searcher
 from common import DateRange
 from invoices.models import Invoice, Supplier
@@ -122,7 +122,14 @@ class SearcherTests(SimpleTestCase):
 
 
 class ByPkTests(SimpleTestCase):
-    NAMES = ("bank:bank_line_action", "bank:invoice_search", "invoices:invoice_detail", "bank:income_source")
+    NAMES = (
+        "bank:bank_line_action",
+        "bank:invoice_search",
+        "invoices:invoice_detail",
+        "bank:income_source",
+        "bank:treasury_point",
+        "bank:treasury_adjustment",
+    )
     PKS = (1, 7, 10, 99, 123456789, int(views.URL_PLACEHOLDER), 10**20)
 
     def test_it_gives_what_reverse_gives(self):
@@ -285,6 +292,37 @@ class ProposalsAndRulesQueriesTests(Statement, TestCase):
         # six are still open.
         self.assertEqual((found["Trop large"].count, found["Trop large"].linked), (15, 9))
         self.assertEqual((found["Loyer"].count, found["Loyer"].linked), (6, 0))
+
+
+class TreasuryPageQueriesTests(TestCase):
+    """« Trésorerie » costs the same whatever the history holds: the
+    treasury is `treasury.QUERIES` queries, and every row's addresses one
+    reverse for the page (`views._by_pk`)."""
+
+    def history(self, start, count):
+        """`count` days four days apart, each with an operation of +5,00, a
+        balance typed the day after it 10,00 above the one before - 4,00
+        more than the operation and an adjustment of +1,00 explain: a gap to
+        resolve each - and that adjustment."""
+        for n in range(start, start + count):
+            day = date(2026, 1, 1) + timedelta(days=4 * n)
+            BankTransaction.objects.create(
+                operation_date=day, label=f"VIR EXEMPLE {n}", amount=Decimal("5.00"), fingerprint=f"treso-cost-{n}"
+            )
+            TreasuryCheckpoint.objects.create(date=day + timedelta(days=1), balance=Decimal(10 * n))
+            TreasuryAdjustment.objects.create(date=day + timedelta(days=1), amount=Decimal("1.00"))
+
+    def test_more_history_costs_no_more_queries(self):
+        url = reverse("bank:treasury")
+        self.history(0, 3)
+        with CaptureQueriesContext(connection) as few:
+            self.client.get(url, {"tout": "1"})
+        self.history(3, 6)
+        with self.assertNumQueries(len(few.captured_queries)):
+            response = self.client.get(url, {"tout": "1"})
+        # Every gap drawn but the last, waiting for its statement.
+        self.assertContains(response, "Ajouter un ajustement de +4.00 €", count=7)
+        self.assertContains(response, 'data-label="Solde"', count=9)
 
 
 class TakingsByMonthTests(TestCase):

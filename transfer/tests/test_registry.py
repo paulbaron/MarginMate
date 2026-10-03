@@ -103,16 +103,19 @@ class TableTests(SimpleTestCase):
 
     def test_what_moved_is_described_where_it_is_now(self):
         """The rules, formats and types left « Banque » and « Consignes »:
-        their descriptions and their « à savoir » no longer promise them."""
+        their descriptions and their « à savoir » no longer promise them.
+        « Banque »'s « à savoir » is the treasury's, which stayed."""
         for word in ("règle", "format"):
             with self.subTest(word=word):
                 self.assertNotIn(word, INFO["banque"].description)
+                self.assertNotIn(word, INFO["banque"].clear_note)
                 self.assertIn(word, INFO["regles_banque"].description.lower())
         for word in ("type", "format"):
             with self.subTest(word=word):
                 self.assertNotIn(word, INFO["consignes"].description)
                 self.assertIn(word, INFO["types_consignes"].description)
-        self.assertEqual((INFO["banque"].clear_note, INFO["consignes"].clear_note), ("", ""))
+        self.assertEqual(INFO["consignes"].clear_note, "")
+        self.assertIn("trésorerie", INFO["banque"].clear_note)
         self.assertIn("la sauvegarde", INFO["regles_banque"].clear_note)
         self.assertIn("la sauvegarde", INFO["types_consignes"].clear_note)
 

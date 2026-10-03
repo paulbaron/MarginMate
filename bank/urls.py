@@ -12,6 +12,16 @@ urlpatterns = [
     # « En caisse » on one credit, and « Oublier » on a payer retained.
     path("entrees/operations/<int:pk>/", views.income_source, name="income_source"),
     path("entrees/payeurs/<int:pk>/oublier/", views.income_payer_forget, name="income_payer_forget"),
+    # The account's balance on every day (bank/treasury.py): the page, and a
+    # balance typed (POST). The view is `treasury_home` - `treasury` is the
+    # module views imports.
+    path("tresorerie/", views.treasury_home, name="treasury"),
+    # An adjustment settling a gap between two points (POST only).
+    path("tresorerie/ajustements/", views.treasury_adjustment_add, name="treasury_adjustment_add"),
+    # One point: deleted, or dated the day before (POST only).
+    path("tresorerie/points/<int:pk>/", views.treasury_point, name="treasury_point"),
+    # One adjustment: deleted (POST only).
+    path("tresorerie/ajustements/<int:pk>/", views.treasury_adjustment, name="treasury_adjustment"),
     path("rapprocher/", views.bank_reconcile, name="bank_reconcile"),
     # Every invoice the period's spending paid, in one zip.
     path("factures/", views.invoice_zip, name="invoice_zip"),

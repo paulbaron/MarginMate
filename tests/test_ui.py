@@ -20,7 +20,7 @@ import re
 import shutil
 import tempfile
 from collections import namedtuple
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from html import unescape
 from html.parser import HTMLParser
@@ -181,6 +181,28 @@ class SearchableSortableTableTests(TestCase):
             "versements carte",
             "payeurs retenus",
         ):
+            with self.subTest(label=label):
+                self.assertContains(response, f'data-table-label="{label}"')
+
+    def test_treasury(self):
+        """« Trésorerie »: its months, its balances typed and its adjustments
+        are lists like any other - the first two drawn once a balance is
+        typed, the last once an adjustment exists. Dated from today, inside
+        the page's default period whenever this runs. Invented."""
+        from bank.models import BankTransaction, TreasuryAdjustment, TreasuryCheckpoint
+
+        today = timezone.localdate()
+        BankTransaction.objects.create(
+            operation_date=today - timedelta(days=3),
+            label="VIR EXEMPLE",
+            amount=Decimal("50.00"),
+            fingerprint="ui-treso",
+        )
+        TreasuryCheckpoint.objects.create(date=today - timedelta(days=10), balance=Decimal("100.00"))
+        TreasuryCheckpoint.objects.create(date=today - timedelta(days=5), balance=Decimal("120.00"))
+        TreasuryAdjustment.objects.create(date=today - timedelta(days=5), amount=Decimal("20.00"))
+        response = self.assertEnhancedTable("bank:treasury")
+        for label in ("mois", "soldes saisis", "ajustements"):
             with self.subTest(label=label):
                 self.assertContains(response, f'data-table-label="{label}"')
 
@@ -460,6 +482,8 @@ class PageChromeTests(TestCase):
             "inventory:stock_gap_filler",
             "margins:margins_home",
             "bank:income_home",
+            # With no balance typed yet: its subtitle says it all the same.
+            "bank:treasury",
             "bank:recognition",
             "bank:statement_formats",
             "staff:home",
@@ -1856,6 +1880,32 @@ class PhoneCardsLabelTests(TestCase):
         earlier = self.cards(page, "data-table-label", "montants déjà saisis")
         self.assertEqual(headers(earlier), ["Saisi", "Montant (TTC)", "Proposé (TTC)", "Recettes"])
         self.assertLabelled(earlier, 2)
+
+    def test_the_treasury_s_balances_and_adjustments(self):
+        """« Trésorerie »'s « Soldes saisis » on every kind of row (the
+        first, one that agrees, one to resolve, one waiting for a statement)
+        and its « Ajustements », counted and counting nowhere. Invented."""
+        from bank.models import BankTransaction, TreasuryAdjustment, TreasuryCheckpoint
+
+        for number, (day, amount) in enumerate(((date(2026, 9, 5), "100.00"), (date(2026, 9, 12), "-30.00"))):
+            BankTransaction.objects.create(
+                operation_date=day,
+                label=f"VIR EXEMPLE {number}",
+                amount=Decimal(amount),
+                fingerprint=f"ui-treso-{number}",
+            )
+        for day, balance in ((1, "1000.00"), (6, "1100.00"), (12, "1000.00"), (20, "990.00")):
+            TreasuryCheckpoint.objects.create(date=date(2026, 9, day), balance=Decimal(balance))
+        TreasuryAdjustment.objects.create(date=date(2026, 9, 12), amount=Decimal("-10.00"), reason="Frais exemple")
+        TreasuryAdjustment.objects.create(date=date(2026, 8, 1), amount=Decimal("5.00"))
+        page = f"{reverse('bank:treasury')}?tout=1"
+        points = self.cards(page, "data-table-label", "soldes saisis")
+        self.assertLabelled(points, 4)
+        said = [" ".join(row[2]["text"].split()) for row in points["rows"]]
+        self.assertEqual(said, ["relevé à importer", "60.00 € de moins : à résoudre", "concorde", "—"])
+        adjustments = self.cards(page, "data-table-label", "ajustements")
+        self.assertLabelled(adjustments, 2)
+        self.assertEqual([" ".join(row[3]["text"].split()) for row in adjustments["rows"]], ["compte", "ne compte pas"])
 
     def assertExcludeCellLast(self, table):
         """Every gaps row ends on its « Exclure »: a .row-actions cell, which

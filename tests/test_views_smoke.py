@@ -18,7 +18,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from bank.models import BankTransaction, OperationRule, StatementFormat
+from bank.models import BankTransaction, OperationRule, StatementFormat, TreasuryAdjustment, TreasuryCheckpoint
 from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
@@ -756,6 +756,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
             "bank:bank_home",
             "bank:spending_home",
             "bank:income_home",
+            "bank:treasury",
             "bank:rule_list",
             "bank:proposals",
             "bank:recognition",
@@ -884,6 +885,7 @@ class DateWindowSmokeTests(TestCase):
         "bank:bank_home",
         "bank:spending_home",
         "bank:income_home",
+        "bank:treasury",
     )
 
     @classmethod
@@ -922,6 +924,10 @@ class DateWindowSmokeTests(TestCase):
                 amount=Decimal(amount),
                 fingerprint=f"fenetre-{number}",
             )
+        # One balance typed, so « Trésorerie » draws its curve and its months
+        # under every window rather than its « saisissez le solde » - and,
+        # once the lines are deleted below, a point with no operation.
+        TreasuryCheckpoint.objects.create(date=date(2026, 2, 14), balance=Decimal("1234.56"))
 
     def test_every_page_under_every_window(self):
         for page in self.PAGES:
@@ -942,6 +948,7 @@ class DateWindowSmokeTests(TestCase):
             "bank:bank_home": "vue=toutes&mois=2026-02",
             "bank:spending_home": "tout=1",
             "bank:income_home": "tout=1",
+            "bank:treasury": "tout=1",
         }
         for page, query in beside.items():
             with self.subTest(page=page):
@@ -1314,6 +1321,96 @@ class IncomeSmokeTests(TestCase):
             with self.subTest(name=name):
                 url = reverse(name, kwargs={"pk": pk})
                 self.assertEqual(self.client.get(url, {"en_caisse": "other", "retenir": "1"}).status_code, 302)
+        self.assertEqual(written(), before)
+
+
+class TreasurySmokeTests(TestCase):
+    """« Trésorerie » with everything it draws: two balances the operations
+    explain and one they do not (a card, its adjustment form and its hints),
+    one read before its day's operations (« Dater ce point du … »), a
+    negative balance, a balance typed today past the statement (pending,
+    provisional), an adjustment counted and one counting nowhere - and its
+    POST-only routes. Every amount INVENTED."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        for number, (day, amount) in enumerate(
+            (
+                (date(2026, 6, 2), "-120.00"),
+                (date(2026, 6, 9), "450.00"),
+                (date(2026, 6, 20), "-80.00"),
+                (date(2026, 7, 1), "-40.00"),
+            )
+        ):
+            BankTransaction.objects.create(
+                operation_date=day,
+                label=f"VIR EXEMPLE {number}",
+                amount=Decimal(amount),
+                fingerprint=f"smoke-treso-{number}",
+            )
+        # 01/06 -500,00 (an overdraft); 10/06: -500 - 120 + 450 = -170,00,
+        # they agree; 25/06: -170 - 80 = -250,00 expected, -200,00 typed: 50
+        # more, 20,00 of it adjusted - to resolve; 01/07: -200,00 typed, read
+        # before the 1st's -40 (« Dater ce point du 30/06 »); today, past the
+        # statement: pending.
+        cls.points = [
+            TreasuryCheckpoint.objects.create(date=day, balance=Decimal(balance))
+            for day, balance in (
+                (date(2026, 6, 1), "-500.00"),
+                (date(2026, 6, 10), "-170.00"),
+                (date(2026, 6, 25), "-200.00"),
+                (date(2026, 7, 1), "-200.00"),
+                (today, "1000.00"),
+            )
+        ]
+        cls.adjustment = TreasuryAdjustment.objects.create(date=date(2026, 6, 25), amount=Decimal("20.00"))
+        TreasuryAdjustment.objects.create(date=date(2026, 5, 1), amount=Decimal("-3.00"), reason="Hors de deux points")
+
+    def assertPageOK(self, params):
+        response = self.client.get(reverse("bank:treasury"), params)
+        self.assertEqual(response.status_code, 200, f"{params} returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, f"Trésorerie {params}")
+        return response
+
+    def test_the_page_draws_every_section(self):
+        response = self.assertPageOK({"tout": "1"})
+        for text in (
+            "Trésorerie au",
+            "Écarts à résoudre",
+            "Dater ce point du 30/06",
+            "Ajouter un ajustement de",
+            "Soldes saisis",
+            "relevé à importer",
+            "ne compte pas",
+            'data-chart="line"',
+            'data-table-label="mois"',
+        ):
+            with self.subTest(text=text):
+                self.assertContains(response, text)
+        for params in ({}, {"du": "2026-06-01", "au": "2026-06-30"}, {"date": "2026-06-25"}, {"date": "abc"}):
+            with self.subTest(params=params):
+                self.assertPageOK(params)
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        """A GET on one goes back to the page and writes nothing."""
+
+        def written():
+            return (
+                list(TreasuryCheckpoint.objects.order_by("pk").values_list("pk", "date", "balance")),
+                list(TreasuryAdjustment.objects.order_by("pk").values_list("pk", "date", "amount")),
+            )
+
+        before = written()
+        for name, kwargs in (
+            ("bank:treasury_adjustment_add", {}),
+            ("bank:treasury_point", {"pk": self.points[3].pk}),
+            ("bank:treasury_adjustment", {"pk": self.adjustment.pk}),
+        ):
+            with self.subTest(name=name):
+                url = reverse(name, kwargs=kwargs)
+                query = {"action": "supprimer", "avant": self.points[1].pk, "apres": self.points[2].pk}
+                self.assertEqual(self.client.get(url, query).status_code, 302)
         self.assertEqual(written(), before)
 
 

@@ -47,7 +47,7 @@ from bank.models import IgnoreRule, OperationRule, StatementFormat
 from bank.recognition import PATTERN_LABEL, name_key
 from transfer import codec, registry
 from transfer.archive import ArchiveError
-from transfer.sections.bank import delete_ids, named_fields, restore_moments
+from transfer.sections.bank import delete_ids, named_fields, restore_moments, sentence
 from transfer.sections.base import Section
 
 KEY = "regles_banque"
@@ -225,25 +225,12 @@ def _check_format(fmt: StatementFormat) -> None:
         errors = exc.message_dict if hasattr(exc, "error_dict") else {"": exc.messages}
         field, messages = next(iter(errors.items()))
         label = FIELD_LABELS.get(field, field)
-        raise codec.FieldValueError(f"format refusé — {label} : {_sentence(' '.join(messages), label)}") from None
+        raise codec.FieldValueError(f"format refusé — {label} : {sentence(' '.join(messages), label)}") from None
     try:
         fmt.full_clean()
     except ValidationError as exc:
         raise codec.FieldValueError(f"« {next(iter(exc.message_dict))} » : valeur refusée") from None
     _check_position(fmt)
-
-
-def _sentence(message: str, label: str) -> str:
-    """A refusal of `check_format` said after its field's name: the name it
-    may already open with left out, no closing full stop, a capital put
-    down (« Un numéro de colonne … » → « un numéro de colonne … »)."""
-    text = message.strip()
-    if label and text.lower().startswith(f"{label.lower()} : "):
-        text = text[len(label) + 3 :]
-    text = text.rstrip(".")
-    if len(text) > 1 and text[0].isupper() and text[1].islower():
-        text = text[0].lower() + text[1:]
-    return text
 
 
 @registry.register

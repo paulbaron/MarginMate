@@ -180,8 +180,8 @@ INFO: dict[str, SectionInfo] = {
             70,
             recommends=["factures", "fournisseurs", "regles_banque"],
             description=(
-                "Opérations importées, leurs liens aux factures, noms de payeurs appris et payeurs retenus des "
-                "entrées d'argent."
+                "Opérations importées, leurs liens aux factures, noms de payeurs appris, payeurs retenus des "
+                "entrées d'argent, points et ajustements de trésorerie."
             ),
             # In two imports the bank cannot tell a line whose payment went
             # with its invoice from one a person unlinked (bank.UNDONE_NOTE).
@@ -197,6 +197,12 @@ INFO: dict[str, SectionInfo] = {
                     "Règles de la banque — les entrées d'argent et les dépenses sans facture attendue se lisent avec elles"
                 ),
             },
+            # The treasury's points and adjustments go too: no statement
+            # brings them back (sections/bank.py, TREASURY_CLEAR_NOTE).
+            clear_note=(
+                "les points et les ajustements de trésorerie partent aussi ; la sauvegarde prise avant l'effacement "
+                "les ramène"
+            ),
         ),
         _info(
             "ventes",

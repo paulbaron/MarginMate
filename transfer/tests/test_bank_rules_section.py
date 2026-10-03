@@ -184,6 +184,11 @@ def ignore_rules() -> list[tuple]:
     return sorted(IgnoreRule.objects.values_list("pattern", *section.RULE_FIELDS))
 
 
+#: « Banque »'s lists of the treasury (bank/0008), which no archive written
+#: before « Règles de la banque » holds.
+TREASURY_LISTS = ("treasury_checkpoints", "treasury_adjustments")
+
+
 def written_by_the_old_code(current: ArchiveReader, *, without=()) -> Path:
     """The archive the code before 02/10/2026 wrote of the same database:
     « Banque » alone, its banque.json holding the lines and the rules - this
@@ -191,9 +196,11 @@ def written_by_the_old_code(current: ArchiveReader, *, without=()) -> Path:
     (`OLD_BANK_LABELS`). `current` holds both sections. `without`: the lists
     of the rules an archive older still did not hold (« operation_rules »
     before bank/0006, « statement_formats » before bank/0007), their counts
-    with them."""
+    with them. The treasury's lists are left out: that code had none
+    (bank/0008 came after it)."""
     lines, rules = current.section("banque"), current.section(KEY)
-    payload = {**lines.payload(), **{name: items for name, items in rules.payload().items() if name not in without}}
+    kept = {name: items for name, items in lines.payload().items() if name not in TREASURY_LISTS}
+    payload = {**kept, **{name: items for name, items in rules.payload().items() if name not in without}}
     counts = dict(lines.counts)
     counts.update({OLD_LABELS[name]: rules.counts[NEW_LABELS[name]] for name in TOP_LEVEL if name not in without})
 
@@ -737,9 +744,10 @@ class OlderArchiveTests(RulesData, TestCase):
         self.assertEqual(rules.member, "banque.json")
         self.assertEqual(rules.counts, {FORMATS: 2, RECOGNITION: len(SEEDED) + 1, RULES: 2})
         self.assertEqual(set(rules.payload()), set(TOP_LEVEL))
-        # « Banque » keeps its own lists and counts, and none of these.
+        # « Banque » keeps its own lists and counts - the old code's, no
+        # treasury yet -, and none of these.
         lines = self.reader.section("banque")
-        self.assertEqual(set(lines.counts), set(bank.ENTITIES))
+        self.assertEqual(set(lines.counts), set(bank.ENTITIES) - {bank.CHECKPOINTS, bank.ADJUSTMENTS})
         self.assertFalse(set(lines.payload()) & set(TOP_LEVEL))
 
     def test_they_come_back_into_a_wiped_database(self):

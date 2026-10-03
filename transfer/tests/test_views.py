@@ -234,7 +234,8 @@ class PickerTests(FakeSectionsMixin, TestCase):
         """What the migrations installed - the bank's format and rules, the
         returnable types and the UBA slip format - goes with the part that
         holds it now, and is said there, no longer under « Banque » and
-        « Consignes »."""
+        « Consignes ». « Banque » says only what is still its own: the
+        treasury's points and adjustments."""
         clear = self.client.get(reverse("transfer:data_clear"))
         self.assertIn(
             "à savoir : les formats et les règles installés d'office partent aussi", row_text(clear, "regles_banque")
@@ -243,10 +244,13 @@ class PickerTests(FakeSectionsMixin, TestCase):
             "à savoir : les types de consigne et le format de bon créés à l'installation partent aussi",
             row_text(clear, "types_consignes"),
         )
-        for key in ("banque", "consignes"):
-            with self.subTest(key=key):
-                self.assertTrue(row_text(clear, key))
-                self.assertNotIn("à savoir", row_text(clear, key))
+        self.assertTrue(row_text(clear, "consignes"))
+        self.assertNotIn("à savoir", row_text(clear, "consignes"))
+        bank = row_text(clear, "banque")
+        self.assertIn("à savoir : les points et les ajustements de trésorerie partent aussi", bank)
+        for word in ("règle", "format"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, bank)
 
     def test_the_tick_parameter_pre_ticks_with_what_it_needs(self):
         response = self.client.get(reverse("transfer:data_home") + "?cocher=associations&cocher=inconnu")
@@ -1396,6 +1400,9 @@ class CountsTextTests(SimpleTestCase):
             "règles « sans facture »": "1 règle « sans facture »",
             "règles de reconnaissance": "1 règle de reconnaissance",
             "formats de relevé": "1 format de relevé",
+            # « Trésorerie »'s, in the bank's counts.
+            "points de trésorerie": "1 point de trésorerie",
+            "ajustements de trésorerie": "1 ajustement de trésorerie",
             "Mo de fichiers": "1 Mo de fichiers",
             "alias": "1 alias",
             # Two things counted together stay as they are.
