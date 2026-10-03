@@ -43,6 +43,9 @@ SECTION_BY_APP = {
     # « Identifiants » (accounts/credentials.py), the one page of the accounts
     # app with the navigation: a setting of the espace, beside « Données ».
     "accounts": "data",
+    # « Notifications » (notifications/), reached from Données' header like
+    # « Identifiants »: a setting of the espace, no link of its own.
+    "notifications": "data",
 }
 
 #: What the folded topbar says under 860 px (base.html's .topbar-section):

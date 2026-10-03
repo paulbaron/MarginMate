@@ -613,6 +613,72 @@ class HintTests(NoNetworkTestCase):
         self.assertEqual(Board.load(pickups=[pickup]).day(pickup).hints, [])
 
 
+class AsIfDatedTests(NoNetworkTestCase):
+    """`Board.as_if_dated`: a hinted pickup day compared with the slip's day
+    by the rules of a paired day - what a slip's notification says of a
+    pickup counted the night before and dated that night."""
+
+    def setUp(self):
+        self.counted_on = DAY - timedelta(days=2)
+
+    def test_a_misdated_pickup_is_compared_as_if_it_were_on_the_slip_s_day(self):
+        pickup = make_pickup(date=self.counted_on)
+        slip = make_slip(delivery_date=DAY, lines=[keg_line(14)], number="4242")
+        board = Board.load(slips=[slip])
+        self.assertEqual(board.slip_state(slip).hint_date, self.counted_on)
+        day = board.as_if_dated(pickup.supplier_id, self.counted_on, DAY)
+        self.assertEqual((day.status, day.date, day.pickups), (DIFFERS, DAY, [pickup]))
+        self.assertEqual([info.pk for info in day.slips], [slip.pk])
+        self.assertEqual(
+            day.sentence,
+            f"Reprise du 10/02/2026 : écart — Fûts — compté : 15 {DOT} sur le bon : 14 {ARROW} "
+            f"il en manque 1 sur le bon (30,00{NBSP}€).",
+        )
+        # The board's own day of that pickup is untouched: still waiting,
+        # its hint still offered.
+        own = board.day(pickup)
+        self.assertEqual(own.status, WAITING)
+        self.assertEqual([hint.slip.pk for hint in own.hints], [slip.pk])
+
+    def test_the_same_counts_are_conforming(self):
+        pickup = make_pickup(date=self.counted_on)
+        slip = make_slip(delivery_date=DAY, lines=[keg_line(15)], number="4243")
+        day = Board.load(slips=[slip]).as_if_dated(pickup.supplier_id, self.counted_on, DAY)
+        self.assertEqual((day.status, day.sentence), (SAME, "Reprise du 10/02/2026 : conforme (bon n° 4243)."))
+
+    def test_the_pickups_of_that_day_are_summed(self):
+        morning = make_pickup(date=self.counted_on, counts={texts.KEGS: 10})
+        make_pickup(date=self.counted_on, counts={texts.KEGS: 5})
+        slip = make_slip(delivery_date=DAY, lines=[keg_line(15)])
+        day = Board.load(slips=[slip]).as_if_dated(morning.supplier_id, self.counted_on, DAY)
+        self.assertEqual((day.status, len(day.pickups), day.counts_summary), (SAME, 2, "Fûts 15"))
+
+    def test_a_slip_whose_check_failed_is_to_check(self):
+        pickup = make_pickup(date=self.counted_on)
+        failed = {"label": "Total des lignes = total imprimé", "passed": False, "detail": "lignes : 0,00"}
+        slip = make_slip(delivery_date=DAY, lines=[keg_line(15)], checks=[failed], number="4244")
+        day = Board.load(slips=[slip]).as_if_dated(pickup.supplier_id, self.counted_on, DAY)
+        self.assertEqual(day.status, TO_CHECK)
+        self.assertTrue(day.sentence.startswith("Reprise du 10/02/2026 : à vérifier — Le bon n° 4244 : contrôle"))
+
+    def test_on_its_own_day_it_is_the_paired_day(self):
+        pickup = make_pickup(date=DAY)
+        slip = make_slip(delivery_date=DAY, lines=[keg_line(14)])
+        board = Board.load(pickups=[pickup], slips=[slip])
+        as_if = board.as_if_dated(pickup.supplier_id, DAY, DAY)
+        paired = board.day(pickup)
+        self.assertIsNot(as_if, paired)
+        self.assertEqual((as_if.status, as_if.sentence, as_if.counts), (paired.status, paired.sentence, paired.counts))
+
+    def test_a_day_with_no_pickup_loaded_cannot_be_asked_about(self):
+        pickup = make_pickup(date=DAY - timedelta(days=40))
+        slip = make_slip(delivery_date=DAY)
+        board = Board.load(slips=[slip])
+        for asked in (DAY - timedelta(days=40), DAY - timedelta(days=1)):
+            with self.subTest(asked=asked), self.assertRaises(LookupError):
+                board.as_if_dated(pickup.supplier_id, asked, DAY)
+
+
 class SlipStateTests(NoNetworkTestCase):
     def states(self, *slips):
         board = Board.load(slips=slips)

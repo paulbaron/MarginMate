@@ -487,9 +487,11 @@
    builds and fails on one nobody classified. This tenant's drafts only -
    its scope (<body data-tenant>), and the old id of a session from before
    29/09 (data-tenant-legacy, tenant_storage_legacy.js): another bar's count
-   on a shared device is that bar's. */
+   on a shared device is that bar's. « push: » is the notifications' sync
+   stamp (static/js/push_sync.js): forgotten, the next login syncs at once
+   and the server takes back the device the logout set aside. */
 (function () {
-    var DRAFTS = ["stock-take-draft:", "consignes:brouillon"];
+    var DRAFTS = ["stock-take-draft:", "consignes:brouillon", "push:"];
     function prefixes() {
         var found = [];
         if (!document.body) return found;

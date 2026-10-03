@@ -200,13 +200,14 @@
             reloads when the gather ends, and the sentence goes with it.
             {% endcomment %}
             {% include "returnables/_gather_form.html" %}
+            <p class="muted"><a href="{% url 'invoices:auto_gathers' %}">Récupération automatique : réglages</a></p>
         {% else %}
             <p class="muted">Aucun format de bon n'a de motif d'expéditeur : dépôt à la main seulement.</p>
         {% endif %}
     </section>
 
     <p class="returnables-settings">
-        Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
+        Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a> · <a href="{% url 'notifications:home' %}">Rappels et notifications</a>
     </p>
     <details class="explainer">
         <summary>Comment les reprises sont comparées aux bons</summary>

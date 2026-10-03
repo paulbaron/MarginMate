@@ -16,25 +16,46 @@ download and reads one already downloaded.
 In multi mode it runs for one tenant (`manage.py tenant <folder>
 laddition_import …`) and downloads into that tenant's own folder. Downloading
 uses the server's L'Addition account, the owner's: refused elsewhere, like
-the page's import (recipes/integration.py), and refused while the page's own
-import runs - the two would sign in to one account at once and each take the
-other's file from the folder. --file uses no account and is never refused.
+the page's import (recipes/integration.py).
+
+**A download holds the one sales import's lock** (importing.claim_sales_import,
+the Ventes tab's and the scheduler's): a manual SalesImportJob of the period,
+RUNNING while the command runs and beating as the download goes (a run
+silent for ten minutes is reaped as dead), ended SUCCESS, FAILED or
+CANCELLED - « Annuler » on the Ventes tab stops it - with the coverage a
+SUCCESS records (auto_sales.finish). So it is refused while another import
+runs, and neither the tab nor an automatic import starts beside it: two
+sign-ins to one account at once, each taking the other's file from the
+shared folder, an automatic import then recording coverage for days it
+never imported. A dry run's job is deleted once it ends well: it recorded
+nothing. --file uses no account, makes no job and is never refused.
 """
 
 from datetime import date
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from accounts import paths
+from recipes import auto_sales
+from recipes.importing import claim_sales_import
 from recipes.integration import refusal, require_tenant_for_command, till_allowed
 from recipes.models import SalesImportJob
 from recipes.payments import record_payments
-from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
+from recipes.pos.laddition_download import DownloadCancelled, LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from recipes.sales import record_sales
+from recipes.sales_sources import LADDITION
 from recipes.tasks import payments_log, sync_pos_products
+
+BUSY = "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
+#: The first line of the command's job, as the Ventes tab shows it.
+COMMAND_NOTE = "Lancé par la commande laddition_import."
+CANCELLED = "Annulé depuis l'application."
+#: What the command's job saves when it ends.
+END_FIELDS = ["status", "finished_at", "items_sold", "recorded", "unmatched"]
 
 
 def _as_date(value: str) -> date:
@@ -72,34 +93,83 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         require_tenant_for_command("laddition_import")
         files = options["files"]
-        if not files:
-            if not options["start"] or not options["end"]:
-                raise CommandError("Give --from and --to, or --file.")
-            start, end = _as_date(options["start"]), _as_date(options["end"])
-            if start > end:
-                raise CommandError("--from is after --to.")
-            if not till_allowed():
-                raise CommandError(refusal())
-            # The page's own rule (views.trigger_sales_import), a dead run
-            # reaped first so that it does not hold this up for ever.
-            SalesImportJob.reap_stale()
-            if SalesImportJob.objects.filter(
-                status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
-            ).exists():
-                raise CommandError(
-                    "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
-                )
-            if options["no_headless"]:
-                settings.SCRAPER_HEADLESS = False
-            try:
-                files = download_sales_lines(
-                    start, end, options["download_dir"] or str(paths.downloads_dir()), log=self.stdout.write
-                )
-            except (LadditionAuthError, LadditionDownloadError) as exc:
-                raise CommandError(str(exc)) from exc
-            if not files:
-                raise CommandError("Nothing was downloaded.")
+        if files:
+            self._read_and_record(files, options)
+            return
+        if not options["start"] or not options["end"]:
+            raise CommandError("Give --from and --to, or --file.")
+        start, end = _as_date(options["start"]), _as_date(options["end"])
+        if start > end:
+            raise CommandError("--from is after --to.")
+        if not till_allowed():
+            raise CommandError(refusal())
+        # The lock the page and the scheduler take (a dead run reaped first,
+        # so that it does not hold this up for ever).
+        job = claim_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL, notes=[COMMAND_NOTE])
+        if not isinstance(job, SalesImportJob):  # None: another import runs (no plan, so never a sentence)
+            raise CommandError(BUSY)
+        if options["no_headless"]:
+            settings.SCRAPER_HEADLESS = False
+        # The till's own start, worked out BEFORE the import, whose sales move
+        # it (the task's rule).
+        own = auto_sales.own_start(timezone.localdate())
+        job.status = SalesImportJob.Status.RUNNING
+        job.save(update_fields=["status"])
+        status = SalesImportJob.Status.FAILED
+        try:
+            files = self._download(job, start, end, options)
+            self._read_and_record(files, options, job=job)
+            status = SalesImportJob.Status.SUCCESS
+        except DownloadCancelled:
+            status = SalesImportJob.Status.CANCELLED
+            job.append_log("Annulé.")
+            raise CommandError(CANCELLED) from None
+        except Exception as exc:  # said in the job's log, then raised as it was
+            job.append_log(f"Échec : {exc}")
+            raise
+        finally:
+            self._end(job, status, own, dry_run=options["dry_run"])
 
+    def _download(self, job, start, end, options) -> list[str]:
+        def log(message: str) -> None:
+            self.stdout.write(message)
+            job.append_log(message)
+
+        def still_wanted() -> bool:
+            # Also a heartbeat: a run silent for ten minutes is reaped as
+            # dead, and the lock would go with it.
+            job.beat()
+            job.refresh_from_db(fields=["cancel_requested"])
+            return job.cancel_requested
+
+        try:
+            files = download_sales_lines(
+                start,
+                end,
+                options["download_dir"] or str(paths.downloads_dir()),
+                log=log,
+                should_cancel=still_wanted,
+            )
+        except (LadditionAuthError, LadditionDownloadError) as exc:
+            raise CommandError(str(exc)) from exc
+        if not files:
+            raise CommandError("Nothing was downloaded.")
+        return files
+
+    def _end(self, job, status, own, *, dry_run: bool) -> None:
+        """The command's job ends: deleted after a dry run that went well
+        (it recorded nothing), else its status saved - with, for a SUCCESS,
+        the coverage it records."""
+        if dry_run and status == SalesImportJob.Status.SUCCESS:
+            job.delete()
+            return
+        job.status = status
+        job.finished_at = timezone.now()
+        auto_sales.finish(job, fields=END_FIELDS, source_key=LADDITION, own=own)
+
+    def _read_and_record(self, files, options, job=None) -> None:
+        if job is not None:
+            job.beat()
         try:
             export = parse_sales_exports(files)
         except LadditionExportError as exc:
@@ -150,6 +220,10 @@ class Command(BaseCommand):
             )
         )
         self._report_unmatched(sorted(set(result.unmatched)))
+        if job is not None:
+            job.items_sold = export.total_quantity
+            job.recorded = result.recorded
+            job.unmatched = len(set(result.unmatched))
 
         if export.payments_read:
             paid = record_payments(export)

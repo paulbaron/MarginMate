@@ -127,13 +127,17 @@ print("REPORT" + json.dumps({
 """
 
 #: The views anyone may open: the login, the logout, the signup, Django's
-#: admin login, and the employee's signing pages (their link is the key). A
-#: new public view is added here on purpose, or not at all.
+#: admin login, the employee's signing pages (their link is the key), and the
+#: browser's files of the installed app - its manifest and its service
+#: worker, which must never be the login page. A new public view is added
+#: here on purpose, or not at all.
 PUBLIC_VIEWS = [
     "accounts:login",
     "accounts:logout",
     "accounts:signup",
     "admin:login",
+    "notifications:manifest",
+    "notifications:service_worker",
     "staff:sign",
     "staff:sign_check_code",
     "staff:sign_copy",

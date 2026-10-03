@@ -193,7 +193,8 @@ LOAD-1, LOAD-2, LOAD-3, LB-6; `accounts/tests/test_sessions.py`).**
 - « Se déconnecter » forgets the espace's **drafts** only: ui.js, as a
   `form.topbar-logout` is sent (base.html's, and the « indisponible » 503
   page's, which carries the scope for it), removes its `DRAFTS` -
-  `stock-take-draft:*` and `consignes:brouillon` under
+  `stock-take-draft:*`, `consignes:brouillon` and `push:*` (the
+  notifications' sync stamps, so the next login syncs at once) under
   `marginmate:espace-<scope>:`, and under a legacy session's old id too: an
   unsaved stock count stayed readable from the public login page. The
   **preferences stay** (the `mm:` keys - the gather's sources left unticked,
@@ -350,7 +351,10 @@ steps (the one-off move included).
   the backup (and so a deploy): its message says to move it out.
   refresh_dev_data.cmd excludes the same files (robocopy /XF /XD), runs
   `deployment.py purge-sessions` over every SQLite file of data-dev
-  (realpath-guarded: a junction out is skipped), and says to delete a
+  (realpath-guarded: a junction out is skipped) - which also empties
+  `accounts_pushdevice` where the table exists, in the same transaction
+  before the VACUUM (data-dev only: a production backup keeps the
+  devices, so a restore keeps the phones working) -, and says to delete a
   data-dev folder it set aside; `development` and `purge-sessions` refuse a
   backup whose .env has THIS folder's SECRET_KEY (dev must have its own: it
   would open production's sessions and half the store's key). **A copy of a
@@ -2833,10 +2837,50 @@ The mailbox search asks for BEFORE the day **after** the end date: IMAP's
 BEFORE is exclusive (RFC 3501), and the form's end date is today - this
 morning's invoice email was left for a later run.
 
+**What the mail server does not hand over is never taken for nothing**
+(`generic_email.find_matching_emails`): a SEARCH answered anything but OK
+raises `SEARCH_REFUSED` (« Recherche refusée par le serveur mail (NO). »):
+read as an empty range, the gather recorded it searched. A header or
+body FETCH answered NO, or raising OSError / TimeoutError, counts its
+batch unread and the other batches are read all the same; after phase 2
+the search raises `IncompleteSearch(unread, matches)` inside its try, so
+the logout still runs. `scrape_email_invoices` writes the attachments that
+were read onto `exc.downloaded` and re-raises. `_gather_email` and
+`_gather_slips` import or store what was read, say « Boîte mail :
+Recherche incomplète : N e-mail(s) non lu(s) par le serveur mail. » on the
+line and record no coverage: the range is searched again, its documents
+already in refused by their digest. « Tester » lists what was read and
+logs the sentence.
+
+**A gather starts in one place**, `invoices.gathering.start_gather` (the
+form's `trigger_gather` and the automatic gathers): stale runs reaped, the
+active check and the `ScrapeJob` made in one atomic block. Achats' period,
+« missed » sources and latest run read MANUAL runs only (`ScrapeJob.trigger`);
+see « Notifications, rappels et récupération automatique ».
+
 The gather form starts from **the newest invoice the gathered sources have
 already brought in** (`tasks.default_gather_start`, receipts and future dates
 left out). It used to take the earliest of each source's latest - one
-supplier billing twice a year sent every gather ten months back.
+supplier billing twice a year sent every gather ten months back. A portal
+still searches from the earlier of that posted date and its own newest
+invoice dated today or earlier, minus 3 days (`tasks._own_start`, any
+reading): an automatic mailbox gather moves the posted start, and the
+portal's missing invoices must not be skipped. Its own start is said in the
+log; the job's period (`range_start`) stays the posted date, since Achats
+offers it again after a failure, to every source. A stretch an automatic
+gather left behind its 90-day bound (`GatherCoverage.pending_from`) pulls
+the offered « Du » back to it until a search covers it - while the latest
+manual gather searched that source without an error (`workspace._searches_it`).
+Every mailbox type and slip format whose search completes records its
+coverage, by hand too; saving other search patterns for one sends its
+coverage back to its own start, and a search that ran while they were saved
+records nothing (`invoices/coverage.py`, `tasks._searched`, « Notifications,
+rappels et récupération automatique »). A mailbox document not imported for
+want of the OCR or the database puts its source in error by hand too
+(`NOT_IMPORTED_NOW` on the line, so `workspace._missed(job)` holds it): its
+coverage stays where it was and Achats offers the run's `range_start`
+again - left clean, the next default start (the newest invoice brought in)
+would have skipped it (`FailedImportTests`).
 
 **Plou & Fils changes its layout**: a "Taux" column on product rows (2026),
 a VAT summary one column shorter, "Référence interne" instead of "N°
@@ -4380,7 +4424,17 @@ imports (`transfer/legacy.py`).
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
   fills it again when it is drawn), « Combler les écarts »' list
   (`GapFillEntry`, a scratch list that goes with its stock take), its
-  exclusions (`GapExclusion`) and its duration (`GapFillSetting`). Suppliers
+  exclusions (`GapExclusion`) and its duration (`GapFillSetting`), the
+  notifications (`notifications`' reminders, alerts, settings and history,
+  the central `accounts.PushDevice`), the automatic gathers
+  (`invoices.AutoGather`), the automatic sales imports
+  (`recipes.AutoSalesImport`) and each source's gather coverage
+  (`invoices.GatherCoverage`, the till's `ventes-<key>` rows included,
+  written by the gathers and the sales imports; a clear or a replace
+  leaves it as it was - except that a « Ventes » clear or replace deleting
+  till days LOWERS `ventes-<key>` to the day before the first of them,
+  never forward, `sales.lower_till_coverage`, so the next automatic import
+  fetches them again): in no section, like « Personnel ». Suppliers
   with a reader or a till of their own are never deleted by a clear or a
   replace; a clear only forgets what they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
@@ -5125,6 +5179,17 @@ recipe and which don't, without writing. `--file x.xlsx` skips the download.
 Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
 (`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
 run time, same as the Metro scraper.
+
+An import also runs by itself, on rules of its own (« Import automatique des
+ventes », `/recipes/import-auto/`, `recipes/auto_sales.py`): from the last
+day imported without a gap less 3 to the last complete till day, and not at
+all when that is already in - see « L'import automatique des ventes » under
+« Notifications, rappels et récupération automatique ». Every import, by
+hand or automatic, starts through `recipes/importing.start_sales_import`;
+`laddition_import` downloading takes the same lock
+(`importing.claim_sales_import`: a manual job, RUNNING and beating while it
+runs, cancellable from the Ventes tab, its SUCCESS recording the coverage),
+so no import starts beside it.
 
 Four things that cost real debugging time:
 
@@ -6892,6 +6957,9 @@ at least):
 - Types: one form per type posting to its own address, no formset. A type
   counted in a reprise, a format with bons, cannot be deleted (PROTECT):
   « désactivez-le plutôt ».
+- The bon's « Ouvrir le PDF » and a reprise's photo open in a new tab
+  (`target="_blank" rel="noopener"`): a Home Screen app has no Back
+  button.
 - No `|safe`, no `mark_safe`, no inline script or `style=` in the app (a
   strict CSP is planned; `tests/test_ui.py` greps for them): every sentence
   the pure modules build is plain text.
@@ -6961,12 +7029,593 @@ it - the date arithmetic is also clamped, `comparison.shifted`); photos and
 PDFs under `consignes/`, deleted on commit. The details are under
 « Export, import and clear ».
 
+**The bon's alert** (`returnables/notify.py`): once per batch, from
+`mail.store_matches`, `slips.store_uploads` and
+`receipts.route_to_returnables` with the CREATED slips - never from
+`store_slip` -, skipped unless `events.wanted()`, for the days from 3 back
+to tomorrow only; dated slips are grouped by (supplier, delivery day), a
+slip without its delivery date is a group of its own, and a day with no
+reprise is decided on every slip that counts that day, never on the latest
+alone, and a blank « Repris par » is said once per supplier, day and pickup
+date, whatever slips follow; a misdated reprise is compared through
+`Board.as_if_dated`. The
+rules are under « Notifications, rappels et récupération automatique ».
+
 Tests: `returnables/tests/` - the pure modules, the models and seeds, the
 views read off the rendered page (`staff/tests/page_forms.py`, the photos
 and PDFs added as SimpleUploadedFile), two espaces (`test_tenants.py`), and
 a 375 × 667 phone in Chrome (`test_phone_browser.py`, logged in with
 `tests.runner.log_in_the_browser`). Every value in them is invented: the
 owner's real bons carry his account, his driver and his deliveries.
+
+### Notifications, rappels et récupération automatique (`notifications/`, `/notifications/`, `invoices/auto_gather.py`)
+
+The owner's request (02/10/2026): push notifications on Android AND iOS,
+configured on screen; **scheduled reminders** (e.g. a notification late in
+the evening before each morning delivery, opening Consignes to photograph
+and count the empties - for deliveries on Tuesday and Thursday mornings,
+Monday and Wednesday evenings are ticked); an **alert when a bon
+arrives** saying whether it matches the reprise counted, differs, or none was
+entered; and « une récupération auto activable et désactivable et
+configurable, même pour les factures » - **automatic gathers**. Three pages:
+`/notifications/` (« Cet appareil », « Mes appareils », the summaries, the 30
+latest sends), `/notifications/rappels/`, `/notifications/evenements/`
+(« Alertes »), all under « Données » (`SECTION_BY_APP`, a header button like
+« Identifiants »), and `/invoices/recuperation-auto/`, under « Factures ».
+
+**Where things live.** Devices are central: `accounts.PushDevice` (accounts
+0003, FK `membership` CASCADE; the admin shows the endpoint's host only and
+adds nothing). Rules, history and the espace's settings are the tenant app
+`notifications` (0001): `NotificationSettings` (singleton: `night_ends_at`,
+`last_tick_at`), `Reminder`, `EventRule` (one per event), `Dispatch` (outbox
+AND history). Recipients are plain user ids and a dispatch names its rule by
+a plain id: no FK to a central table (`test_router`) nor to a returnables or
+invoices row (a « Données » clear must never break). Auto gathers are
+`invoices.AutoGather` with `ScrapeJob.trigger` (manual « à la main » /
+automatic « automatique », default manual) and `ScrapeJob.auto_gather_id`,
+and each gathered source's coverage is `invoices.GatherCoverage` (one row
+per `type-<id>` / `bons-<id>` code; its admin is view-only) - all invoices
+0036. None of it is in a « Données » section (« Never exported »).
+
+**The push transport is in-house** (`webpush.py`): RFC 8291 (aes128gcm) and
+RFC 8292 (VAPID) on `cryptography` + `requests`, both already locked -
+pywebpush and py-vapid are MPL-2.0, and the owner wants MIT/Apache/BSD.
+`test_webpush` reproduces RFC 8291's Appendix A byte for byte and verifies
+RFC 8292's token.
+- **The VAPID key is derived from SECRET_KEY** (HKDF-SHA256, salt
+  `marginmate-vapid`, info `web-push-vapid-p256-v1`, reduced into P-256's
+  order), cached per sha256 of the key: nothing stored, no .env line. Each
+  copy has its own SECRET_KEY, so dev can never push to production's
+  phones; changing the key means every phone re-subscribes (the next page
+  load's sync answers `renew` - DEPLOY.md 13).
+- **`sending_enabled()`** = SITE_URL in https, DEBUG off, a strong key
+  (`secret_key_problem` empty). Checked INSIDE `webpush.send` (no network
+  at all otherwise) and by the delivery, which writes « non envoyé : les
+  envois sont désactivés sur ce serveur ». A dev copy never sends and never
+  gathers by itself. SITE_URL is also the JWT's `sub` and the base of every
+  notification's absolute link.
+- **One HTTP entry point, `webpush._post`**, looked up at call time: a
+  `requests.Session` with `trust_env = False`, `allow_redirects=False`,
+  timeout (5, 10). **`tests/runner.py install()` replaces it with a
+  forbidden stub for the whole run** (in the parallel workers too), which
+  raises `tests.support.ForbiddenNetworkCall` - a BaseException, so the
+  delivery's `except Exception` cannot swallow it: a test that wants an
+  answer passes `send(post=…)` or patches `_post` itself.
+- **The endpoint allowlist (SSRF)** is checked at registration AND at each
+  send: https only, written `https://`, port none or 443, no userinfo, `\`,
+  `@`, `#` or `%` in the authority, ASCII without whitespace, a plain
+  lower-case host that is exactly FCM, Mozilla's or `jmt17.google.com`, or
+  ends in `.push.apple.com` / `.notify.windows.com` after a label; the URL
+  sent is rebuilt from the checked parts. A browser-supplied URL is never
+  fetched as given.
+- **Answers**: 2xx ok; 404/410 the device is gone (tombstoned, `gone_at`);
+  400/413 « refusé par le service (code N) »; 401/403 « clé refusée… »; 429,
+  5xx, a timeout or a connection error get ONE retry after 2 s (never for
+  an essai). Errors are fixed French sentences per class - **never
+  `str(exc)`**: a requests exception carries the whole endpoint, a device's
+  token. Logs name a device by `_where` (host + 8 hex), without `exc_info`.
+- **Payload**: Declarative Web Push JSON (`web_push: 8030`, `notification`
+  with title ≤ 80, body ≤ 400, absolute `navigate`, `tag` `d<dispatch pk>`
+  so the 02:00 reminder alerts even with the 00:00 one still in the tray),
+  ≤ 2 000 bytes, clipped with « … ». Safari 18.4+ shows it itself; others
+  hand it to `/sw.js`, which reads `data.notification`. **Nothing
+  correctness-critical lives only in the service worker.** Reminders carry
+  `Topic: r<pk>` (an undelivered 00:00 is replaced by the 02:00 at the push
+  service), TTLs are 3 600 (reminder), 86 400 (alert), 600 (essai).
+
+**Time: UTC arithmetic only** (`schedule.py`). Wall time is used only to
+list (date, time) candidates - `datetime.combine(day, t, tzinfo=PARIS)`,
+fold 0, converted to UTC at once; every comparison, window, grace and dedupe
+key is UTC. zoneinfo compares two datetimes of one zone by wall clock and
+ignores `fold`: never compare local datetimes. DST: 02:30 on the last Sunday
+of March is 03:30 CEST, sent once (« 02:00 03:00 » that night gives one
+instant); the doubled hour of October is its first occurrence. Previews print
+the local time of the UTC instant.
+- **The night of the bar**: a reminder's ticked day is the EVENING; a time
+  strictly before `night_ends_at` (default 06:00; 04:00-12:00, or 00:00 =
+  « calendrier ») is sent the next calendar day. The invented case pinned in
+  `test_schedule` (`test_three_evenings_a_week`): evenings Mon, Wed, Sat +
+  « 00:00 02:00 » → Tue, Thu, Sun at 00:00 and 02:00. Keep a Saturday
+  evening in such a case: daylight saving changes on a Sunday's night, and
+  `test_reminders`' DST tests reuse its reminder. Weekdays are `date.weekday()`
+  (0 = lundi) stored « 0,2,5 », `schedule.DAY_SHORT` for the short forms.
+  The new reminder's card ticks no day (each bar ticks its own; its help is
+  a generic « Livraison le matin ? Cochez le soir d'avant… »), and the new
+  automatic gather's card ticks Monday to Saturday, 06:00 → 14:00 every
+  30 min.
+- **Catch-up**: a reminder is sent up to 30 min late (`REMINDER_GRACE`);
+  older, a `missed` row « manqué : serveur arrêté ou ordinateur en veille
+  à HH:MM », never sent. The window never reaches before 24 h, the rule's
+  `created_at`, nor the espace's `last_tick_at`. The PC must be on and awake
+  (DEPLOY.md 13).
+
+**The scheduler** (`scheduler.py`) is ONE daemon thread started by
+`manage.py serve` after `create_server` and before `server.run()`, stopped
+in its `finally` (`stop(timeout=5)`); serve prints « Rappels et
+récupérations automatiques : actifs. » before « En ligne ». **Never in
+`AppConfig.ready()`, never under runserver, no management command**: a
+second process would send twice. Each minute + 2 s, `tick(now)` binds each
+active espace in turn and runs `JOBS` (`notifications.reminders.run_due`,
+`invoices.auto_gather.run_due`, resolved by `import_string` at call time),
+each inside its own `except Exception`; an espace that will not bind
+(TenancyError, ImproperlyConfigured, DatabaseError) is skipped;
+`connections.close_all()` after every tick. Each espace's tick connection
+waits at most `BUSY_TIMEOUT_MS` (5 000 ms, `PRAGMA busy_timeout`) for a
+write lock, not the usual 60 s: one locked espace never holds up the others
+(delivery threads have their own connection and keep 60 s).
+
+**Outbox, savepoints, on_commit.** Jobs and events only create `pending`
+dispatches; **no network in the scheduler thread nor inside an atomic
+block**. After an espace's jobs, `sending.start_delivery` starts at most ONE
+bound `deliver_pending` thread per espace (a module dict of threads, never
+of rows), which claims each row `pending → sending` by a conditional UPDATE
+and sends. A dispatch made while that thread is finishing is never left
+behind: the thread decides to end under `_threads_lock`, checking an
+`_again` set, and gives up its place at once. `events.wanted()` is a plain
+read outside a caller's transaction (an `atomic()` would BEGIN IMMEDIATE
+and wait for the write lock just to read), a savepoint inside one; a
+DatabaseError other than a missing table is logged as a warning. Every
+`Dispatch` insert is its own savepoint; an IntegrityError
+on `dedupe_key` means already done (reminder `reminder:<pk>:<UTC instant>`,
+alert `event:<rule>:<content key>`, essai `test:<uuid>`) - two processes or
+two ticks never send twice. `events.emit` does its work through
+`transaction.on_commit` (at once in autocommit), never raises, and never
+poisons the caller's transaction. A tick also sweeps (`pending` past its TTL
+« expiré avant l'envoi », `sending` for 10 min « interrompu (serveur
+redémarré) »), keeps 90 days and the newest 1 000 rows, deletes tombstones
+after 90 days and devices failing 5 times with no success for 7 days.
+
+**Devices** (`devices.py`, one rule set). « Activer » (`inscrire`, a user
+gesture) is the ONLY way a device row is created or moved to another
+membership - moved only when the posted keys equal the stored ones; 10 per
+membership. `push_sync.js` runs on every logged-in page (deferred, in
+base.html's head) and POSTs `synchroniser`, which **never creates**: it finds
+the device by the signed cookie `marginmate_push` (`<device pk>:<user pk>`,
+salt `notifications.device`, HttpOnly, 400 days), else by endpoint among the
+member's devices, and answers `ok` (keys refreshed, `logged_out_at`
+cleared), `renew` (no subscription, another server key, a tombstoned
+endpoint: the page re-subscribes without a gesture) or `unknown` (nothing
+for 12 h). A sync answering `ok` for a fresh subscription clears `gone_at`
+(a renewed tombstoned device is sent to again), and resets `failures` and
+`last_error` when the endpoint changed. `server_key` is what the browser
+says it subscribed with, never stamped by the server; `devices_for` keeps
+the current key only. The JSON endpoints refuse any other content type
+before reading the body (400 « Demande illisible. », never a 500 for a
+multipart post). A membership moved to another espace or given to another
+login (admin form or plain save; a pre_save receiver in `signals.py`) loses
+its push devices - a `QuerySet.update` of the tenant or the user bypasses it. « Cet appareil »'s script
+shows only the server's JSON error string or one of its fixed French
+sentences, never `error.message`. Logout
+(`LogoutPage.post`, BEFORE `super().post()`) marks the cookie's device
+`logged_out_at` - a missing table never breaks a logout; another user
+logging in on the browser deletes the cookie's device (`signals.py`).
+`inscrire` from another host than SITE_URL's is refused (the notification's
+link opens SITE_URL). Its sync stamp is a DRAFT (`push:` in ui.js's
+`DRAFTS`), so the next login syncs at once.
+
+**iOS.** Web push works only in a Home Screen app (iOS 16.4+): Safari ›
+Partager › Sur l'écran d'accueil, opened FROM THE ICON, logged in again
+(the app has its own cookies), then « Activer ». « Cet appareil » draws every
+state server-side, all hidden but « JavaScript requis », and
+`notifications.js` shows exactly one (install, update iOS, unsupported,
+blocked, Activer, active). A Home Screen app has no Back button: the bon's
+« Ouvrir le PDF » and a reprise's photo open in a new tab
+(`target="_blank" rel="noopener"`). `login_next.js` carries a link's
+`#new-pickup` through the login. The manifest and the icons
+(`static/icons/`, generated once outside the repository;
+`apple-touch-icon.png` opaque) are in base.html's and the login skeleton's
+head. `/sw.js` and `/manifest.webmanifest` are public views (`PUBLIC_VIEWS`):
+`/sw.js` at the root because a service worker's scope is its folder, served
+`no-cache` - a Cloudflare « Cache Everything » or challenge on it stops the
+notifications (DEPLOY.md 13).
+
+**Who may do what**: rules, alerts, the night and auto gathers are the
+espace owner's (`is_owner`); a member reads them (« Seul le propriétaire de
+l'espace modifie ces réglages. ») and gets the 403 page on a POST. Devices:
+every member, their own only, the membership always
+`Membership.objects.get(user=request.user, tenant_id=request.tenant.pk)`.
+Recipients are active users only. Forms never write the scheduler's columns
+(`last_tick_at`, `last_slot_at`, `last_result`): saves use `update_fields`.
+A reminder card's FIRST submit is a hidden « Aperçu »: Enter previews and
+never saves.
+
+**The bon's alert** (`returnables/notify.py`, event `returnables-comparison`):
+`notify_slips(slips)` runs ONCE PER BATCH, after the loop, from the three
+places that store bons - `mail.store_matches` (in a `finally`, before its
+note), `slips.store_uploads` and `receipts.route_to_returnables` (the slip,
+only when created) - with the CREATED slips only, **never from
+`store_slip`**. It asks `events.wanted()` first (no rule: no slip read), keeps
+the days from 3 days back to tomorrow, and says nothing for a re-send or a
+replaced bon. Dated slips are grouped by (supplier, delivery day), one
+evaluation per group on its latest slip that counts. A slip without its
+delivery date (dated by its mail's date, else its arrival, only to keep or
+drop it) is a group of its own and never stands for the dated slips of its
+mail's day. A misdated reprise (e.g. counted on the evening before, the
+bon dated the delivery day) is compared through
+`comparison.Board.as_if_dated` with the nearest reprise within 3 days, and
+the alert says so (« Reprise du lun. 09/02, à mettre au mar. 10/02 : … »,
+the invented days of `returnables/tests/test_notify.py`); the Consignes
+page does not change. **A day
+with no reprise and no hint is decided on EVERY slip that counts that day,
+never on the latest alone** (`_unpaired_day`; two deliveries, the empties
+on the first trip): « no_pickup » naming the slips that list empties when
+any does, else « to_check » when one of them has a problem, else « match »
+(« aucun vide repris ») only when every slip is empty and passes its
+checks. A reprise with « Repris par » blank within 3 days makes such a day
+« to_check » (« Une reprise sans « Repris par » le dd/mm : précisez le
+fournisseur. »), whether its slips list empties or none. The content key is
+a hash of the substance (supplier, day, outcome, the slips the result rests
+on, what was compared), never of a sentence: the same result is sent once.
+For « aucune reprise saisie » those slips are the ones listing empties, so
+a slip listing nothing that arrives in a later batch says the same result
+again (deduplicated) rather than « conforme ». The blank « Repris par »
+alert's key rests on the supplier, the slip's day, the outcome and that
+pickup's date, never on the day's slips (`_Alert.basis` empty, its `extra`
+the blank pickup's date): a later slip of the same supplier and day repeats
+the same result and is deduplicated; a blank pickup on another date is
+another result. The alert's link opens the slip it names (for the blank
+« Repris par » alert, the slip evaluated). Wrapped: a failure is logged,
+never a lost bon.
+
+**Automatic gathers** (`invoices/auto_gather.py`, `invoices/gathering.py`).
+- **Only mailbox invoice types and slip formats with a sender.** Metro (its
+  firewall blocks automated connections) and customer portals (an SMS code,
+  a browser window) are listed disabled with their reason, refused if
+  posted, and dropped at run; `gather_invoices_task(unattended=True)` also
+  never signs in to Metro and forces headless browsers. A later opt-in is
+  the owner's decision.
+- Frequencies 15 min … 12 h; any invoice type ⇒ at least hourly, slips
+  alone ⇒ at least every 30 min; start = end ⇒ once a day. A rule ending
+  before it starts is refused three times: `AutoGather.clean` (on the end
+  time, `AUTO_GATHER_END_BEFORE_START`), the CheckConstraint
+  `auto_gather_end_after_start` (0036), and its card, which says « heures
+  illisibles : corrigez-les » (« jours illisibles » for its days) rather
+  than a 500.
+- **Each source's coverage is recorded** (`invoices.GatherCoverage`,
+  `invoices/coverage.py`; it replaced the « last clean search » walk of the
+  history). Per source (`type-<id>`, `bons-<id>`): `searched_until`, the
+  last day covered with no gap before it, `pending_from`, the start of
+  a stretch left to catch up by hand, and `pending_until`, that stretch's
+  last day - the day before the 90-day bound that cut it (the admin lists
+  all three, read-only). A search records its coverage
+  (`coverage.searched`, through `tasks._searched`) only when it COMPLETES:
+  the mail server handed over every mail of the range, then at the end of
+  `_gather_email` after its import loop, in `_gather_slips` after
+  `store_matches` and the cancel check - by hand or automatic. A source in
+  error, a cancelled run, a killed or FAILED run records nothing: what it
+  did not reach is searched again.
+  - **Search settings saved while it ran** (`tasks._searched(…,
+    unchanged=…, label=…)`): before recording, the source must still have
+    the patterns the search used - a mailbox type compared on
+    `EMAIL_SEARCH_FIELDS` (now in `invoices/models.py`; the views and the
+    tasks import it from there) and still of kind EMAIL, a slip format on
+    `returnables.patterns.FORMAT_FIELDS`. The check and the record share one
+    `transaction.atomic()` (IMMEDIATE: a save and its `restart` land wholly
+    before or wholly after). Changed, nothing is recorded - recorded, the
+    old patterns' search undid the restart - and the log says « <source> :
+    réglages de recherche modifiés pendant la récupération - couverture non
+    enregistrée, reprise à la prochaine récupération. »; the next run
+    searches from the restarted coverage. A name-only save still records.
+  - **An incomplete IMAP search** (`generic_email.IncompleteSearch`, see
+    « Gathering invoices ») still imports or stores what was read; the
+    line says « Boîte mail : Recherche incomplète : N e-mail(s) non lu(s)
+    par le serveur mail. », `_searched` is not called, and the alert counts
+    a failed source. A SEARCH answered NO is a plain source error
+    (« Boîte mail : Recherche refusée par le serveur mail (NO). »).
+  - **A document not imported for want of the OCR or the database**
+    (`_import_document_file` returns None when the OCR lock wait runs out;
+    both import helpers return None on OperationalError) is counted:
+    `_gather_email` puts `NOT_IMPORTED_NOW` on the line (« N document(s)
+    non importé(s) faute de lecture ou de base disponible : repris à la
+    prochaine récupération ») and records no coverage. A document refused
+    for what it is - a duplicate, a slip, a file its reader cannot read -
+    still lets coverage move: retried, it would hold the source back for
+    good.
+  - **The rule** (`coverage.searched(code, since, until, own=…,
+    bounded=…, floor=…)`). `own` is the source's own start, worked out
+    BEFORE the search (the search's own imports move a supplier's newest
+    invoice): the mailbox loop takes `(unattended and start_date) or
+    _own_start(supplier)`, a slip format `fetch_start(fmt, None, today)` -
+    never the posted date, which a manual slips search starts from when it
+    is earlier (taken from it, a never-searched format counted a past
+    period as its coverage). A search moves `searched_until` forward
+    (never back) only if it starts on or before `searched_until` + 1 day,
+    or - never searched - starts on or before `own` AND reaches it
+    (`since` ≤ `own` ≤ `until`): a manual gather from Achats' default
+    start, or of a past period (one ending before its own start too),
+    leaves the gap to the next automatic run. A never-searched source whose
+    first search does not count is pinned at `own` + `OVERLAP_DAYS` (today
+    at most), so a newer invoice that very search brought in cannot move
+    its own start past the gap. An automatic run cut at the 90-day bound
+    (`bounded`) sets it to its end all the same. `until` never goes past
+    today.
+  - **`pending_from`** changes only when `since` ≤ max(`pending_from`,
+    `floor`) ≤ `until`: a search reaching the stretch's end
+    (`coverage.stretch_end`: `pending_until`, or on a row written before
+    that field existed the day before today's bound) clears both
+    `pending_from` and `pending_until`, a shorter one moves `pending_from`
+    to `until` + 1 and keeps the end (caught up in chunks, the line says
+    what is left); a search ending before the stretch, or
+    starting after its start, changes nothing. `floor` is a slip format's
+    `returnables.mail.lookback_floor(today)` (400 days back, the one
+    definition, which `fetch_start` uses): no slips search starts before
+    it, so a stretch older than the floor - or aged past it - is cleared by
+    « Récupérer » with Achats' dates. Mailbox types pass none.
+  - **Search settings changed** (`coverage.restart(code, own)`, inside the
+    save's transaction): `searched_until` goes back to `own` +
+    `OVERLAP_DAYS`, never forward - the days covered were searched for
+    other mails; the row is kept or made (deleted, the history would be
+    read again; left None, any later search would count as its first). A
+    mailbox type (`invoices/views.py _search_changed`): sender, subject,
+    body or attachment pattern changed (by `changed_data`, never
+    `has_changed()` - the form carries « Tester »'s dates), a new type, or
+    one that was not a mailbox before; `own` = `_own_start`. A slip format
+    (`returnables/views.py`, its save in `transaction.atomic()`): any of
+    `PATTERN_FIELDS` changed - the reading patterns decide which
+    attachments are kept (« pas un bon … — ignoré »), and searching again
+    costs only duplicates refused by sha256; `own` = `fetch_start(saved,
+    None, today)`. A name-only save changes nothing. A gather searching the
+    source as the save lands records nothing for it (« Search settings
+    saved while it ran », above).
+  - A database too busy to record it costs a wider search next time, never
+    the gather.
+- **Period of an automatic run** (`coverage.unattended_start`): each source
+  starts at `searched_until` − `OVERLAP_DAYS` (3) - never from the
+  supplier's newest invoice, which another channel (a photographed ticket,
+  a PDF dropped by hand) may have brought in while the mailbox failed. A
+  source with no row reads the history ONCE (`coverage._from_history`: the
+  furthest reach over the SUCCESS gathers, by hand or automatic, whose line
+  for it has no `error`, each read as min(its `range_end`, the local day it
+  started) - a past period gathered again covered nothing after it, and
+  gathered last it no longer hides an older gather that reached further;
+  walking newest first, it stops at the first gather that reached its own
+  start day. A FAILED run never counts: a run killed
+  mid-search is reaped FAILED with its current line clean), else falls
+  back to its own start (`_own_start` for a mailbox type: its newest
+  invoice dated today or earlier, whatever read it, − 3, never a future
+  date; `returnables.mail.fetch_start` for a slip format). Never more than
+  `DEFAULT_LOOKBACK_DAYS` = 90 days back: when the bound cuts the start,
+  `pending_from` is set (or lowered) and `pending_until` set to that
+  bound − 1 day (each cut, the latest cut's: a re-cut after `restart()`
+  extends it), and while it is pending EVERY
+  automatic run's line repeats « Rattrapage à faire à la main depuis
+  Factures, du … au … » (`catch_up`), counted as a failed source in the
+  alert. Its « au » is `pending_until` + 1 - the bound that cut the
+  stretch, from which on the automatic runs searched it - so it no longer
+  moves forward a day each day (`catch_up_sentence(pending_from, today,
+  pending_until=None)`; without `pending_until`, today's bound). The
+  rule's card lists each source's pending stretch (`coverage.catch_ups(codes,
+  today)` makes the sentences, `views._pending_catch_ups` takes them
+  ready), and Achats pre-fills « Du » with
+  min(its default, the oldest `pending_from` - `coverage.pending`, the
+  start alone), so « Récupérer » as offered
+  clears it - but only the stretches of sources the latest manual gather of
+  invoices searched without an error, or of any source before the first
+  (`workspace._searches_it`): a source left unticked or failing kept its
+  stretch pending and sent every later gather, Metro and every mailbox type
+  with it, that far back for good. The rule's card and every automatic run
+  go on saying it. There is no fixed 14-day cap any more. The page says « Chaque
+  source reprend là où sa dernière récupération réussie s'est arrêtée, 90
+  jours au plus. »
+- **By hand**, a portal searches from the earlier of the posted date and
+  its own `_own_start`: an automatic mailbox gather moving Factures' default
+  start never makes a portal skip its missing invoices. Its own start is
+  written in the log, and `job.range_start` is never widened below the
+  posted date - it is the period Achats offers again after a failure, to
+  every source (a failing portal used to pull it 90 days back for the
+  mailbox and Metro). Mailbox types keep the posted start; manual gathers
+  are otherwise unchanged.
+- `run_due`: nothing without `integrations_allowed()`; on a dev server each
+  due slot is claimed and says « sautée : serveur de développement ». A due
+  slot is the latest instant in `(last_slot_at or created_at, now]`, claimed
+  by a conditional UPDATE on the `last_slot_at` read. **Catch-up**
+  (`catch_up_limit`): min(every, 120) min for a rule running several times
+  a day, 12 h for a once-a-day rule (start = end); older, the slot is
+  « manquée : serveur arrêté à HH:MM ». Each card states its limit (« Une
+  heure manquée est rattrapée dans les 30 min / 12 h. »). Skipped, slot
+  claimed: the deploy mark `.git/marginmate-deploy` exists (« sautée : mise
+  à jour du site en cours »), no allowed source left, days or hours nobody
+  can read (« sautée : jours ou heures illisibles », claimed once, one
+  warning). **Another gather active: the slot is GIVEN BACK** (`give_back`)
+  and the rule says « en attente : une récupération est en cours »; the next
+  tick retries until the gather starts or the slot passes its limit
+  (« manquée : une récupération était en cours à HH:MM ») - the page's
+  suggested pair (slips every 30 min, invoices at 07:00) both run. **A
+  database error at the launch** (the espace locked past the scheduler's
+  5 s `BUSY_TIMEOUT_MS`: nothing was created) gives the slot back the same
+  way and says « en attente : base occupée »; past the limit, « manquée :
+  base occupée à HH:MM ». Each rule runs in its own try; any other failure
+  after the claim is logged and says « échec : erreur interne à HH:MM »,
+  the slot kept (that write itself guarded), and the next rule and the
+  prune still run. Saving a rule never runs it: creating,
+  re-activating or changing days/hours sets `last_slot_at = now`. Automatic
+  runs older than 30 days are pruned.
+- **One way to start a gather**: `gathering.start_gather(...)`, used by
+  `trigger_gather` and the auto gathers - reap, active check and
+  `ScrapeJob.create` in ONE `transaction.atomic()` (IMMEDIATE serialises two
+  starters), the thread started once the block has exited (not on_commit:
+  every caller is outside an atomic block, and a TestCase never fires
+  on_commit). None when another gather is active.
+- **Factures and Consignes ignore automatic runs** for their period, their
+  « missed » sources and their latest run (`trigger=manual` filters in
+  `_import_card`, `_invoice_gather`, `_missed_again`, Consignes' slips
+  card), but an ACTIVE automatic gather is still shown (« déjà en cours »;
+  `_gather_status.html` « Lancée automatiquement »). An automatic run is a
+  job like any other: `running_jobs` refuses a deploy while it runs, and
+  « Données » waits (DEPLOY.md 13).
+- At the end of `gather_invoices_task`, after its try/except/finally, an
+  automatic job that ended SUCCESS or FAILED emits `invoices-auto-gather`:
+  `failed` (deduplicated per rule, failed sources and local day: « une
+  source en échec n'est signalée qu'une fois par jour »; a source with a
+  `catch_up` - on every run until a search covers it - counts as failed,
+  its sentence in the body), `new` (labelled
+  « du nouveau ») when `invoices_created > 0` or the run stored new bons,
+  else `nothing`. Cancelled and refused runs emit nothing.
+
+**Migrations**: accounts 0003, notifications 0001 and invoices 0036 reach
+production with the next deploy.cmd (its `migrate_tenants`, after its
+backup); data-dev needs the owner's `migrate_tenants`. Until then the
+Factures and Consignes pages fail there (they read `ScrapeJob.trigger`).
+0036 was edited in place to add `GatherCoverage.pending_until` while it was
+still unapplied everywhere; once applied anywhere, a further change is a new
+migration.
+
+Tests: `notifications/tests/` - `test_webpush`, `test_schedule`,
+`test_registry` (pure), `test_models`, `test_sending`, `test_reminders`,
+`test_events`, `test_scheduler` (two espaces), `test_devices`,
+`test_devices_api`, `test_membership_moved` (two espaces), `test_views`,
+`test_public_files`, `test_static_js` (ES5, no markup, fixed sentences), and
+`test_phone_browser` (tag browser: the three pages at 375 px,
+44 px targets, one « Cet appareil » state); `returnables/tests/test_notify.py`;
+`invoices/tests/test_gathering.py`, `test_auto_gather.py`,
+`test_auto_gather_views.py`, `test_auto_gather_review.py`,
+`test_auto_gather_coverage.py` (`RestartDuringAGatherTests`,
+`NeverSearchedPastPeriodTests`, `HistoryFurthestReachTests`,
+`StretchEndTests` among others), `test_auto_gather_completeness.py` (an
+incomplete IMAP search through `gather_invoices_task` for a mailbox type
+and a slip format, only imaplib faked - `test_email_search.FakeMailbox`,
+`BATCH_SIZE` 1 -, and `FailedImportTests`), `test_email_search.py`
+(`IncompleteSearchTests`); `returnables/tests/test_views.py`
+(`FormatPageTests`, the coverage restarted). Their loggers are quieted
+(`notifications/tests/support.QuietLogs`: the test settings' `LOGGING = {}`
+prints warnings through Python's last-resort handler). Never a real push
+service, gather or thread: `_post` is forbidden run-wide and
+`invoices.gathering.threading.Thread` / `notifications.events.threading.Thread`
+are patched.
+
+#### L'import automatique des ventes (`recipes/auto_sales.py`, `/recipes/import-auto/`)
+
+The owner, 03/10/2026: « une récupération automatique et programmable des
+ventes depuis l'addition (dans le futur … d'autres sites internet) », then
+« décorréler la récupération auto depuis l'addition des autres ». So the
+sales have rules, a page and a job of their own, separate from the
+automatic gathers of invoices and bons - and the slot machinery is ONE.
+
+- **One slot engine** (`notifications/automation.py`): the due slot in
+  (`last_slot_at` or `created_at`, now], the claim by conditional UPDATE,
+  the give-back, the catch-up limit, the dev-server skip (« sautée :
+  serveur de développement »), the deploy mark, the unreadable rule claimed
+  once, `except Exception` → « échec : erreur interne à HH:MM », a
+  DatabaseError → given back « en attente : base occupée », the guarded
+  writes, one rule's failure kept to itself (`run_each`). A kind is an
+  `automation.Kind` (its model, instants, limit, `start`, sentences and log
+  lines). `invoices/auto_gather.py` is the gathers' kind and kept every
+  behaviour and word: its hooks call ITS module's functions at call time
+  (`claim`, `_say`, `run_rule`… - the tests patch them), and `DEV_SERVER`,
+  `BUSY`, `deploy_mark`… stay importable from it. Its whole suite passed
+  unmodified.
+- **The rules** (`recipes.AutoSalesImport`, recipes 0018): name, `source`
+  (a key of `recipes/sales_sources.py`, « laddition »), `weekdays`
+  (calendar days, no night: `schedule.calendar_instants`), `times` (1 to 6,
+  « 07:00 12:00 », `parse_times`), `is_active`, the scheduler's
+  `last_slot_at`, `last_result`, `last_failed` (the last failure's local
+  day, cleared by a success). Cap 5. Catch-up 12 h: an import is idempotent
+  per day, late is fine. `run_due` is the scheduler's third JOB; nothing
+  outside the owner's espace (`till_allowed`).
+- **The sources** (`recipes/sales_sources.py`): `SalesSource(key, label,
+  available, unavailable_reason, job_label, task)`. Another site is an
+  entry whose task (`(job_id, start, end)`) records the same day-level
+  sales (`record_sales`, `PosProductDailyQuantity`) and ends with
+  `auto_sales.finish` - nothing else in the scheduling changes. A key the
+  registry no longer has is « sautée : source inconnue », never a 500.
+- **One sales import at a time** (`recipes/importing.start_sales_import`,
+  used by the Ventes tab's `trigger_sales_import` and the automatic run):
+  reap, active check and create in one `transaction.atomic()`, the bound
+  thread started after it (the `start_gather` pattern). None ⇒ the tab says
+  « Une récupération est déjà en cours. », the slot is given back (« en
+  attente : un import des ventes est en cours »). `recipes.views` keeps
+  `import threading` only because the tests patch the thread as
+  `recipes.views.threading.Thread` (the threading module itself).
+  `claim_sales_import` is that block without the thread
+  (`manage.py laddition_import` takes it too).
+- **Decided under the lock, committed together** (review of 03/10, each a
+  test in `test_auto_sales_races.py`): an automatic slot passes `plan` to
+  `start_sales_import`, called inside the block after the active check -
+  the period, « à jour » and the skip below - and returns the job, None, or
+  the plan's sentence; read before the lock, a period predating an import
+  that ended in between signed in again for days just imported. The task
+  ends with `auto_sales.finish(job, fields=…)`: a SUCCESS's status and its
+  coverage in one transaction (the coverage in a savepoint of its own: one
+  that fails is logged and the SUCCESS stays). `finished` is for a job
+  whose status is already saved.
+- **A rule that waited behind an import that then FAILED or was CANCELLED
+  skips that slot** (« sautée : l'import en cours vient d'échouer ou d'être
+  annulé », the slot kept): only when its last result was « en attente » and
+  a failed or cancelled sales job finished at or after the slot. The owner's
+  « Annuler », a refused sign-in, are not repeated a minute later; its next
+  slot runs. Jobs carry no source: filter on one once a second source
+  exists.
+- **The period** (`period_for`): END the last COMPLETE till day
+  (`last_complete_day`: yesterday once the local time is past
+  « La nuit se termine à » - 00:00 = yesterday at any hour -, else the day
+  before; the till files an after-midnight sale under the day its service
+  began). Coverage is the gathers' `GatherCoverage` under `ventes-<key>`,
+  recorded by `coverage.searched` (the same contiguity rules) when an
+  import COMPLETES - by hand from the Ventes tab too, never failed,
+  cancelled or killed - up to the last complete day when it FINISHED (an
+  import up to today has not seen tonight's sales). Unknown, it is read once
+  from the SUCCESS sales jobs (L'Addition's only; the job being recorded
+  left out). **Nothing new when the day after the coverage is past END**:
+  the slot says « à jour : ventes importées jusqu'au JJ/MM », no job, no
+  sign-in - two slots a day sign in once. Otherwise START = coverage − 3
+  days, or (never covered) the newest sales day − 3, else today − 90; only
+  bounded at today − 400 (said in the job's log; such a run records its
+  coverage as `bounded`). No pending catch-up: one window is one export.
+- **The alert** `recipes-auto-sales` (« Import automatique des ventes »,
+  `new` « ventes importées » / `failed` « échec » / `nothing` « rien de
+  nouveau », default `failed`), from `auto_sales.finish` once the task's
+  status is saved, automatic jobs in SUCCESS or FAILED only: failed keyed
+  `sales-failed:<rule>:<local day>` (once a day), body « Échec : » + the
+  error's first line with any address masked (never the traceback); else
+  `sales:<job>`, « Ventes du JJ/MM au JJ/MM : N totaux recette/jour · M
+  produits de caisse sans recette ». Opens the Ventes tab.
+- **SalesImportJob** gained `trigger` (« à la main » / « automatique ») and
+  `auto_rule_id`; the status card says « Lancé automatiquement »; the tab's
+  latest-job logic is unchanged (an active automatic import holds its form).
+  The tick prunes automatic jobs older than 30 days.
+- **The page** (`recipes/auto_sales_views.py`, `recipes:auto_sales`, POST-only
+  `…/<pk>/` and `…/<pk>/supprimer/`; lights « Recettes & ventes »): owner
+  only for POST (members read-only, 403), no form where no source is
+  `available()` (its reason instead). One card per rule (`#import-<pk>`),
+  « Prochains imports », the last 10 automatic runs, the period line naming
+  the night setting; a new card « Ventes de la veille », every day, 07:00.
+  Saving never runs an import (creation, re-activation, new days or times
+  set `last_slot_at = now` apart; saves never write the scheduler's columns).
+  Linked from the Ventes tab's import card, /notifications/ and the
+  automatic gathers' page.
+
+Tests: `recipes/tests/test_auto_sales.py` (the ticks),
+`test_auto_sales_period.py` (END, START, the history, the 400-day bound,
+what an import records - the task run with the download patched),
+`test_auto_sales_start_and_alert.py`, `test_auto_sales_views.py`,
+`test_auto_sales_races.py` (the plan under the lock, the SUCCESS and its
+coverage in one transaction, the skip after a failure, the command holding
+the lock); `transfer/tests/test_sales_section.py::SalesCoverageTests`;
+`notifications/tests/test_schedule.py` (`CalendarInstantsTests`). The
+thread is always patched (`recipes.importing.threading.Thread`):
+`download_sales_lines` is never reached. A test running `run_due` at a
+future date sets its jobs' `started_at` to that date, or the tick's prune
+deletes them.
 
 ### UI conventions
 

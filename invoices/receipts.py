@@ -2347,10 +2347,11 @@ def route_to_returnables(path: str, display_filename: str | None) -> None:
     caps, returnables.reading.pdf_text). A PDF SEVERAL formats recognise is
     a slip all the same, and refused: which one is for a person to say, on
     the Consignes page. A format whose start pattern runs out of time takes
-    no part (it cannot say)."""
+    no part (it cannot say). A slip created here is handed to
+    returnables.notify.notify_slips, its batch of one."""
     if not path.lower().endswith(".pdf"):
         return
-    from returnables import reading, slips
+    from returnables import notify, reading, slips
     from returnables.comparison import slip_label
     from returnables.models import Slip, SlipFormat
 
@@ -2395,6 +2396,8 @@ def route_to_returnables(path: str, display_filename: str | None) -> None:
         text=text,
     )
     if result.kind == slips.CREATED:
+        # Its alert, before the refusal is raised (a batch of one; never raises).
+        notify.notify_slips([result.slip])
         said = f"rangé dans Consignes ({slip_label(result.slip.number)})"
     elif result.slip is not None:
         said = f"déjà reçu dans Consignes ({slip_label(result.slip.number)})"

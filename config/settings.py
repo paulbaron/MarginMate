@@ -140,6 +140,10 @@ INSTALLED_APPS = [
     # with. Achats, the gather, the supplier page and « Données » read its
     # tables too: a tenant needs its migrations (migrate_tenants).
     "returnables",
+    # Push notifications: reminders, alerts and their history (a tenant app);
+    # the devices are accounts.PushDevice. Sends only from a production
+    # server (notifications/webpush.py `sending_enabled`).
+    "notifications",
 ]
 
 MIDDLEWARE = [

@@ -12,7 +12,7 @@
             <span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>
             <span class="muted">
                 {% if job.range_start %}Du {{ job.range_start|date:"d/m/Y" }} au {{ job.range_end|date:"d/m/Y" }} · {% endif %}
-                Lancée : {{ job.started_at|date:"d/m/Y à H:i" }}
+                Lancée : {{ job.started_at|date:"d/m/Y à H:i" }}{% if job.is_automatic %} · Lancé automatiquement{% endif %}
             </span>
         </div>
         {% if job.is_active %}

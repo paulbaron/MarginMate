@@ -455,6 +455,7 @@ class PageChromeTests(TestCase):
             "invoices:invoice_list",
             "recipes:recipe_list",
             "recipes:sales_list",
+            "recipes:auto_sales",
             "inventory:stock_take_list",
             # No count in this database: its empty state still says it.
             "inventory:stock_gap_filler",
@@ -466,6 +467,9 @@ class PageChromeTests(TestCase):
             "returnables:home",
             "returnables:format_list",
             "returnables:type_list",
+            "notifications:home",
+            "notifications:reminders",
+            "notifications:events",
         ):
             with self.subTest(page=url_name):
                 self.assertContains(self.client.get(reverse(url_name)), "page-subtitle")
@@ -558,6 +562,7 @@ class TemplateHygieneTests(TestCase):
                         "transfer",
                         "staff",
                         "returnables",
+                        "notifications",
                     )
                 ],
             ):
@@ -631,6 +636,21 @@ class ReturnablesWritesNoMarkupTests(TestCase):
         for path in root.rglob("*.html"):
             text = path.read_text(encoding="utf-8")
             with self.subTest(template=path.name):
+                self.assertIsNone(re.search(r"\sstyle=", text))
+                self.assertIsNone(re.search(r"<script(?![^>]*\ssrc=)", text))
+                self.assertIsNone(re.search(r"<[a-zA-Z][^>]*\son[a-z]+\s*=", text))
+
+    def test_the_automatic_sales_page_has_no_inline_script_nor_style(self):
+        """« Import automatique des ventes » (recipes/auto_sales.html and its
+        fields), written for the strict policy the notifications' pages
+        follow."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "recipes" / "templates" / "recipes"
+        for name in ("auto_sales.html", "_auto_sales_fields.html"):
+            text = (root / name).read_text(encoding="utf-8")
+            with self.subTest(template=name):
                 self.assertIsNone(re.search(r"\sstyle=", text))
                 self.assertIsNone(re.search(r"<script(?![^>]*\ssrc=)", text))
                 self.assertIsNone(re.search(r"<[a-zA-Z][^>]*\son[a-z]+\s*=", text))
@@ -902,6 +922,7 @@ class FormRenderingTests(TestCase):
         ("invoices:invoice_create_manual", {}),
         ("invoices:invoice_type_create", {}),
         ("recipes:recipe_create", {}),
+        ("recipes:auto_sales", {}),
     ]
 
     def test_every_form_page_uses_the_shared_layout(self):
@@ -2178,6 +2199,53 @@ class SharedScriptWritesNoMarkupTests(SimpleTestCase):
         for pattern in MARKUP_WRITERS:
             with self.subTest(pattern=pattern):
                 self.assertIsNone(re.search(pattern, source))
+
+
+class NotificationScriptsTests(SimpleTestCase):
+    """The notifications' scripts (02/10): the pages' sync on every page of an
+    espace, the « Notifications » page's, the login's, and the service
+    worker served at /sw.js. ES5 like every script here - a phone's old
+    browser parses none of a file holding one arrow - and nodes and text
+    only: an endpoint, a device's label and a server's sentence are text."""
+
+    SCRIPTS = (
+        "static/js/push_sync.js",
+        "static/js/notifications.js",
+        "static/js/login_next.js",
+        "notifications/service_worker.js",
+    )
+    #: ES2015 and later, as written in a statement (comments taken out).
+    NOT_ES5 = (
+        r"=>",
+        r"`",
+        r"\blet\s+[A-Za-z_$]",
+        r"\bconst\s+[A-Za-z_$]",
+        r"\basync\s+function",
+        r"\bawait\s",
+        r"\bclass\s+[A-Z]",
+        r"\.\.\.[A-Za-z_$]",
+    )
+
+    def code(self, relative: str) -> str:
+        return re.sub(r"(?m)^\s*//.*$", "", _blank_comments(_source(relative)))
+
+    def test_each_is_es5_in_a_strict_function(self):
+        for relative in self.SCRIPTS:
+            code = self.code(relative)
+            with self.subTest(script=relative):
+                self.assertTrue(code.lstrip().startswith("(function () {"))
+                self.assertIn('"use strict";', code)
+                self.assertTrue(code.rstrip().endswith("})();"))
+            for pattern in self.NOT_ES5:
+                with self.subTest(script=relative, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, code))
+
+    def test_none_writes_markup(self):
+        for relative in self.SCRIPTS:
+            source = _source(relative)
+            for pattern in MARKUP_WRITERS:
+                with self.subTest(script=relative, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, source))
 
 
 class TouchStylesheetTests(StylesheetTestCase):

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Récupération automatique - MarginMate{% endblock %}
+{% block content %}
+<p class="breadcrumb"><a href="{% url 'invoices:invoice_list' %}">← Factures</a></p>
+<div class="page-header">
+    <div>
+        <h1>Récupération automatique</h1>
+        <p class="page-subtitle">Les bons et les factures de la boîte mail, relevés sans clic.</p>
+    </div>
+</div>
+
+{% if refused %}
+    {% comment %}
+    The mailbox is one of the server's own accounts (invoices/integrations.py):
+    an espace that may not use it gets the sentence and no form - the POST
+    routes answer 403 all the same.
+    {% endcomment %}
+    <div class="message">{{ refused }}</div>
+{% else %}
+    {% if not sending_enabled %}
+        <p class="message message-warning">Serveur de développement : aucune récupération ne part d'ici.</p>
+    {% endif %}
+    {% if owner_only %}<p class="muted">{{ owner_only }}</p>{% endif %}
+    <p class="muted">Metro et les espaces clients : à la main seulement. Chaque source reprend là où sa dernière récupération réussie s'est arrêtée, {{ lookback_days }} jours au plus.</p>
+    <p class="muted">Les ventes de la caisse ont leur propre import automatique : <a href="{% url 'recipes:auto_sales' %}">Import automatique des ventes</a>.</p>
+
+    {% for card in cards %}
+        <section class="card{% if not card.rule.is_active %} is-inactive{% endif %}" id="auto-{{ card.rule.pk }}">
+            <h2>{{ card.rule.name }}{% if not card.rule.is_active %} <span class="status-pill status-ignored">inactive</span>{% endif %}</h2>
+            <p class="muted">{{ card.sources_said }} · {{ card.days_said }} · {{ card.hours_said }}</p>
+            {% if card.problem %}<p class="message message-warning">{{ card.problem }}</p>{% else %}<p class="muted">Une heure manquée est rattrapée dans les {{ card.catch_up_said }}.</p>{% endif %}
+            {% if card.rule.last_result %}<p>Dernier passage : {{ card.rule.last_result }}</p>{% endif %}
+            {% for sentence in card.pending %}<p class="message message-warning">{{ sentence }}</p>{% endfor %}
+            {% if card.upcoming %}
+                <h3>Prochaines récupérations</h3>
+                <ul class="check-list">
+                    {% for when in card.upcoming %}<li>{{ when }}</li>{% endfor %}
+                </ul>
+            {% endif %}
+            {% if card.runs %}
+                <h3>Dernières récupérations</h3>
+                <div class="table-wrap">
+                    <table data-table data-table-label="récupérations automatiques">
+                        <thead>
+                            <tr><th>Date</th><th>État</th><th class="num">Trouvées</th><th class="num">Importées</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for job in card.runs %}
+                                <tr>
+                                    <td data-sort="{{ job.started_at|date:'Y-m-d H:i' }}">{{ job.started_at|date:"d/m/Y H:i" }}</td>
+                                    <td><span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span>{% with failed=job.failed_sources|length %}{% if failed %} <span class="source-failures">{{ failed }} source{{ failed|pluralize }} en échec</span>{% endif %}{% endwith %}{% for sentence in job.catch_ups %}<br><span class="source-failures">{{ sentence }}</span>{% endfor %}</td>
+                                    <td class="num">{{ job.invoices_found }}</td>
+                                    <td class="num">{{ job.invoices_created }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+            {% if card.form %}
+                <form method="post" action="{% url 'invoices:auto_gather_edit' card.rule.pk %}#auto-{{ card.rule.pk }}">
+                    {% csrf_token %}
+                    {% include "invoices/_auto_gather_fields.html" with form=card.form %}
+                    <div class="form-actions">
+                        <button class="btn btn-secondary" type="submit">Enregistrer</button>
+                    </div>
+                </form>
+                <details class="danger-zone">
+                    <summary>Supprimer…</summary>
+                    <form method="post" action="{% url 'invoices:auto_gather_delete' card.rule.pk %}">
+                        {% csrf_token %}
+                        <p>La règle est supprimée ; les récupérations déjà faites restent.</p>
+                        <button class="btn btn-danger" type="submit">Supprimer « {{ card.rule.name }} »</button>
+                    </form>
+                </details>
+            {% endif %}
+        </section>
+    {% empty %}
+        <div class="empty-state">
+            <p>Aucune récupération automatique.</p>
+        </div>
+    {% endfor %}
+
+    {% if new_form %}
+        <section class="card" id="nouvelle-auto">
+            <h2>Nouvelle récupération automatique</h2>
+            <p class="muted">Pour les factures : une fois par jour, ex. 07:00 → 07:00.</p>
+            <form method="post" action="{% url 'invoices:auto_gathers' %}#nouvelle-auto">
+                {% csrf_token %}
+                {% include "invoices/_auto_gather_fields.html" with form=new_form %}
+                <div class="form-actions">
+                    <button class="btn" type="submit">Ajouter</button>
+                </div>
+            </form>
+        </section>
+    {% endif %}
+
+    <details class="explainer">
+        <summary>Comment ça marche</summary>
+        <p>Le serveur relève la boîte mail aux heures choisies, s'il est allumé et pas en veille. Une heure manquée est rattrapée dans le délai de « Toutes les », 2 h au plus, ou dans les 12 h pour une fois par jour.</p>
+        <p>Une récupération déjà en cours fait attendre le passage ; une mise à jour du site le fait sauter.</p>
+        <p>Les alertes de fin se règlent dans Notifications › Alertes.</p>
+    </details>
+{% endif %}
+{% endblock %}

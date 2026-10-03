@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from bank.models import BankTransaction, OperationRule, StatementFormat
 from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
-from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
+from invoices.models import AutoGather, Invoice, ReceiptBatch, ScrapeJob, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from staff.tests.signing_support import SigningTestMixin
 from tests.factories import (
@@ -525,6 +525,35 @@ class PageSmokeTests(TestCase):
     def test_receipt_batch_assign_is_post_only(self):
         self.assertRedirectsOnGet("invoices:receipt_batch_assign", pk=self.batch.pk, index=2)
 
+    def test_auto_gathers(self):
+        """« Récupération automatique »: a rule with a last result and one
+        automatic run of its own; its two actions are POST-only."""
+        from returnables.tests.support import seeded_format
+
+        rule = AutoGather.objects.create(
+            name="Bons exemple",
+            sources=[f"bons-{seeded_format().pk}"],
+            weekdays="1,4",
+            start_time=time(6, 0),
+            end_time=time(14, 0),
+            every_minutes=30,
+            last_result="lancée à 06:00 (récupération n° 3)",
+        )
+        ScrapeJob.objects.create(
+            trigger=ScrapeJob.Trigger.AUTOMATIC,
+            auto_gather_id=rule.pk,
+            status=ScrapeJob.Status.SUCCESS,
+            invoices_found=4,
+            invoices_created=2,
+        )
+        response = self.assertPageOK("invoices:auto_gathers")
+        self.assertContains(response, "Bons exemple")
+        self.assertContains(response, f'id="auto-{rule.pk}"')
+        before = list(AutoGather.objects.values_list("pk", "name", "last_slot_at", "updated_at"))
+        self.assertRedirectsOnGet("invoices:auto_gather_edit", pk=rule.pk)
+        self.assertRedirectsOnGet("invoices:auto_gather_delete", pk=rule.pk)
+        self.assertEqual(list(AutoGather.objects.values_list("pk", "name", "last_slot_at", "updated_at")), before)
+
     def test_receipt_queue(self):
         self.assertContains(self.assertPageOK("invoices:receipt_queue"), "Sabbh Oriental")
 
@@ -548,6 +577,33 @@ class PageSmokeTests(TestCase):
 
     def test_sales_import(self):
         self.assertPageOK("recipes:sales_import")
+
+    def test_auto_sales(self):
+        """« Import automatique des ventes »: a rule with a last result and one
+        automatic import of its own; its two actions are POST-only."""
+        from recipes.models import AutoSalesImport, SalesImportJob
+
+        rule = AutoSalesImport.objects.create(
+            name="Ventes exemple",
+            weekdays="0,1,2,3,4,5,6",
+            times="07:00",
+            last_result="à jour : ventes importées jusqu'au 17/11",
+        )
+        SalesImportJob.objects.create(
+            trigger=SalesImportJob.Trigger.AUTOMATIC,
+            auto_rule_id=rule.pk,
+            status=SalesImportJob.Status.SUCCESS,
+            range_start=date(2026, 6, 1),
+            range_end=date(2026, 6, 3),
+            recorded=9,
+        )
+        response = self.assertPageOK("recipes:auto_sales")
+        self.assertContains(response, "Ventes exemple")
+        self.assertContains(response, f'id="import-{rule.pk}"')
+        before = list(AutoSalesImport.objects.values_list("pk", "name", "last_slot_at", "updated_at"))
+        self.assertRedirectsOnGet("recipes:auto_sales_edit", pk=rule.pk)
+        self.assertRedirectsOnGet("recipes:auto_sales_delete", pk=rule.pk)
+        self.assertEqual(list(AutoSalesImport.objects.values_list("pk", "name", "last_slot_at", "updated_at")), before)
 
     def test_pos_product_assign_is_post_only(self):
         from recipes.models import PosProduct
@@ -697,6 +753,9 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_invoice_type_list(self):
         self.assertPageOK("invoices:invoice_type_list")
 
+    def test_auto_gathers(self):
+        self.assertPageOK("invoices:auto_gathers")
+
     def test_supplier_list(self):
         self.assertPageOK("invoices:supplier_list")
 
@@ -736,6 +795,9 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_sales_import(self):
         self.assertPageOK("recipes:sales_import")
+
+    def test_auto_sales(self):
+        self.assertPageOK("recipes:auto_sales")
 
     def test_margins(self):
         """Every percentage on that page divides by a revenue, and on a new
@@ -1514,6 +1576,101 @@ class ReturnablesPageSmokeTests(TestCase):
         self.assertContains(self.assertPageOK("returnables:format_list"), "Aucun format de bon")
         self.assertContains(self.assertPageOK("returnables:type_list"), "Aucun type de consigne")
         self.assertPageOK("returnables:format_create")
+
+
+class NotificationsPageSmokeTests(TestCase):
+    """« Notifications », « Rappels », « Alertes », the device endpoints and
+    the browser's files: a reminder, an alert, a dispatch of each state and a
+    device, then nothing at all. Every value invented."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from accounts.models import Membership
+        from notifications.models import Dispatch, EventRule, Reminder
+        from notifications.tests.support import make_device
+        from tests.runner import TEST_TENANT_PK, test_user
+
+        cls.reminder = Reminder.objects.create(
+            name="Vides avant livraison",
+            title="Consignes",
+            target="/consignes/#new-pickup",
+            weekdays="0,2,5",
+            times="00:00 02:00",
+            skip_if="returnables.recent_pickup",
+        )
+        EventRule.objects.create(event="returnables-comparison", outcomes=["differs"], recipient_ids=[1])
+        for number, status in enumerate(Dispatch.Status.values):
+            Dispatch.objects.create(
+                kind=Dispatch.Kind.REMINDER,
+                rule_name="Vides avant livraison",
+                dedupe_key=f"reminder:{cls.reminder.pk}:2027010{number}T2300Z",
+                title="Consignes",
+                ttl=3600,
+                status=status,
+            )
+        cls.device = make_device(Membership.objects.get(user=test_user(), tenant_id=TEST_TENANT_PK))
+
+    def assertPageOK(self, name, **kwargs):
+        url = reverse(name, kwargs=kwargs)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, f"{name} ({url}) returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def test_the_pages(self):
+        self.assertContains(self.assertPageOK("notifications:home"), "Android · Chrome")
+        self.assertContains(self.assertPageOK("notifications:reminders"), "Vides avant livraison")
+        self.assertContains(self.assertPageOK("notifications:events"), "Récupération automatique")
+
+    def test_the_json_and_the_public_files(self):
+        self.assertIn("key", self.client.get(reverse("notifications:key")).json())
+        for name in ("notifications:service_worker", "notifications:manifest"):
+            with self.subTest(name=name):
+                self.assertEqual(Client().get(reverse(name)).status_code, 200)
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        from accounts.models import PushDevice
+        from notifications.models import Dispatch, EventRule, NotificationSettings, Reminder
+
+        before = (
+            Reminder.objects.count(),
+            EventRule.objects.count(),
+            Dispatch.objects.count(),
+            PushDevice.objects.count(),
+            NotificationSettings.objects.count(),
+        )
+        for name, kwargs in (
+            ("notifications:reminder_edit", {"pk": self.reminder.pk}),
+            ("notifications:reminder_delete", {"pk": self.reminder.pk}),
+            ("notifications:night", {}),
+            ("notifications:event_edit", {"event": "returnables-comparison"}),
+            ("notifications:subscribe", {}),
+            ("notifications:sync", {}),
+            ("notifications:device_delete", {"pk": self.device.pk}),
+            ("notifications:test", {}),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
+        after = (
+            Reminder.objects.count(),
+            EventRule.objects.count(),
+            Dispatch.objects.count(),
+            PushDevice.objects.count(),
+            NotificationSettings.objects.count(),
+        )
+        self.assertEqual(after, before)
+
+    def test_an_empty_espace(self):
+        from accounts.models import PushDevice
+        from notifications.models import Dispatch, EventRule, Reminder
+
+        Dispatch.objects.all().delete()
+        Reminder.objects.all().delete()
+        EventRule.objects.all().delete()
+        PushDevice.objects.all().delete()
+        self.assertContains(self.assertPageOK("notifications:home"), "Aucun envoi pour l'instant.")
+        self.assertContains(self.assertPageOK("notifications:reminders"), "Aucun rappel")
+        self.assertPageOK("notifications:events")
 
 
 class StaffSignatureSmokeTests(SigningTestMixin, NoNetworkTestCase):

@@ -15,7 +15,7 @@
             {% endif %}{% endwith %}{% endif %}
             <span class="muted">
                 {% if job.range_start %}Du {{ job.range_start|date:"d/m/Y" }} au {{ job.range_end|date:"d/m/Y" }} · {% endif %}
-                Lancée : {{ job.started_at|date:"d/m/Y à H:i" }}
+                {% if job.trigger == "automatic" %}Lancée automatiquement{% else %}Lancée{% endif %} : {{ job.started_at|date:"d/m/Y à H:i" }}
             </span>
         </div>
         {% if job.is_active %}

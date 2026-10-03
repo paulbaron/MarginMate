@@ -17,14 +17,17 @@ What is not done here, on purpose:
 - an invitation is never added here - its code would never be shown
   (`manage.py create_invitation`); one can be deleted, which revokes it;
 - a membership is never made an owner by default here (`MembershipAdmin`):
-  an owner reaches the espace's third-party passwords.
+  an owner reaches the espace's third-party passwords;
+- a push device is never added here (only « Activer », a user's gesture,
+  makes one), and its endpoint and keys are never shown: the endpoint is a
+  bearer capability, `auth` a secret (`PushDeviceAdmin` shows the host).
 """
 
 from django import forms
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 
-from .models import Invitation, Membership, Tenant
+from .models import Invitation, Membership, PushDevice, Tenant
 
 
 class TenantAdminForm(forms.ModelForm):
@@ -124,6 +127,38 @@ class InvitationAdmin(admin.ModelAdmin):
     list_filter = ("used_at",)
     readonly_fields = ("code_hash", "created_at", "used_at", "used_by", "refused_addresses")
     list_select_related = ("used_by",)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(PushDevice)
+class PushDeviceAdmin(admin.ModelAdmin):
+    """The browsers that receive notifications. The endpoint, `p256dh` and
+    `auth` are left out of the form and the list: the push service's host
+    is all that is shown."""
+
+    list_display = ("label", "membership", "endpoint_host", "created_at", "seen_at", "last_success_at", "failures")
+    list_select_related = ("membership__user", "membership__tenant")
+    search_fields = ("label", "membership__user__username", "membership__tenant__name")
+    exclude = ("endpoint", "p256dh", "auth")
+    readonly_fields = (
+        "membership",
+        "endpoint_host",
+        "server_key",
+        "created_at",
+        "seen_at",
+        "last_success_at",
+        "last_error_at",
+        "last_error",
+        "failures",
+        "gone_at",
+        "logged_out_at",
+    )
+
+    @admin.display(description="service de notification")
+    def endpoint_host(self, obj):
+        return obj.endpoint_host
 
     def has_add_permission(self, request):
         return False

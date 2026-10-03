@@ -137,7 +137,8 @@
 
     <section class="card slip-document">
         <h2>Le bon</h2>
-        <p><a href="{{ slip.file.url }}">Ouvrir le PDF</a>{% if slip.mail_subject %} · mail « {{ slip.mail_subject }} »{% if slip.mail_sender %} de {{ slip.mail_sender }}{% endif %}{% if slip.mail_date %} du {{ slip.mail_date|date:"d/m/Y" }}{% endif %}{% endif %}</p>
+        {% comment %}The PDF opens in a new tab: the site opened from a phone's Home Screen has no Back button.{% endcomment %}
+        <p><a href="{{ slip.file.url }}" target="_blank" rel="noopener">Ouvrir le PDF</a>{% if slip.mail_subject %} · mail « {{ slip.mail_subject }} »{% if slip.mail_sender %} de {{ slip.mail_sender }}{% endif %}{% if slip.mail_date %} du {{ slip.mail_date|date:"d/m/Y" }}{% endif %}{% endif %}</p>
         <iframe class="slip-pdf" src="{{ slip.file.url }}" title="Le bon en PDF"></iframe>
     </section>
 

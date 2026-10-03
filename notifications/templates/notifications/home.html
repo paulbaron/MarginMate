@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Notifications - MarginMate{% endblock %}
+{% block content %}
+<div class="notifications-page">
+    <p class="breadcrumb"><a href="{% url 'transfer:data_home' %}">← Données</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Notifications</h1>
+            <p class="page-subtitle">Rappels et alertes sur vos téléphones.</p>
+        </div>
+    </div>
+
+    <p class="message message-{{ server_css }}">{{ server_text }}</p>
+
+    {% comment %}
+    « Cet appareil »: every state is drawn here, hidden but the first (no
+    JavaScript), and static/js/notifications.js shows exactly one. What the
+    script needs travels in the push-config island (the server's key, the
+    addresses, the device this browser's cookie names).
+    {% endcomment %}
+    <section class="card device-card" id="cet-appareil" data-push-device>
+        <h2>Cet appareil</h2>
+        {{ push_config|json_script:"push-config" }}
+        <p data-device-state="nojs">JavaScript requis pour activer les notifications sur cet appareil.</p>
+        <p data-device-state="ios-install" hidden>Sur iPhone et iPad, les notifications passent par l'application : dans Safari, touchez Partager › Sur l'écran d'accueil (laissez « Ouvrir comme app web » activé), ouvrez MarginMate depuis l'icône, reconnectez-vous, puis revenez ici (Données › Notifications).</p>
+        <p data-device-state="ios-update" hidden>Mettez l'iPhone à jour (iOS 16.4 ou plus) pour recevoir les notifications.</p>
+        <p data-device-state="unsupported" hidden>Ce navigateur ne reçoit pas de notifications.</p>
+        <p data-device-state="denied-ios" hidden>Notifications bloquées : Réglages › Notifications › MarginMate.</p>
+        <p data-device-state="denied" hidden>Notifications bloquées : autorisez-les dans les réglages du site (cadenas › Autorisations) et, sur Android, dans Réglages › Applis › Chrome › Notifications.</p>
+        <div data-device-state="activate" hidden>
+            <p class="muted" data-push-stale hidden>À réactiver sur cet appareil.</p>
+            <button type="button" class="btn" data-push-activate data-ready-label="Activer les notifications sur cet appareil" disabled>Préparation…</button>
+            <p class="field-error" data-push-reload hidden>Rechargez la page.</p>
+        </div>
+        <div data-device-state="active" hidden>
+            <p>Activées sur cet appareil.</p>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" data-push-test>Envoyer un essai</button>
+                <button type="button" class="btn btn-secondary" data-push-disable>Désactiver sur cet appareil</button>
+            </div>
+        </div>
+        <p class="device-answer" data-push-answer role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <section class="card" id="mes-appareils">
+        <h2>Mes appareils</h2>
+        {% if devices %}
+            <ul class="device-list">
+                {% for device, stale in devices %}
+                    <li class="device-row">
+                        <p class="device-name">{{ device.label }}{% if stale %} <span class="status-pill status-PENDING">à réactiver</span>{% endif %}</p>
+                        <p class="muted small">Inscrit le {{ device.created_at|date:"d/m/Y" }} · {% if device.last_success_at %}dernier envoi réussi le {{ device.last_success_at|date:"d/m/Y" }} à {{ device.last_success_at|date:"H:i" }}{% else %}aucun envoi réussi{% endif %}</p>
+                        {% if device.last_error %}<p class="field-error">Dernière erreur : {{ device.last_error }}</p>{% endif %}
+                        <details class="danger-zone">
+                            <summary>Retirer…</summary>
+                            <form method="post" action="{% url 'notifications:device_delete' device.pk %}">
+                                {% csrf_token %}
+                                <p>Cet appareil ne recevra plus rien ; le réactiver depuis lui-même l'inscrit de nouveau.</p>
+                                <button class="btn btn-danger" type="submit">Retirer cet appareil</button>
+                            </form>
+                        </details>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="muted">Aucun appareil inscrit.</p>
+        {% endif %}
+    </section>
+
+    <section class="card">
+        <h2>Rappels programmés</h2>
+        <p>{% if reminder_count %}{{ reminder_count }} rappel{{ reminder_count|pluralize }} actif{{ reminder_count|pluralize }}{% if next_send %} · prochain envoi : {{ next_send }}{% endif %}.{% else %}Aucun rappel actif.{% endif %}</p>
+        <p><a href="{% url 'notifications:reminders' %}">Gérer les rappels</a></p>
+    </section>
+
+    <section class="card">
+        <h2>Alertes</h2>
+        {% if alerts %}
+            <ul class="plain-list">{% for label in alerts %}<li>{{ label }}</li>{% endfor %}</ul>
+        {% else %}
+            <p class="muted">Aucune alerte active.</p>
+        {% endif %}
+        <p><a href="{% url 'notifications:events' %}">Gérer les alertes</a></p>
+    </section>
+
+    {% if auto_gathers_url %}
+        <section class="card">
+            <h2>Récupération automatique</h2>
+            <p><a href="{{ auto_gathers_url }}">Réglages de la récupération automatique</a></p>
+        </section>
+    {% endif %}
+
+    {% if auto_sales_url %}
+        <section class="card">
+            <h2>Import automatique des ventes</h2>
+            <p><a href="{{ auto_sales_url }}">Réglages de l'import automatique des ventes</a></p>
+        </section>
+    {% endif %}
+
+    <section class="card">
+        <h2>Derniers envois</h2>
+        {% if history %}
+            <div class="table-wrap">
+                <table data-table data-table-label="Derniers envois" class="phone-cards">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Règle</th>
+                            <th>Titre</th>
+                            <th>État</th>
+                            <th>Détail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for dispatch, css in history %}
+                            <tr>
+                                <td data-sort="{{ dispatch.created_at|date:"Y-m-d H:i" }}">{{ dispatch.created_at|date:"d/m/Y" }} {{ dispatch.created_at|date:"H:i" }}</td>
+                                <td data-label="Règle">{{ dispatch.rule_name }}</td>
+                                <td data-label="Titre">{{ dispatch.title }}</td>
+                                <td data-label="État"><span class="status-pill {{ css }}">{{ dispatch.get_status_display }}</span></td>
+                                <td data-label="Détail">{{ dispatch.detail }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="muted">Aucun envoi pour l'instant.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+{% block extra_js %}<script src="{% asset 'js/notifications.js' %}" defer></script>{% endblock %}

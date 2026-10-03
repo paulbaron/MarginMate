@@ -1,0 +1,40 @@
+{% comment %}
+An automatic gather's fields (forms.AutoGatherForm): the name, then the
+sources and the days as boxes in a fieldset - drawn here, since
+_form_fields.html draws a list of boxes without a legend - then the hours,
+the period and « Active ». A source an automatic gather may not take is
+shown disabled with why.
+{% endcomment %}
+{% include "_form_fields.html" with form=form only=head_fields %}
+<fieldset class="choice-group">
+    <legend>Sources</legend>
+    <ul class="check-list">
+        {% for source in form.source_rows %}
+            <li>
+                <label for="{{ source.id }}">
+                    <input type="checkbox" id="{{ source.id }}" name="{{ form.sources.html_name }}" value="{{ source.code }}"{% if source.checked %} checked{% endif %}{% if not source.allowed %} disabled{% endif %}>
+                    {{ source.label }}
+                </label>
+                {% if source.reason %}<p class="help">{{ source.reason }}</p>{% endif %}
+            </li>
+        {% empty %}
+            <li class="muted">Aucune source : voir l'onglet « Sources » de Factures.</li>
+        {% endfor %}
+    </ul>
+    {% for error in form.sources.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+</fieldset>
+<fieldset class="choice-group">
+    <legend>Jours</legend>
+    <ul class="check-list">
+        {% for day in form.day_rows %}
+            <li>
+                <label for="{{ day.id }}">
+                    <input type="checkbox" id="{{ day.id }}" name="{{ form.weekdays.html_name }}" value="{{ day.value }}"{% if day.checked %} checked{% endif %}>
+                    {{ day.label }}
+                </label>
+            </li>
+        {% endfor %}
+    </ul>
+    {% for error in form.weekdays.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+</fieldset>
+{% include "_form_fields.html" with form=form only=tail_fields %}

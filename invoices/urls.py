@@ -11,6 +11,10 @@ urlpatterns = [
     path("gather/", views.trigger_gather, name="gather"),
     path("gather/<int:job_id>/status/", views.gather_status, name="gather_status"),
     path("gather/<int:job_id>/cancel/", views.cancel_gather, name="gather_cancel"),
+    # « Récupération automatique » (invoices/auto_gather.py).
+    path("recuperation-auto/", views.auto_gathers, name="auto_gathers"),
+    path("recuperation-auto/<int:pk>/", views.auto_gather_edit, name="auto_gather_edit"),
+    path("recuperation-auto/<int:pk>/supprimer/", views.auto_gather_delete, name="auto_gather_delete"),
     path("types/", views.invoice_type_list, name="invoice_type_list"),
     path("fournisseurs/", supplier_views.supplier_list, name="supplier_list"),
     path("fournisseurs/nouveau/", supplier_views.supplier_create, name="supplier_create"),

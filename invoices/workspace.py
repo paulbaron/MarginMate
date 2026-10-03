@@ -27,7 +27,7 @@ import common
 from accounts.tenancy import integrations_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
-from . import integrations
+from . import coverage, integrations
 from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceLine, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .tasks import default_gather_start, slips_code, slips_label
@@ -208,25 +208,111 @@ RECENT_GATHERS = 20
 
 
 def _invoice_gather(jobs):
-    """The first of `jobs` (newest first) that searched invoices - not a
-    gather of returnables slips only (ScrapeJob.slips_only, the Consignes
-    page's): its period is the slips' own start (returnables.mail.
-    fetch_start), and a failed one offered on Achats pushed the invoices'
-    default start back to it - 90 days on a first run. At most the latest
-    RECENT_GATHERS, looked through in Python (the progress is JSON)."""
-    return next((job for job in jobs[:RECENT_GATHERS] if not job.slips_only), None)
+    """The first of `jobs` (newest first) that searched invoices and that a
+    person asked for - not a gather of returnables slips only (ScrapeJob.
+    slips_only, the Consignes page's): its period is the slips' own start
+    (returnables.mail.fetch_start), and a failed one offered on Achats pushed
+    the invoices' default start back to it - 90 days on a first run; nor an
+    automatic one (invoices/auto_gather.py), whose period is capped and whose
+    failures are its rule's. At most the latest RECENT_GATHERS, looked
+    through in Python (the progress is JSON)."""
+    return next(
+        (job for job in jobs[:RECENT_GATHERS] if not job.slips_only and job.trigger == ScrapeJob.Trigger.MANUAL),
+        None,
+    )
 
 
 def _missed_again(job: ScrapeJob) -> bool:
     """The gather before it asked for the same period and missed the same -
-    the gathers searching invoices only (_invoice_gather)."""
+    the gathers searching invoices, by hand, only (_invoice_gather)."""
     previous = _invoice_gather(
-        ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER, started_at__lte=job.started_at)
+        ScrapeJob.objects.filter(
+            kind=ScrapeJob.Kind.GATHER, trigger=ScrapeJob.Trigger.MANUAL, started_at__lte=job.started_at
+        )
         .exclude(pk=job.pk)
         .defer("log", "test_matches")
         .order_by("-started_at", "-pk")
     )
     return previous is not None and previous.range_start == job.range_start and _missed(previous) == _missed(job)
+
+
+def _searches_it(job: ScrapeJob | None, code: str) -> bool:
+    """Whether a stretch of `code` to catch up by hand still pulls Achats'
+    « Du » back to it: the latest gather by hand searching invoices
+    (`job`, _invoice_gather's) searched that source without an error - or
+    there is none yet. The « Du » is every ticked source's: with the source
+    left unticked (an « mm: » preference) or failing, its stretch stayed
+    pending and sent every later gather - Metro and every mailbox type with
+    it - that far back for good, searching nothing of it (_missed_again's
+    rule for a failed period). The rule's card and every automatic run go on
+    saying it (coverage.catch_up_sentence)."""
+    if job is None:
+        return True
+    entry = (job.progress or {}).get(code)
+    return isinstance(entry, dict) and not entry.get("error")
+
+
+#: Why a source is offered to an automatic gather but cannot be ticked
+#: (invoices/auto_gather.py: the mailbox's sources only).
+METRO_MANUAL_ONLY = "à la main seulement : son pare-feu bloque les connexions automatiques"
+PORTAL_MANUAL_ONLY = (
+    "à la main seulement : un portail peut demander un code par SMS et ouvrir une fenêtre de navigateur"
+)
+
+
+def gather_sources(*, for_auto: bool = False) -> tuple[list[dict], set[int]]:
+    """The sources « Récupérer » offers - Metro (with its pause), every
+    active invoice source (mailbox or portal), every active slip format with
+    a sender - and the ids of the suppliers they gather, which the default
+    start is read from (tasks.default_gather_start).
+
+    Each entry: `code`, `label`, Metro's `paused`, and `kind` (« metro »,
+    « email », « portal », « slips »). `for_auto` adds `allowed` and
+    `reason`: an automatic gather takes the mailbox's sources only.
+
+    Every source a gather searches is one of the server's own accounts: in a
+    tenant that may not use them nothing about them is read - no source."""
+    allowed = integrations_allowed()
+    metro = own_module_suppliers().first()
+    # The mailbox's types and the customer portals': both are gathered.
+    invoice_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier")) if allowed else []
+    sources = []
+    if metro:
+        from .scrapers.metro import metro_pause
+
+        # Left alone after its firewall refused, or signed in to lately: the
+        # box is out of reach and the reason said (_import_card.html).
+        sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause(), "kind": "metro"})
+    sources += [
+        {
+            "code": f"type-{it.id}",
+            "label": it.name,
+            "kind": "email" if it.source_kind == InvoiceType.SourceKind.EMAIL else "portal",
+        }
+        for it in invoice_types
+    ]
+    if allowed:
+        # The drivers' returnables slips, each format fetched by mail: they
+        # go to Consignes, never among the invoices (tasks._gather_slips).
+        from returnables.models import SlipFormat
+
+        sources += [
+            {"code": slips_code(fmt), "label": slips_label(fmt), "kind": "slips"}
+            for fmt in SlipFormat.objects.filter(is_active=True).exclude(sender_pattern="").order_by("name", "pk")
+        ]
+    if for_auto:
+        reasons = {"metro": METRO_MANUAL_ONLY, "portal": PORTAL_MANUAL_ONLY}
+        for source in sources:
+            source["reason"] = reasons.get(source["kind"], "")
+            source["allowed"] = not source["reason"]
+    # From the newest invoice these sources have already brought in: a
+    # gather is for what arrived since. The earliest of each source's
+    # latest used to be taken instead - one supplier billing twice a
+    # year sent every gather ten months back, through 3,800 emails.
+    gathered = {it.supplier_id for it in invoice_types}
+    if metro:
+        gathered.add(metro.pk)
+    return sources, gathered
 
 
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
@@ -236,41 +322,33 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     # in a tenant that may not use them the panel says « à configurer »
     # (_import_card.html), and nothing about them is read.
     allowed = integrations_allowed()
-    metro = own_module_suppliers().first()
-    # The mailbox's types and the customer portals': both are gathered.
-    email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier")) if allowed else []
-    gather_sources = []
-    if metro:
-        from .scrapers.metro import metro_pause
-
-        # Left alone after its firewall refused, or signed in to lately: the
-        # box is out of reach and the reason said (_import_card.html).
-        gather_sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause()})
-    gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
-    if allowed:
-        # The drivers' returnables slips, each format fetched by mail: they
-        # go to Consignes, never among the invoices (tasks._gather_slips).
-        from returnables.models import SlipFormat
-
-        gather_sources += [
-            {"code": slips_code(fmt), "label": slips_label(fmt)}
-            for fmt in SlipFormat.objects.filter(is_active=True).exclude(sender_pattern="").order_by("name", "pk")
-        ]
-    # From the newest invoice these sources have already brought in: a
-    # gather is for what arrived since. The earliest of each source's
-    # latest used to be taken instead - one supplier billing twice a
-    # year sent every gather ten months back, through 3,800 emails.
-    gathered = {it.supplier_id for it in email_types}
-    if metro:
-        gathered.add(metro.pk)
+    sources, gathered = gather_sources()
+    # The card's entries as they always were: code, label, Metro's pause.
+    sources = [{key: value for key, value in source.items() if key != "kind"} for source in sources]
     ScrapeJob.reap_stale()
-    gathers = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER).order_by("-started_at", "-pk")
-    latest_job = gathers.first()
+    # The period, the « missed » sources and the latest run are those of the
+    # gathers a person asked for: an automatic one (invoices/auto_gather.py)
+    # is bounded to 90 days back and says how it went on its own page. One
+    # running is shown all the same - « déjà en cours ».
+    gathers = ScrapeJob.objects.filter(kind=ScrapeJob.Kind.GATHER, trigger=ScrapeJob.Trigger.MANUAL).order_by(
+        "-started_at", "-pk"
+    )
+    latest_manual = gathers.first()
+    running_automatic = (
+        ScrapeJob.objects.filter(
+            kind=ScrapeJob.Kind.GATHER,
+            trigger=ScrapeJob.Trigger.AUTOMATIC,
+            status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING],
+        )
+        .order_by("-started_at", "-pk")
+        .first()
+    )
+    latest_job = running_automatic or latest_manual
     # The period offered again is an invoice gather's only: a gather of
     # returnables slips alone (the Consignes page's) starts from the slips'
     # own start, and never holds Achats' period.
-    period_job = latest_job
-    if latest_job is not None and latest_job.slips_only:
+    period_job = latest_manual
+    if latest_manual is not None and latest_manual.slips_only:
         period_job = _invoice_gather(gathers.defer("log", "test_matches"))
     gather_start, gather_end = default_gather_start(gathered), timezone.localdate()
     if (
@@ -288,6 +366,14 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         asked_until = period_job.range_end
         if asked_until and asked_until < timezone.localdate(period_job.started_at):
             gather_end = asked_until  # a past period, asked on purpose
+    # A stretch an automatic gather left behind its 90-day bound is offered
+    # until a search covers it: « Récupérer » with these dates does
+    # (coverage.searched clears it) - while the person searches its source
+    # (_searches_it).
+    pending = coverage.pending(source["code"] for source in sources)
+    offered = [day for code, day in pending.items() if _searches_it(period_job, code)]
+    if offered:
+        gather_start = min(gather_start, *offered)
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
     shown = batch
@@ -315,7 +401,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "receipt_form": receipt_form or ReceiptBatchUploadForm(),
         "pdf_form": pdf_form or InvoiceUploadForm(),
         "invoice_supplier_groups": invoice_supplier_choices(),
-        "gather_sources": gather_sources,
+        "gather_sources": sources,
         "default_start_date": gather_start,
         "default_end_date": gather_end,
         "latest_job": latest_job,

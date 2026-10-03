@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Alertes - MarginMate{% endblock %}
+{% block content %}
+<div class="notifications-page">
+    <p class="breadcrumb"><a href="{% url 'notifications:home' %}">← Notifications</a></p>
+    <div class="page-header">
+        <div>
+            <h1>Alertes</h1>
+            <p class="page-subtitle">Une notification quand quelque chose arrive sur le site.</p>
+        </div>
+    </div>
+
+    {% if not owner %}<p class="message message-warning">{{ owner_only }}</p>{% endif %}
+
+    {% for card in cards %}
+        <section class="card rule-card{% if not card.active %} is-inactive{% endif %}" id="{{ card.anchor }}">
+            <h2>{{ card.event.label }} {% if card.active %}<span class="status-pill status-SUCCESS">active</span>{% else %}<span class="status-pill status-ignored">désactivée</span>{% endif %}</h2>
+            {% if card.form %}
+                <form method="post" action="{% url 'notifications:event_edit' card.event.key %}#{{ card.anchor }}">
+                    {% csrf_token %}
+                    {% include "_form_fields.html" with form=card.parts.0 %}
+                    <fieldset class="choice-boxes{% if card.form.outcomes.errors %} has-error{% endif %}">
+                        <legend>Résultats</legend>
+                        {% for box in card.outcomes %}
+                            <label class="choice-box"><input type="checkbox" name="{{ card.form.outcomes.html_name }}" value="{{ box.value }}"{% if box.checked %} checked{% endif %}> {{ box.label }}</label>
+                        {% endfor %}
+                        {% for error in card.form.outcomes.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                    </fieldset>
+                    {% include "_form_fields.html" with form=card.parts.1 %}
+                    {% include "notifications/_recipient_boxes.html" with form=card.form %}
+                    <div class="form-actions">
+                        <button class="btn" type="submit">Enregistrer</button>
+                    </div>
+                </form>
+            {% elif card.chosen %}
+                <p class="muted">{{ card.chosen|join:", " }}</p>
+            {% endif %}
+            {% if card.event.key == consignes %}
+                <p class="muted small">Une alerte par livraison des 3 derniers jours, quand le bon arrive ; le même résultat n'est envoyé qu'une fois. La relève automatique des bons se règle dans Factures › Récupération automatique.</p>
+            {% elif card.event.key == gather %}
+                <p class="muted small">Une source en échec n'est signalée qu'une fois par jour.</p>
+            {% elif card.event.key == sales %}
+                <p class="muted small">Un échec n'est signalé qu'une fois par jour. L'import se règle dans Recettes &amp; ventes › Ventes › Import automatique.</p>
+            {% endif %}
+        </section>
+    {% endfor %}
+</div>
+{% endblock %}
+{% block extra_js %}<script src="{% asset 'js/notifications.js' %}" defer></script>{% endblock %}

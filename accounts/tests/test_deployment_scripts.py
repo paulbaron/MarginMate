@@ -39,6 +39,7 @@ from django.test import SimpleTestCase, override_settings
 
 from accounts import data_backup, deployment, vault
 from accounts.management.commands import serve
+from accounts.models import PushDevice
 from accounts.tests.test_production_settings import child_environment, deploy_md_lines
 from invoices.scrapers import website
 
@@ -1668,6 +1669,41 @@ class DeploymentHelperTests(SimpleTestCase):
         # Again: nothing left to forget.
         code, answers, _ = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
         self.assertEqual((code, answers), (0, {"SESSIONS": "0"}))
+
+    def test_the_push_devices_a_copy_brought_are_forgotten_with_its_sessions(self):
+        """data-dev never pushes (its SECRET_KEY, so its VAPID key, is its
+        own): the browsers' endpoints and keys a copy brought are exposure
+        only, emptied with the sessions and rewritten out of the file. A
+        database with the device table and no session table is emptied
+        too; the answers stay what refresh_dev_data.cmd reads."""
+        self.assertEqual(deployment.PUSH_DEVICE_TABLE, PushDevice._meta.db_table)
+        backup = self.backup()
+        database = self.accounts_copy()
+        older = self.data / "accounts.sqlite3.bak_20990101_pre_x"
+        for path, sessions in ((database, True), (older, False)):
+            if not sessions:
+                older.write_bytes(b"")
+            connection = sqlite3.connect(path)
+            connection.execute(f'CREATE TABLE "{deployment.PUSH_DEVICE_TABLE}" (endpoint TEXT, auth TEXT)')
+            connection.execute(
+                f'INSERT INTO "{deployment.PUSH_DEVICE_TABLE}" VALUES (?, ?)',
+                ("https://fcm.googleapis.com/fcm/send/jeton-invente-de-copie", "secret-invente-16"),
+            )
+            connection.commit()
+            connection.close()
+        code, answers, said = self.ask(deployment.PURGE_SESSIONS, str(backup), DEBUG=True, HTTPS=False)
+        self.assertEqual((code, said), (0, ""))
+        self.assertEqual(answers, {"SESSIONS": "2"})
+        for path in (database, older):
+            with self.subTest(database=path.name):
+                connection = sqlite3.connect(path)
+                try:
+                    rows = connection.execute(f'SELECT COUNT(*) FROM "{deployment.PUSH_DEVICE_TABLE}"').fetchone()[0]
+                finally:
+                    connection.close()
+                self.assertEqual(rows, 0)
+                self.assertNotIn(b"jeton-invente-de-copie", path.read_bytes())
+        self.assertEqual(self.sessions_in(database), 0)
 
     def test_the_copy_s_accounts_database_is_the_one_its_manifest_names_never_outside(self):
         """A development .env may name another file inside data-dev: the one

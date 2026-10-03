@@ -112,6 +112,9 @@ MARGINMATE_HTTPS=1
 MARGINMATE_SITE_URL=https://gestion.<votre-domaine>
 ```
 
+`MARGINMATE_SITE_URL` doit rester l'adresse https du site : c'est elle qui active les
+notifications sur les téléphones et les récupérations automatiques (section 13).
+
 Ces lignes sont déjà dans votre `.env`. Gardez-les telles quelles :
 
 - `DJANGO_SECRET_KEY` : au moins 50 caractères tirés au hasard. Le serveur refuse de démarrer
@@ -167,7 +170,8 @@ sa copie des données : section 10.
      Le serveur ne migre jamais rien lui-même.
 4. Double-cliquez sur **`start_production.cmd`**, dans `C:\MarginMate\app`. Le serveur refait les
    vérifications (mode debug coupé, clé secrète, noms d'hôte, HTTPS, phrase de passe, migrations),
-   puis la fenêtre affiche `En ligne sur http://127.0.0.1:8765/`. Laissez-la ouverte.
+   puis la fenêtre affiche « Rappels et récupérations automatiques : actifs. » et
+   `En ligne sur http://127.0.0.1:8765/`. Laissez-la ouverte.
 5. Sur le PC, ouvrez `http://127.0.0.1:8765` : la page de connexion apparaît.
 6. **Maintenant seulement**, publiez le site. Vérifiez d'abord les quatre points : `runserver`
    arrêté, lignes du `.env` en place (section 5), « tout est en ordre » à l'étape 3, et la fenêtre
@@ -858,6 +862,152 @@ Claude Code) ne peut plus lire les données ni le `.env`. C'est un changement à
 ne montre plus de fenêtre (ses messages restent dans le journal, section 9), `deploy.cmd` se lance
 sous ce compte et doit pouvoir lire le dossier de développement, et les identifiants, réservés au
 compte qui fait tourner le serveur, sont à retaper une fois le changement fait.
+
+## 13. Les notifications et les récupérations automatiques
+
+Deux pages arrivent avec cette version : **Données › Notifications** (des rappels programmés et des
+alertes, sur vos téléphones) et **Factures › Récupération automatique** (les bons du livreur et les
+factures reçues par mail, relevés tout seuls aux heures choisies).
+
+### Au premier déploiement
+
+- `deploy.cmd` applique lui-même les nouvelles migrations (accounts 0003, notifications 0001,
+  invoices 0036) : c'est son étape `manage.py migrate_tenants`, après sa sauvegarde. Rien à faire
+  à la main en production.
+- Le dossier de développement, lui, ne migre pas `data-dev` tout seul : `runserver` arrêté, lancez
+  une fois `.venv\Scripts\python.exe manage.py migrate_tenants` **dans le dossier de
+  développement** (jamais dans `C:\MarginMate`). Sans cela, Factures et Consignes ne s'affichent
+  plus sur `data-dev`. Un rafraîchissement (section 10.5) ramène une copie de la production : une
+  fois la production déployée, elle a déjà ces tables.
+- `MARGINMATE_SITE_URL` doit rester l'adresse https du site (section 5). Le serveur n'envoie
+  aucune notification et ne lance aucune récupération tout seul si elle manque, si elle n'est pas
+  en https, si le mode debug est actif ou si la clé secrète est faible. C'est le cas du dossier de
+  développement, et c'est voulu : il ne peut jamais écrire aux téléphones du site ni relever la
+  boîte mail à sa place.
+
+### Activer les notifications sur un téléphone
+
+**iPhone et iPad** (iOS 16.4 ou plus) : les notifications passent par l'application.
+
+1. Dans Safari, ouvrez le site, touchez Partager › **Sur l'écran d'accueil**, et laissez « Ouvrir
+   comme app web » activé.
+2. Ouvrez MarginMate **depuis la nouvelle icône**, pas depuis Safari, et reconnectez-vous :
+   l'application ne partage pas la connexion de Safari.
+3. Données › Notifications › « Activer les notifications sur cet appareil », puis acceptez.
+
+**Android** : dans Chrome, ouvrez le site, puis Données › Notifications › « Activer les
+notifications sur cet appareil », et acceptez.
+
+« Envoyer un essai », sur la même page, vérifie que tout marche. Chaque personne active ses
+propres appareils ; « Mes appareils » liste les siens. Une connexion dure deux semaines : passé ce
+délai, toucher une notification ouvre d'abord la page de connexion, puis la page prévue. Se
+déconnecter coupe les notifications de cet appareil jusqu'à la prochaine connexion.
+
+### Le PC doit être allumé
+
+Les rappels et les récupérations automatiques partent du PC du bar : à l'heure prévue, il doit
+être allumé, le serveur lancé, et **pas en veille**. Sur secteur, réglez la mise en veille sur
+« Jamais » (Paramètres › Système › Alimentation). Un rappel en retard de plus de 30 minutes n'est
+plus envoyé : l'historique de la page Notifications dit « manqué ». Cette page dit aussi si le
+planificateur tourne.
+
+Une récupération automatique manquée est rattrapée dans le délai de « Toutes les », 2 h au plus,
+ou dans les 12 h pour une récupération une fois par jour ; plus tard, elle dit « manquée ». Chaque
+règle affiche son délai. Si une autre récupération est en cours à l'heure prévue, la règle dit
+« en attente : une récupération est en cours » et part dès que l'autre est finie. Si la base est
+occupée à cet instant, elle dit « en attente : base occupée » et réessaie à la minute suivante ;
+passé le délai, « manquée : base occupée à HH:MM ».
+
+Chaque source reprend là où sa dernière récupération réussie s'est arrêtée, 90 jours au plus :
+après une panne de trois semaines, les trois semaines sont relevées. Le serveur retient, pour
+chaque boîte mail de factures et chaque format de bons, jusqu'à quel jour elle a été relevée sans
+trou. Seule une recherche menée jusqu'au bout compte, à la main ou automatique : une source en
+échec, une récupération annulée ou interrompue ne compte pas. Ne compte pas non plus une
+recherche où le serveur mail n'a pas tout rendu (la ligne dit « Recherche incomplète : N e-mail(s)
+non lu(s) par le serveur mail. » ou « Recherche refusée par le serveur mail ») ni celle dont un
+document n'a pas pu être importé faute de lecture ou de base disponible : ce qui a été lu est
+importé quand même, la source compte comme en échec, et la récupération suivante reprend la même
+période (les documents déjà importés sont reconnus et ignorés). Une facture en double ou un
+fichier illisible, eux, n'empêchent pas la source d'avancer. Une récupération à la main qui part
+après un trou (la date proposée par Achats, une période passée) ne le comble pas : la prochaine
+récupération automatique le relève, y compris pour une source jamais relevée. Modifier
+l'expéditeur, l'objet, le corps ou la pièce jointe recherchés d'une source de factures par mail,
+ou les motifs d'un format de bons, la fait repartir de sa propre date de départ : les jours déjà
+relevés l'avaient été pour d'autres mails. Changer seulement le nom ne change rien. Si ces
+réglages sont enregistrés pendant qu'une récupération tourne, sa recherche ne compte pas pour
+cette source (le journal dit « réglages de recherche modifiés pendant la récupération ») : la
+récupération suivante repart de la nouvelle date de départ.
+
+Au-delà de 90 jours, chaque récupération automatique redit sur la ligne de la source « Rattrapage
+à faire à la main depuis Factures, du … au … », et l'alerte de fin la compte comme une source en
+échec. « au » est le jour où la limite des 90 jours a coupé la période : il ne change pas d'un
+jour à l'autre. La règle l'affiche aussi, et Achats propose cette date dans « Du » tant que la dernière
+récupération à la main a relevé cette source sans erreur. « Récupérer » depuis cette date règle
+le rattrapage ; une récupération qui s'arrête avant n'en règle qu'une partie, et la règle affiche
+ce qui reste. Pour les bons, rien n'est cherché plus de 400 jours en arrière : un rattrapage plus
+ancien se règle à partir de cette limite. Une récupération qui a rapporté des factures ou des bons
+envoie l'alerte « Récupération automatique : du nouveau ».
+
+### L'import automatique des ventes
+
+Les ventes de la caisse (L'Addition) ont leur propre import automatique, séparé de la
+récupération des factures et des bons : **Recettes & ventes › Ventes › « Import automatique :
+réglages »** (aussi depuis Données › Notifications).
+
+- Le prochain `deploy.cmd` applique aussi la migration **recipes 0018** (même étape
+  `migrate_tenants`, après sa sauvegarde). Dans le dossier de développement, le même
+  `migrate_tenants` à la main que ci-dessus l'applique à `data-dev`.
+- Pour importer chaque matin les ventes de la veille : gardez la règle proposée « Ventes de la
+  veille », tous les jours, à 07:00, et cliquez « Ajouter ». Rien ne part au moment
+  d'enregistrer : le premier import part à la prochaine heure prévue.
+- La période va de la dernière journée importée sans trou, moins 3 jours, jusqu'à la dernière
+  nuit terminée : avant l'heure « La nuit se termine à » (Notifications › Rappels, 06:00 par
+  défaut), la veille n'est pas encore finie et s'arrête l'avant-veille. Jamais plus de 400 jours en
+  arrière. Les imports faits à la main depuis l'onglet Ventes comptent aussi.
+- Quand les ventes sont déjà à jour, la règle dit « à jour : ventes importées jusqu'au JJ/MM » et
+  ne se connecte pas à L'Addition : même avec plusieurs heures dans la journée, L'Addition reçoit
+  environ une connexion par jour.
+- Un seul import des ventes à la fois : si un import tourne déjà (à la main ou automatique), la
+  règle attend (« en attente : un import des ventes est en cours ») et part dès qu'il est fini.
+  Si cet import échoue ou est annulé, la règle ne recommence pas aussitôt (« sautée : l'import en
+  cours vient d'échouer ou d'être annulé ») : elle part à sa prochaine heure. Un import manqué (PC
+  éteint) est rattrapé dans les 12 h.
+- Effacer les ventes dans « Données », ou un « Remplacer » qui supprime des journées de caisse,
+  ramène l'import automatique avant la première journée supprimée : l'import suivant la reprend
+  (le compte rendu le dit).
+- L'alerte « Import automatique des ventes » (Notifications › Alertes) prévient d'un échec, une
+  fois par jour au plus ; « ventes importées » et « rien de nouveau » se cochent si vous le voulez.
+
+### Changer la clé secrète
+
+Les notifications sont signées avec une clé tirée de `DJANGO_SECRET_KEY`. En changer oblige à
+réactiver chaque téléphone : ouvrir l'application suffit en général (elle se réinscrit seule),
+sinon Données › Notifications › « Activer ».
+
+### Un déploiement refusé, « Données » occupé
+
+Une récupération automatique en cours compte comme une récupération lancée à la main :
+`deploy.cmd` refuse de démarrer, et « Données » demande d'attendre. Patientez quelques minutes, ou
+décochez « Active » sur la récupération automatique (Factures › Récupération automatique) le temps
+de l'opération. Un import automatique des ventes en cours fait de même (décochez « Actif » dans
+Recettes & ventes › Ventes › Import automatique). Pendant un déploiement, les récupérations et les
+imports prévus sont sautés (« sautée : mise à jour du site en cours »). Metro et les espaces clients ne sont jamais récupérés automatiquement :
+ils restent à la main, depuis Factures.
+
+### Vérifier après le déploiement
+
+Dans une invite de commandes :
+
+```
+curl -sI https://gestion.<votre-domaine>/sw.js
+curl -sI https://gestion.<votre-domaine>/manifest.webmanifest
+```
+
+Le premier doit répondre `content-type: text/javascript; charset=utf-8` et
+`cache-control: no-cache`, sans `cf-cache-status: HIT`. Le second
+`content-type: application/manifest+json`. Dans Cloudflare, aucune règle « Cache Everything » ni
+défi (challenge, Bot Fight Mode) sur ces deux adresses : un téléphone qui ne reçoit pas le vrai
+fichier ne reçoit plus de notifications.
 
 ## Limites connues
 

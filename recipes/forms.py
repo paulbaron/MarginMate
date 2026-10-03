@@ -553,3 +553,129 @@ SaleDocumentLineFormSet = inlineformset_factory(
     extra=3,
     can_delete=True,
 )
+
+
+# -- « Import automatique des ventes » (recipes/auto_sales.py) -------------------------------------------------------
+
+AUTO_SALES_NUL_REFUSED = "Caractère interdit (NUL) : retapez ce champ."
+AUTO_SALES_NAME_REQUIRED = "Donnez un nom à cet import."
+AUTO_SALES_NO_DAY = "Cochez au moins un jour."
+AUTO_SALES_UNKNOWN_CHOICE = "Choix inconnu : rechargez la page."
+AUTO_SALES_TOO_MANY_TIMES = "6 heures au plus."
+
+
+class AutoSalesImportForm(forms.Form):
+    """An automatic sales import's settings. Its days are drawn by hand
+    (auto_sales.html: a fieldset of seven boxes, calendar days) from
+    `day_rows`; its source is a select of recipes/sales_sources.py. Saved
+    through `values()`, the form's fields only: the scheduler's columns
+    (`last_slot_at`, `last_result`, `last_failed`) are never written here."""
+
+    name = forms.CharField(
+        label="Nom",
+        max_length=80,
+        error_messages={
+            "required": AUTO_SALES_NAME_REQUIRED,
+            "max_length": "80 caractères au plus.",
+            "null_characters_not_allowed": AUTO_SALES_NUL_REFUSED,
+        },
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    source = forms.ChoiceField(
+        label="Source",
+        error_messages={"required": AUTO_SALES_UNKNOWN_CHOICE, "invalid_choice": AUTO_SALES_UNKNOWN_CHOICE},
+    )
+    weekdays = forms.MultipleChoiceField(
+        label="Jours",
+        required=False,
+        choices=[(str(day), str(day)) for day in range(7)],
+        error_messages={"invalid_choice": AUTO_SALES_UNKNOWN_CHOICE, "invalid_list": AUTO_SALES_UNKNOWN_CHOICE},
+    )
+    times = forms.CharField(
+        label="Heures",
+        max_length=120,
+        help_text="ex. 07:00, ou 07:00 12:00",
+        error_messages={
+            "required": "Indiquez au moins une heure.",
+            "max_length": "120 caractères au plus.",
+            "null_characters_not_allowed": AUTO_SALES_NUL_REFUSED,
+        },
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    is_active = forms.BooleanField(label="Actif", required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .sales_sources import choices
+
+        self.fields["source"].choices = choices()
+
+    @staticmethod
+    def initial_for(rule) -> dict:
+        try:
+            days = [str(day) for day in rule.weekday_list()]
+        except ValueError:
+            days = []
+        return {
+            "name": rule.name,
+            "source": rule.source,
+            "weekdays": days,
+            "times": rule.times,
+            "is_active": rule.is_active,
+        }
+
+    def day_rows(self) -> list[dict]:
+        from staff.timesheet import DAY_NAMES
+
+        value = self["weekdays"].value() or []
+        ticked = {str(item) for item in (value if isinstance(value, (list, tuple)) else [value])}
+        return [
+            {
+                "value": str(day),
+                "label": DAY_NAMES[day].lower(),
+                "checked": str(day) in ticked,
+                "id": f"{self['weekdays'].auto_id}_{day}",
+            }
+            for day in range(7)
+        ]
+
+    def clean_name(self):
+        name = " ".join(self.cleaned_data["name"].split())
+        if not name:
+            raise forms.ValidationError(AUTO_SALES_NAME_REQUIRED)
+        return name
+
+    def clean_weekdays(self):
+        days = sorted({int(day) for day in self.cleaned_data["weekdays"]})
+        if not days:
+            raise forms.ValidationError(AUTO_SALES_NO_DAY)
+        return days
+
+    def clean_times(self):
+        from notifications import schedule
+
+        from .models import AutoSalesImport
+
+        try:
+            times = schedule.parse_times(self.cleaned_data["times"])
+        except ValueError as exc:
+            message = str(exc)
+            raise forms.ValidationError(
+                AUTO_SALES_TOO_MANY_TIMES if message == schedule.TOO_MANY_TIMES else message
+            ) from None
+        if len(times) > AutoSalesImport.MAX_TIMES:
+            raise forms.ValidationError(AUTO_SALES_TOO_MANY_TIMES)
+        return times
+
+    def values(self) -> dict:
+        """The model's fields this form owns, from a valid form."""
+        from notifications import schedule
+
+        data = self.cleaned_data
+        return {
+            "name": data["name"],
+            "source": data["source"],
+            "weekdays": schedule.weekdays_value(data["weekdays"]),
+            "times": schedule.times_value(data["times"]),
+            "is_active": data["is_active"],
+        }

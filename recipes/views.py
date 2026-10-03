@@ -1,6 +1,10 @@
 import json
 import math
-import threading
+
+# Not used here any more: the tests patch the import's thread as
+# `recipes.views.threading.Thread`, which is the threading module's own
+# (recipes/importing.py starts it).
+import threading  # noqa: F401
 from datetime import date
 from decimal import Decimal
 
@@ -10,7 +14,6 @@ from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
-from accounts.tenancy import bound
 from common import PIE_COLORS, format_money, is_id
 
 from .forms import (
@@ -22,6 +25,7 @@ from .forms import (
     SaleDocumentLineFormSet,
     ingredient_unit_map,
 )
+from .importing import active_import, start_sales_import
 from .integration import refusal, till_allowed
 from .links import LinkError, link, set_aside
 from .menu import pending_count, render_menu, sales_list_url, with_suggestion
@@ -33,7 +37,9 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
-from .tasks import import_laddition_sales_task
+
+#: Said when a sales import is already running (by hand or automatic).
+ALREADY_RUNNING = "Une récupération est déjà en cours."
 
 
 def _existing_categories():
@@ -363,12 +369,10 @@ def trigger_sales_import(request):
         return redirect(sales_list_url(request))
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks
-    # this page out permanently.
-    SalesImportJob.reap_stale()
-    if SalesImportJob.objects.filter(
-        status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
-    ).exists():
-        messages.error(request, "Une récupération est déjà en cours.")
+    # this page out permanently. Asked before the dates, as it always was;
+    # asked again, with the job's creation, by start_sales_import.
+    if active_import() is not None:
+        messages.error(request, ALREADY_RUNNING)
         return redirect(sales_list_url(request))
 
     start = _parse_date(request.POST.get("start_date"))
@@ -380,11 +384,10 @@ def trigger_sales_import(request):
         messages.error(request, "La date de début est après la date de fin.")
         return redirect(sales_list_url(request))
 
-    job = SalesImportJob.objects.create(range_start=start, range_end=end)
-    # bound(): the thread works for this request's tenant - its job row, its
-    # sales, its download folder - and closes its connections when it ends.
-    # A new thread starts bound to nothing, and job pk N is another bar's too.
-    threading.Thread(target=bound(import_laddition_sales_task), args=(job.id, start, end), daemon=True).start()
+    # The one start of a sales import (recipes/importing.py): an automatic
+    # import starting in between makes this one refused, never a second.
+    if start_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL) is None:
+        messages.error(request, ALREADY_RUNNING)
     return redirect(sales_list_url(request))
 
 

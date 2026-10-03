@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 
-from returnables import comparison, reading, slips
+from returnables import comparison, notify, reading, slips
 from returnables.models import Slip
 from returnables.reading import clean_text
 
@@ -31,6 +31,13 @@ DEFAULT_LOOKBACK_DAYS = 90
 #: Never further back than this, whatever the posted start: a period asked
 #: on Achats years back would scan every mail since for its slips.
 MAX_LOOKBACK_DAYS = 400
+
+
+def lookback_floor(today: date) -> date:
+    """The earliest day a format's mails are ever searched from
+    (MAX_LOOKBACK_DAYS back): a stretch left to catch up before it starts
+    there for the gather's coverage (invoices/coverage.searched)."""
+    return today - timedelta(days=MAX_LOOKBACK_DAYS)
 
 
 def fetch_start(fmt, posted_start: date | None, today: date) -> date:
@@ -55,7 +62,7 @@ def fetch_start(fmt, posted_start: date | None, today: date) -> date:
     # the home page asks for this start at every drawing.
     own = comparison.shifted(newest, -OVERLAP_DAYS) if newest else today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     start = min(posted_start, own) if posted_start else own
-    return max(start, today - timedelta(days=MAX_LOOKBACK_DAYS))
+    return max(start, lookback_floor(today))
 
 
 def _in_mail_order(matches) -> list:
@@ -91,31 +98,40 @@ def store_matches(fmt, matches, log, *, progress=None) -> tuple[int, int, str]:
     over 5 MB is not read. `progress(found, imported)` after each new slip.
     Anything unexpected raises (the gather says it on the format's line):
     the mails are taken oldest first, so what was stored before it is what
-    the next run starts after."""
+    the next run starts after.
+
+    The slips created are handed to `notify.notify_slips` once, after the
+    loop and before the note - also when the loop stops on an error: a slip
+    stored is never fetched again, and its alert would be lost."""
     found = imported = 0
-    for match in _in_mail_order(matches):
-        for attachment in match.attachments:
-            name = clean_text(attachment.filename or "", slips.MAX_NAME_CHARS) or "piece-jointe.pdf"
-            content = attachment.content or b""
-            if len(content) > reading.MAX_PDF_BYTES:
-                log(f"{name} : pièce jointe ignorée — {reading.TOO_HEAVY}")
-                continue
-            result = slips.store_slip(
-                content,
-                filename=name,
-                fmt=fmt,
-                origin=Slip.Origin.MAIL,
-                mail_sender=match.sender or "",
-                mail_subject=match.subject or "",
-                mail_date=match.email_date,
-                skip_non_slips=True,
-            )
-            log(f"{name} : {result.message}")
-            if result.kind == slips.IGNORED:
-                continue
-            found += 1
-            if result.created:
-                imported += 1
-                if progress is not None:
-                    progress(found, imported)
+    created = []
+    try:
+        for match in _in_mail_order(matches):
+            for attachment in match.attachments:
+                name = clean_text(attachment.filename or "", slips.MAX_NAME_CHARS) or "piece-jointe.pdf"
+                content = attachment.content or b""
+                if len(content) > reading.MAX_PDF_BYTES:
+                    log(f"{name} : pièce jointe ignorée — {reading.TOO_HEAVY}")
+                    continue
+                result = slips.store_slip(
+                    content,
+                    filename=name,
+                    fmt=fmt,
+                    origin=Slip.Origin.MAIL,
+                    mail_sender=match.sender or "",
+                    mail_subject=match.subject or "",
+                    mail_date=match.email_date,
+                    skip_non_slips=True,
+                )
+                log(f"{name} : {result.message}")
+                if result.kind == slips.IGNORED:
+                    continue
+                found += 1
+                if result.created:
+                    imported += 1
+                    created.append(result.slip)
+                    if progress is not None:
+                        progress(found, imported)
+    finally:
+        notify.notify_slips(created)  # never raises
     return found, imported, _note(log)

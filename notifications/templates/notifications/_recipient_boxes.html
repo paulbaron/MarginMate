@@ -1,0 +1,16 @@
+{% comment %}
+Who a rule notifies, drawn by hand (a CheckboxSelectMultiple through
+_form_fields.html has no legend and stretches its boxes). Context: `form`, a
+reminder's or an alert's. Not drawn with one member: there is nobody to
+choose, and the form says who.
+{% endcomment %}
+{% if form.shows_recipients %}
+    <fieldset class="choice-boxes{% if form.recipients.errors %} has-error{% endif %}">
+        <legend>Destinataires</legend>
+        <label class="choice-box"><input type="checkbox" name="{{ form.all_members.html_name }}"{% if form.all_members_checked %} checked{% endif %}> Tous les membres</label>
+        {% for box in form.recipient_boxes %}
+            <label class="choice-box"><input type="checkbox" name="{{ form.recipients.html_name }}" value="{{ box.value }}"{% if box.checked %} checked{% endif %}> {{ box.label }}</label>
+        {% endfor %}
+        {% for error in form.recipients.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+    </fieldset>
+{% endif %}
