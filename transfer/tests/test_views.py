@@ -964,6 +964,9 @@ class CountsTextTests(SimpleTestCase):
             "règles « sans facture »": "1 règle « sans facture »",
             "règles de reconnaissance": "1 règle de reconnaissance",
             "formats de relevé": "1 format de relevé",
+            # « Trésorerie »'s, in the bank's counts.
+            "points de trésorerie": "1 point de trésorerie",
+            "ajustements de trésorerie": "1 ajustement de trésorerie",
             "Mo de fichiers": "1 Mo de fichiers",
             "alias": "1 alias",
             # Two things counted together stay as they are.

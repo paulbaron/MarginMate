@@ -3874,9 +3874,10 @@ is Django's problem on every later read.
 payments' invoice lines, the rules. An invoice on two lines is read once.
 
 No new navigation link: « Dépenses par catégorie » is one of **Banque's
-three tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
-« Entrées d'argent », each page passing `bank_url`, `spending_url`,
-`income_url` over its period and `bank_tab` for the lit one). The owner,
+four tabs** (`bank/_tabs.html`: « Opérations », « Dépenses par catégorie »,
+« Entrées d'argent » and, since 02/10/2026, « Trésorerie », each page
+passing `bank_url`, `spending_url`, `income_url`, `treasury_url` over its
+period and `bank_tab` for the lit one). The owner,
 01/10/2026: a button to it in several places (Banque's header, Marges'
 header, each page's own) was one too many - the tabs are the only buttons
 now, and Marges no longer links there. Another entry in the topbar moves where the links wrap, which is
@@ -4152,6 +4153,365 @@ rest of the page out of reach.
 Reached from Banque's tab and its « Entrées » stat, both over
 Banque's period (`_bank_income_url`), and from « Dépenses ». No topbar link.
 
+### La trésorerie (`/banque/tresorerie/`, `bank/treasury.py`)
+
+**The account's balance on every day**, worked out from the balances a
+person types and the operations imported (the owner, 02/10/2026: « je peux
+rentrer la trésorerie du bar à une date et le calcul se fera
+automatiquement » - forward, and backward when the date is past; where two
+balances typed do not « match », « demander une résolution »: an amount
+adding or removing the difference, or a balance deleted). Banque's fourth
+tab, no topbar link. `bank/treasury.py` holds every rule below, and its
+docstring is their reference: `compute(points, lines, adjustments) ->
+Treasury` is pure - plain values, prefix sums looked up with `bisect`,
+Decimal summed in Python, no database and never today (the view and the
+form hand it in) - and `load()` reads the three tables in exactly
+`treasury.QUERIES` (3) queries whatever the history holds: the points, the
+adjustments, and ONE query over the lines (`operation_date`, `amount`,
+`account`, `imported_at`, ordered explicitly - `BankTransaction.Meta.ordering`
+is newest first). Pinned by `test_treasury.LoadQueriesTests` and
+`test_page_cost.TreasuryPageQueriesTests`.
+
+**Two models, no foreign key at all** (`bank/models.py`):
+`TreasuryCheckpoint`, « point de trésorerie » (`date` unique, `balance`
+signed (12, 2) - an overdraft is negative -, `created_at`), and
+`TreasuryAdjustment`, « ajustement » (`reference`, 16 random hex characters
+from `models.new_reference`, unique - its key for « Données »; `date`;
+`amount`, signed, negative when money went out; `reason`, « raison » -
+never « motif », a regular expression on these pages; `created_at`). Both
+`clean()`s refuse in French, on the field (`models.TREASURY_*`): a day
+outside 2000-2099 and a figure past `MAX_AMOUNT` - `bank.statements`'
+bounds, imported inside `clean()`, since statements.py imports the models -,
+and an adjustment of 0 €. Not in the admin. **An adjustment is no
+`BankTransaction`, on purpose**: a line needs a fingerprint no statement
+gives, is counted as a debit or a credit by « Dépenses », « Entrées
+d'argent » and the reconciliation, and is offered invoices. None of those
+reads this table: an adjustment counts in the treasury and nowhere else.
+
+**The rules of reading**:
+
+- **A point is the balance at the END of its day**, every operation booked
+  that day included (by `operation_date`, the day every Banque page reads).
+  One per day. **S(d), the movements through d, includes d**
+  (`bisect_right`): `balance_on(d) = r.balance + S(d) - S(r.day)`, r the
+  last point dated on or before d, or the first when d is before every
+  point (computed backward). On a point's own day it is the figure typed;
+  the next day, that figure plus that day's movements.
+  `income._card_sold_before` is strictly before (`bisect_left`): copied, a
+  point's own day would be counted again in the next stretch.
+- **No figure is invented**: `balance_on` is None with no point, before
+  `known_from` (the first line's or the first point's day, the earlier) and
+  past `horizon` (the last point's or the last line's, the later). No
+  extrapolation, and a window reaching back to 1990 is no column of
+  balances carried back from 2026.
+- **An adjustment COUNTS only between two points** - after the first
+  point's day, up to the last's: the stretch the consecutive pairs tile.
+  Any other - left outside by a point deleted or moved, or brought by
+  « Données » - counts nowhere (`Treasury.orphans`) and is listed « ne
+  compte pas » with its « Supprimer ». Counted, it moved the headline with
+  no gap saying why (design review, 02/10/2026).
+- **`complete_through`, the last day whose operations are all imported**:
+  `last_operation` when the lines DATED on it were imported on a LATER day
+  (the newest `imported_at` of THOSE lines), else the day before - an
+  export made during a day carries only part of it, and the owner imports a
+  statement the day he exports it. Only the last day's own lines tell: an
+  older statement imported afterwards - what every gap card asks for - says
+  nothing of that day, and read as proof (the newest import of ANY line)
+  it turned the part of today not imported yet into a gap to resolve, which
+  the card offered to adjust (review C1). Never the newest import's own day
+  or later either: a line dated after the day it was imported leaves that
+  day as partial as any other. None without a line. With several accounts,
+  each account's own (its lines alone), the earliest
+  (a line with a blank account then holds none back). The day of an import
+  is read through `timezone.localtime`, never `localdate`: the tests freeze
+  today by patching `timezone.localdate`, and every import would read as
+  made « today ».
+- **`provisional(d)`**: d is no point's day, and the computation crosses a
+  day not wholly imported - forward when d is past `complete_through`,
+  backward when the reference point is, always when nothing is imported.
+  **Shown, marked « provisoire », never hidden**: the everyday case - today's
+  balance typed while the statement stops yesterday - IS a backward
+  computation across today, and it must still give the history. Unmarked,
+  every day before such a point was wrong by the operations not imported,
+  and all of them moved at the next import.
+- **Accounts are summed**: a point is the TOTAL balance. With more than one
+  distinct non-blank `BankTransaction.account`, one muted line, « N comptes
+  importés : saisissez le total de leurs soldes. »
+
+**Gaps (« écarts »)**, one per pair of CONSECUTIVE points (a, b)
+(`treasury.Gap`) - computed live, never stored:
+
+- `operations` = the lines dated in (a.day, b.day], `adjusted` = the
+  counted adjustments there, `missing = b - a - operations - adjusted`.
+  Zero, the two « concordent », to the cent; positive, the account holds
+  more than the operations explain.
+- **Pending** (« relevé à importer ») when b.day is past `complete_through`,
+  or nothing is imported: the gap may be nothing but a statement not
+  imported yet. Never asked, never offered an adjustment, never amber, and
+  **no figure** - it would be the operations not imported, read as money
+  missing. It becomes a real gap, or vanishes, on the import completing
+  b.day. A point dated before the first line imported is NOT pending.
+- **To resolve** = not agreeing and not pending: the only gaps the page
+  asks about.
+- **A suspect point**: a middle point whose two gaps are both not pending,
+  at least one to resolve, and whose RAW gaps (`Gap.raw_missing`,
+  adjustments left out) cancel out and are not zero - « Sans le point du
+  JJ/MM, les points voisins concordent. » Raw, because counted with the
+  adjustments, one made on one side made a correct point suspect and hid a
+  wrong one. The counted adjustments between its neighbours
+  (`Treasury.around(point)`, the corrections of its two gaps) still count
+  once it is gone, so that sentence holds of the point ALONE only when they
+  add up to 0; otherwise the hint names them - « Sans le point du 10/09 ni
+  l'ajustement du 10/09 (+200.00 €), les points voisins concordent. »,
+  « ni les ajustements du 05/09 (…) et du 12/09 (…) » - and the card lists
+  each with its « Supprimer », its own once (`views._gap_card`). One made
+  on the point's other side, or dated on its own day (what « Ajouter un
+  ajustement » on its first card writes), lies outside the second card's
+  stretch: the sentence was false and that adjustment on no card (review
+  C2/C12).
+- **Read before its day's operations**: `missing == -M_ops(b.day) != 0`
+  (`operations_on`, the lines of that day alone), or `+M_ops(a.day)` for a,
+  exact Decimal equality: « L'écart vaut les opérations du JJ/MM : solde lu
+  avant elles ? » and « Dater ce point du JJ/MM », the day before
+  (`Gap.move_to`). The bank's app says « Solde au 01/10 » on the 2nd, the
+  form's date says the 2nd, and the card's other two answers were both
+  wrong: an adjustment invents a movement, a delete throws a right reading
+  away.
+- An import bringing the missing operation makes a gap vanish by itself;
+  an adjustment made, then the real operation imported, brings the gap
+  back with the opposite sign, and the card lists that adjustment
+  (`Gap.corrections`) with « Supprimer » - the fix.
+
+**The page**, top to bottom (`bank/treasury.html`; the view is
+`views.treasury_home` - one named `treasury` would shadow the module
+`from . import treasury`: ruff F811, then a 500):
+
+- The tabs (`bank/_tabs.html`, `bank_tab == "treasury"`). Two stats:
+  « Trésorerie au <horizon> » (« depuis le solde du JJ/MM », « provisoire »),
+  amber (`stat-warn`) only when ITS reference point ends a gap to resolve -
+  a gap of last year lighting today's figure teaches the reader to ignore
+  amber -, and « Relevé importé jusqu'au » (`last_operation`, or « aucun »).
+  Then « N écarts à résoudre » linking `#ecarts`, and the accounts line. No
+  point yet: one sentence instead. No line imported: « Aucun relevé
+  importé », with a link to Banque - the page still works, every gap
+  pending.
+- `#saisir` « Saisir un solde », BEFORE the gaps: typing today's balance is
+  the everyday action, and cards above it put it screens down on a phone.
+- `#ecarts` « Écarts à résoudre », one card per gap to resolve: its dates,
+  « Les opérations expliquent X € [et les ajustements Z €], l'écart est de
+  Y € de plus / de moins. » (the words of `views.Gap`, a bank line's), the
+  hints that apply (suspect, read before, and always « Relevé manquant entre
+  ces dates ? Importez-le. »), the counted adjustments inside with
+  « Supprimer » (and every one a suspect hint names, above), « Ajouter un
+  ajustement de ±X € » with an optional `raison`
+  (placeholder « Écart non expliqué »), and for each point « Corriger »
+  (`?date=…#saisir`) and « Supprimer le point du JJ/MM ».
+- `#courbe` « Solde jour par jour », drawn once a point exists: the window
+  form and its `.date-range-note`; the curve,
+  `_build_balance_svg(treasury.curve(window), label="Trésorerie")`, the
+  builder unchanged - `curve` adds the day before each day that follows a
+  quiet stretch, so the line draws STEPS (a diagonal between two movements
+  printed balances nobody ever had); « Provisoire du JJ/MM au JJ/MM : relevé
+  complet jusqu'au JJ/MM. » (`curve_provisional`, one stretch; the day said
+  is `complete_through`; « aucun relevé importé » with none). **« complet »,
+  never « importé »**: the stat's « Relevé importé jusqu'au » is
+  `last_operation`, the day after `complete_through` whenever a statement
+  is imported the day of its last operation - one phrase for both put two
+  dates under the same words on one page (review C3/C8/C11/C14). Then the
+  months, newest first: Entrées, Sorties (the lines alone, never an
+  adjustment), Ajustements (when a month has one), « Solde en fin de mois »
+  (« au JJ/MM » on a partial row, « provisoire », « relevé à importer »),
+  and « Écart » only when a row has a gap to resolve - asked by their COUNT
+  (`MonthRow.gaps_to_resolve`), never their sum: a suspect point's two gaps
+  cancel out, and summed the column vanished while the page asked two
+  resolutions (review C10). One gap: its figure, linking `#ecarts`;
+  several: « N écarts » linking there, with their sum (« X € en tout ») when
+  it is not 0; `data-sort` is the sum (`MonthRow.gap_to_resolve`). **A
+  row's gaps are the gaps to resolve whose LATER point falls in it**, never
+  closing minus opening minus movements: that printed a pending jump as an
+  « Écart » every month the balance was typed before the import.
+- `#points` « Soldes saisis », newest first, phone cards: Date | Solde |
+  « Avec le précédent » (« concorde », « X € de plus / de moins : à
+  résoudre » linking `#ecarts`, « relevé à importer », « — » for the
+  first) | « Corriger » and the delete.
+- `#ajustements`, when one exists, phone cards: Date | Montant | Raison
+  (« — ») | État (« compte » / « ne compte pas ») | the delete.
+- **The window** is « Entrées d'argent »'s (`?du=&au=`, the last twelve
+  months said on screen, `?tout=1`, `_window_fields`) and narrows the curve
+  and the months ONLY: the headline, the gaps, the points and the
+  adjustments are the whole history. Both stay inside `span` = [max(du,
+  known_from), min(au, horizon)]: `?du=0001-01-01` costs nothing and never
+  computes a day below `date.min`, and a row covers its month met with the
+  span, summed over those days only - a window starting mid-month shows no
+  false gap. Every form and redirect keeps the window: the point form posts
+  to `{{ page_url }}#saisir` (`_treasury_page_url`), the POST-only forms
+  carry `next`, and every Banque page hands `treasury_url` over its period.
+
+**Typing a balance** (`forms.TreasuryPointForm`; `date` and `solde` are the
+page's HTTP interface):
+
+- **A plain `Form`**: a ModelForm's `validate_unique` refuses the date
+  before « Remplacer » can be offered. The date is ISO only
+  (`treasury.check_point_date` → `common.read_date`: en-us reads
+  « 02/10/2026 » as 10 February), 01/01/2000 to today - a future point
+  moves the headline into the future (« Date illisible. », « Date
+  impossible : entre le 01/01/2000 et aujourd'hui (JJ/MM/AAAA). »). The
+  balance (`treasury.read_balance`) is `common.read_amount`, signed, two
+  decimals, the column's width, 40 characters at most (« Solde illisible :
+  tapez un montant comme 1 234,56 ou -250. »). **« 12.500 », « -1,500 »,
+  « 1,500- » are asked again** (« Solde ambigu : tapez 12 500 ou 12,50. »,
+  `common.AMBIGUOUS_THOUSANDS`, moved there from inventory/views.py, which
+  imports it back): read as 12,50 €, a balance in the thousands became a
+  gap in the thousands. A NUL is `forms.NUL_REFUSED`. Refused, the page is
+  drawn again, 200, values and window kept.
+- **The `solde` input has no `inputmode`**: an iPhone's decimal keypad has
+  no « - », and an overdraft typed « 250 » is a gap of twice its size. The
+  template says why; a test checks the attribute is absent.
+- **A date that has a balance is never replaced silently.** « Enregistrer »
+  on it with ANOTHER balance writes nothing and draws the form again with
+  « Le JJ/MM/AAAA a déjà un solde : X €. » on the date and a second button,
+  `action=remplacer` « Remplacer », carrying the same values; the SAME
+  balance is « Solde du … déjà enregistré », nothing written. « Corriger »
+  (`?date=`) prefills that point's balance and shows « Remplacer » at once.
+  « Enregistrer » stays the first button: Enter never replaces. A phone tab
+  left open for days posts a stale date - replaced, Monday's reading was
+  gone with nothing to say so. Saved inside `transaction.atomic()`; the
+  unique date's IntegrityError (two tabs) is the same refusal, never a 500
+  (the race test patches `views._point_on`). Any other `action` is
+  `UNKNOWN_RULE_ACTION`. **Nor is « Remplacer » offered without that
+  sentence**: a refusal of anything else on a date that has a balance
+  (« Solde illisible », « Solde ambigu », a NUL) says it too
+  (`refuse_taken`, in `treasury_home`) - a stale tab refused for a typo
+  offered « Remplacer » alone, and the typo fixed replaced the reading
+  (review C7). Not when « Remplacer » was pressed already (« Corriger »,
+  then a typo): the date is not what is wrong.
+- **One message per save**, in `#saisir`: « Solde du JJ/MM/AAAA enregistré :
+  X € (remplace Y €) — concorde avec le point du JJ/MM. ». A gap to resolve
+  NEXT TO the saved point makes it a warning in `#ecarts` instead (« Le
+  solde du JJ/MM ne concorde pas avec celui du JJ/MM : à résoudre. »), where
+  the redirect lands. A pending gap adds nothing, nor does an older gap
+  elsewhere: the everyday save must not nag.
+
+**The other POSTs trust nothing.** Each acts inside ONE transaction that
+reads again what it acts on - the treasury itself for an adjustment, a
+delete or a move of a point; the row for an adjustment's delete - before it
+writes. SQLite's IMMEDIATE mode (config/settings.py) takes the write lock as
+it opens, so a double click waits, then is refused:
+
+- `tresorerie/ajustements/` (`treasury_adjustment_add`): `avant`, `apres`
+  (two point ids, through `common.is_id`), `ecart` (the gap the card
+  showed, « -50.00 », `POSTED_GAP`), `raison`, `next`. Refused, nothing
+  written: a point gone (`PAIR_GONE`), another point now between them
+  (`PAIR_SPLIT`), the two the wrong way round (`GAP_NOT_FOUND`), agreeing
+  already (`PAIR_AGREES` - the second click), pending (`PAIR_PENDING`), not
+  the gap shown (`GAP_CHANGED`), or wider than an amount can be
+  (`GAP_TOO_BIG`: two balances can differ by twice the column - refused,
+  never truncated; such a card draws no adjustment form). Otherwise exactly
+  `missing`, dated b.day - no date field: the owner named none, and a date
+  would only move the curve inside one stretch -, through the model's
+  `clean()`, and the pair agrees.
+- `tresorerie/points/<pk>/` (`treasury_point`): `supprimer`, or `veille`
+  (« Dater ce point du … ») with `date`, the day the card showed: a second
+  click, or a page drawn before another tab moved it, moves nothing
+  (`POINT_CHANGED`). Refused when that day has a point or is before
+  01/01/2000 - and the button is drawn only where the POST would take it.
+  Then the treasury, read again inside the transaction, must still hold a
+  gap to resolve whose « read before » names that point and that day
+  (`MOVE_CHANGED`, « L'écart a changé depuis l'affichage : rien n'a
+  changé. »): drawn before an import, an adjustment or a correction settled
+  the pair, the page moved a right reading to the wrong day and made a gap
+  of its own (review C6). The same read gives the orphans it names.
+- `tresorerie/ajustements/<pk>/` (`treasury_adjustment`): `supprimer`.
+- A record gone is « Ce point n'existe plus. » / « Cet ajustement n'existe
+  plus. », never a 404 nor a 500; a GET redirects and writes nothing; the
+  per-row addresses are `_by_pk`'s (`ByPkTests.NAMES`). Every delete is its
+  own `<form data-confirm>` naming its date; a point's delete, and « Dater
+  ce point du … », also name the adjustments they would leave counting
+  nowhere (`orphaned_by_deleting`, `orphaned_by_moving`: « 1 ajustement ne
+  comptera plus. »), and the message says it again; an adjustment's delete
+  says how many still count nowhere.
+- **Messages are said where the redirect lands**: each carries its section
+  in `extra_tags` (`saisir`, `ecarts`, `points`, `ajustements`),
+  `views._treasury_messages` splits them and the template prints each in
+  its section, overriding `{% block messages %}`; one whose section is not
+  drawn (the last adjustment deleted) is said at the top. After a delete, a
+  move or an adjustment, a gap still to resolve anywhere makes the one
+  message a warning in `#ecarts` ending « N écarts à résoudre. »; otherwise
+  a success in the section acted on - a move in `#points`, since its card
+  is gone once the pair agrees.
+
+**The import asks too** (`views._say_treasury_gaps`): an upload that wrote
+lines loads the treasury (`QUERIES` more queries, on that POST alone) and,
+when a gap is to resolve, warns « Trésorerie : N écarts à résoudre. ». The
+import completing a pending stretch is the moment a gap becomes real, and
+nobody opens « Trésorerie » to find out. Nothing without a point, so the
+import tests keep their messages.
+
+**« Données »** carries both (`treasury_checkpoints`, `treasury_adjustments`
+in banque.json; « points de trésorerie », « ajustements de trésorerie » in
+the counts): a point keyed by its day, its balance compared; an adjustment
+by its `reference`, its day, amount and reason compared - corrected, it is
+the same adjustment. Merged like the payers: a difference is a conflict
+kept under « Fusionner » (« Point de trésorerie du JJ/MM/AAAA : X € ici,
+Y € dans l'archive — gardé tel quel »), replaced under « Remplacer », whose
+prune deletes what the archive does not name - named as soon as its key
+reads, whatever the rest of the record. `created_at` is restored. **A
+reference is never drawn at import**: a record without one is skipped, or
+the confirm's would differ from the preview's. The report names an
+adjustment by its day and amount, never by a reference nobody has seen.
+Every record written goes through `sections/bank._check_treasury` - the
+model's `clean()`, said in French after its field (« montant : un
+ajustement de 0 € ne change rien … »), then `full_clean()`, whose English is
+never shown (« « champ » : valeur refusée ») - and **a day between
+01/01/2000 and today** (`_check_day`, `timezone.localdate()` read once a
+run): the model allows 2099, and a point dated tomorrow moved « Trésorerie
+au … » past today, its gap waiting for a statement for ever. Always
+exported, empty lists included; **absent is « not said »** (an archive
+written before 0008): none created, none pruned. « Effacer » takes both
+and says so before (the section's `clear_note`) and after
+(`TREASURY_CLEAR_NOTE`): no statement brings them back. **An import computes
+no balance and settles no gap**: an adjustment it brings outside two points
+is listed « ne compte pas », and a gap it leaves is asked on the page.
+
+**Not done, follow-ups**:
+
+- **The balance BNP's header line prints, read at import.** The seeded
+  export's line above the operations - the one the account is read from -
+  ends with a date and an amount (`statements.py`'s docstring, « …;
+  ****0042;14/09/2026;;1 234,56 ») that look like the account's balance;
+  `parse_statement` passes it over. Read by the format (two more fields),
+  it could be offered as a point with nothing typed, or checked against
+  `balance_on` that day. Check first, on a real export, which moment of
+  that day it is.
+- **A tab left open keeps its date input's `max`**: the day the page was
+  drawn. returnables.js's `data-today` refresh was not carried over, so a
+  tab shown again days later has its browser refuse today's date until it
+  is reloaded. Nothing stale is written: the server bounds the date to its
+  own today, and a date that has a balance asks « Remplacer ».
+
+Tests: `bank/tests/test_treasury.py` (the pure rules, one `SimpleTestCase`
+per rule, plus `LoadQueriesTests`, `ModelTests`, `MigrationTests`),
+`bank/tests/test_treasury_views.py` (the point form read off the page and
+posted as a browser does, CSRF enforced; every refusal; a double click
+giving one adjustment; the import's warning) and the guards -
+`BanqueTabsTests`, `TreasurySmokeTests`, `DateWindowSmokeTests` (one point
+in its fixture), `test_ui`, `test_navigation`, `TreasuryPageQueriesTests`,
+`test_money_grouping.TreasuryTests`, `test_phone_width_browser` (a gap card
+and three points at 320, 375 and 430 px). « Données »: `CheckpointTests`,
+`AdjustmentTests`, `OldTreasuryArchiveTests` and the check tests of
+`transfer/tests/test_bank_section.py`, whose
+`test_every_model_of_the_bank_is_carried` fails on a bank model `EXPORTED`
+forgets. Every amount invented.
+
+- Migration `bank/0008`, **WRITTEN and left to be applied** (the owner, after
+  a backup, `migrate_tenants`; `serve` refuses to start until then). Two
+  empty tables, so nothing existing changes meaning; reversing drops every
+  point and adjustment typed. Until then, not only /banque/tresorerie/
+  answers « no such table »: an upload on Banque that writes lines reads the
+  treasury after writing them (a 500, the lines in), and « Données » reads
+  both tables (the bank's counts shown unknown, no export or clear of
+  « Banque »).
+
 ### A document's file: its download name, and Banque's zip
 
 **Every door out names the file « Darty 11€55 01_10_2026.pdf »** (the owner,
@@ -4216,7 +4576,8 @@ imports (`transfer/legacy.py`).
   fuzzy** - an import must not merge two products -, an invoice by (supplier,
   number), else its stored sha, else its file's sha, with an occurrence for
   byte-identical documents (two of the real Monoprix tickets), an invoice line
-  by its rank in its invoice, a bank line by its fingerprint. A supplier the
+  by its rank in its invoice, a bank line by its fingerprint, a treasury
+  point by its day and an adjustment by its random `reference`. A supplier the
   fournisseurs section skipped is refused for the rest of the run
   (`SupplierResolver.refuse`): found by its name instead, its documents would
   land on the supplier that name belongs to here. A product's folded name
@@ -4375,6 +4736,18 @@ imports (`transfer/legacy.py`).
   from ones a person unlinked: it brings back the AUTO links (10) and reports
   the hand-settled ones as conflicts (31), with a note (`bank.UNDONE_NOTE`);
   « Remplacer » on the bank then restores them.
+- **« Banque » carries** (its description on the page,
+  `registry.INFO["banque"]`): the lines with their decisions and links, the
+  « sans facture » rules, the recognition rules, the statement formats, the
+  payee names learnt, the payers retained and the treasury's points and
+  adjustments - each merged, replaced and checked as its own section of
+  these notes says (« Bank statements », « The statement's layout »,
+  « Recognising the operations », « Entrées d'argent », « La trésorerie »).
+  Its `clear_note` names the configuration a clear takes along (the
+  recognition rules, the statement formats, the treasury's points and
+  adjustments); the description above it lists the rest - the « sans
+  facture » rules, the payee names learnt, the payers retained and every
+  line's decisions go too, and no statement brings them back either.
 - **Never exported:** Metro's `scrape_*` fields (the firewall's pause - a
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
@@ -5108,7 +5481,8 @@ count's page, the message at the top.
 or « ' » only ever separates thousands (« 42 50 » is no amount - it read as
 4 250 € - and that rule is the slips' too now), and one separator followed by
 exactly three digits (« 10.000 », « 1,500 ») is asked again rather than read
-as 10 € (`views.AMBIGUOUS_THOUSANDS`; a slip still reads « 4,000 » as 4).
+as 10 € (`common.AMBIGUOUS_THOUSANDS`, which « Trésorerie »'s balance asks
+too; a slip still reads « 4,000 » as 4).
 
 **Cost.** `gaps_since` reads like the « Écarts » page (one query per
 sub-recipe level in `build_pools`, two per recipe in `choice_groups`, every
@@ -6049,13 +6423,15 @@ names did not follow (models, fields, url names, context keys, `data-persist`
 and localStorage keys, anchors), nor did texts already stored; these notes
 still say "stock item" and "stock page" for the article and that workspace.
 
-### « Du … au … »: one window, seven pages
+### « Du … au … »: one window, eight pages
 
-Seven pages are read through a period: **Produits & charges** (the articles
+Eight pages are read through a period: **Produits & charges** (the articles
 bought between two dates), **Achats** (the documents), **Ventes** (the sales,
 the sale invoices and « Par origine »), **Banque** (the operations),
 **Marges** (the three margins), **Dépenses par catégorie** (what left the
-account) and **Entrées d'argent** (what came into it). The last three are
+account), **Entrées d'argent** (what came into it) and **Trésorerie** (its
+curve and its months; the balances, gaps and adjustments are the whole
+history). The last four are
 the ones whose period has a **default** - the last 12 months - and all say
 so on screen; `common.last_twelve_months()` is the one definition of that
 phrase, so they cannot name the same period and count two different spans.
@@ -7020,7 +7396,9 @@ does.
 **A chart is a server-rendered inline SVG**, never a library: four of them
 now (`recipes/views.py::_build_ingredient_pie_svg`,
 `inventory/views.py::_build_price_history_svg`,
-`bank/views.py::_build_spending_pie_svg` and `_build_balance_svg`), all hovered by
+`bank/views.py::_build_spending_pie_svg` and `_build_balance_svg` - « Entrées
+d'argent »'s card balance and « Trésorerie »'s curve, which
+`treasury.curve` hands in as steps), all hovered by
 `static/js/charts.js`, which is the only thing Chart.js would have added. The
 palette is `common.PIE_COLORS`, **one list**: two pies in one app drawn from
 two lists that drifted apart read as two different legends. Every name that
@@ -7122,7 +7500,8 @@ header row is not drawn (no sort on a phone; a sort chosen in the session
 still orders the cards). A `data-child-row` that is not itself a card (an
 opened panel) runs across under its card. Used by the four tables of
 Produits & charges, Achats' documents and « Documents à corriger », an
-import's files and the recipes. Not a sideways scroll with the name pinned:
+import's files, the recipes, and « Trésorerie »'s balances typed and
+adjustments. Not a sideways scroll with the name pinned:
 that put a purchases table wider than the phone inside a box scrolling
 sideways. `inventory/tests/test_products_phone.py` compares every label with
 its header.

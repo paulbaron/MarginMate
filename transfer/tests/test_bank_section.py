@@ -1,14 +1,16 @@
 """« Banque » (§7.7, §10.2): the bank's lines, their links to invoices, the
 ignore rules, the recognition rules (« Reconnaissance des opérations »), the
-statement formats (« Format du relevé »), the payee names learnt and the
-payers retained on « Entrées d'argent ».
+statement formats (« Format du relevé »), the payee names learnt, the
+payers retained on « Entrées d'argent », and the treasury's points and
+adjustments (« Trésorerie »).
 
 What these guard is the owner's decisions: a link made by hand, a line
 unlinked, a line declared « pas de facture », what a credit is in the till
 (« En caisse », on the line or for its payer), how his bank's operations are
-recognised and how its export is laid out. Nothing rebuilds them, so a round
-trip must bring every one back exactly, a merge must never overwrite one,
-and a link whose invoice is not here must be said, never guessed.
+recognised and how its export is laid out, the balances he typed and the
+adjustments he made. Nothing rebuilds them, so a round trip must bring every
+one back exactly, a merge must never overwrite one, and a link whose invoice
+is not here must be said, never guessed.
 
 Every test database holds the recognition rules bank/0006 seeds (`SEEDED`)
 and the format bank/0007 seeds (`SEEDED_FORMAT`): an « empty » bank still
@@ -25,6 +27,7 @@ from decimal import Decimal
 from unittest import mock
 
 import regex
+from django.apps import apps
 from django.test import TestCase
 from django.urls import reverse
 
@@ -39,18 +42,22 @@ from bank.models import (
     InvoicePayment,
     OperationRule,
     StatementFormat,
+    TreasuryAdjustment,
+    TreasuryCheckpoint,
 )
 from common import DateRange
 from invoices.deletion import delete_invoice
 from invoices.models import Invoice, Supplier
 from returnables.tests.test_patterns import NeverCompile
 from tests.factories import make_invoice, make_supplier
-from transfer import keys, registry
+from transfer import codec, keys, registry
 from transfer.archive import ArchiveError, ArchiveReader
 from transfer.runner import run_clear
 from transfer.sections import bank as section
 from transfer.sections.bank import (
+    ADJUSTMENTS,
     ALIASES,
+    CHECKPOINTS,
     ENTITIES,
     FORMAT_CLEAR_NOTE,
     FORMATS,
@@ -61,6 +68,7 @@ from transfer.sections.bank import (
     RECOGNITION_CLEAR_NOTE,
     RECONCILE_NOTE,
     RULES,
+    TREASURY_CLEAR_NOTE,
     BankSection,
 )
 from transfer.sections.base import Strategy
@@ -116,6 +124,13 @@ TAB_LAYOUT = {
 }
 #: What separates an amount's thousands in the report (common.THOUSANDS_SEPARATOR).
 NBSP = "\N{NO-BREAK SPACE}"
+#: When the treasury's points and adjustments of BankData were typed.
+CHECKPOINT_MOMENT = datetime(2026, 8, 2, 19, 20, 10, 375000, tzinfo=UTC)
+ADJUSTMENT_MOMENT = datetime(2026, 8, 2, 19, 25, 40, 625000, tzinfo=UTC)
+#: A day the tests hold « today » to, after every day BankData dates.
+TODAY = date(2026, 9, 30)
+#: What « today » the import reads (`_apply_checkpoints`, `_apply_adjustments`).
+TODAY_READ = "transfer.sections.bank.timezone.localdate"
 
 _counter = itertools.count(1)
 
@@ -200,6 +215,29 @@ def make_statement_format(name, **layout) -> StatementFormat:
     return fmt
 
 
+def make_checkpoint(day, balance, moment=CHECKPOINT_MOMENT) -> TreasuryCheckpoint:
+    """A balance typed on « Trésorerie » (checked by the model as the page's
+    save is), made at a moment in the past: a round trip that forgot to
+    restore it would show today's instead."""
+    checkpoint = TreasuryCheckpoint(date=day, balance=Decimal(balance))
+    checkpoint.full_clean()
+    checkpoint.save()
+    TreasuryCheckpoint.objects.filter(pk=checkpoint.pk).update(created_at=moment)
+    checkpoint.refresh_from_db()
+    return checkpoint
+
+
+def make_adjustment(day, amount, reason="", moment=ADJUSTMENT_MOMENT) -> TreasuryAdjustment:
+    """An adjustment made on « Trésorerie », its reference drawn by the
+    model as the page's is, made at a moment in the past."""
+    adjustment = TreasuryAdjustment(date=day, amount=Decimal(amount), reason=reason)
+    adjustment.full_clean()
+    adjustment.save()
+    TreasuryAdjustment.objects.filter(pk=adjustment.pk).update(created_at=moment)
+    adjustment.refresh_from_db()
+    return adjustment
+
+
 def wipe_bank() -> None:
     """Everything the section holds, as its clear leaves it - the seeded
     recognition rules and statement format included: an archive importing
@@ -211,6 +249,23 @@ def wipe_bank() -> None:
     OperationRule.objects.all().delete()
     StatementFormat.objects.all().delete()
     IncomePayer.objects.all().delete()
+    TreasuryCheckpoint.objects.all().delete()
+    TreasuryAdjustment.objects.all().delete()
+
+
+def checkpoints() -> dict:
+    """day → balance of every treasury point."""
+    return dict(TreasuryCheckpoint.objects.values_list("date", "balance"))
+
+
+def adjustments() -> dict:
+    """reference → (day, amount, reason) of every treasury adjustment."""
+    return {
+        reference: (day, amount, reason)
+        for reference, day, amount, reason in TreasuryAdjustment.objects.values_list(
+            "reference", "date", "amount", "reason"
+        )
+    }
 
 
 def statement_formats() -> list[tuple]:
@@ -249,8 +304,10 @@ def tally(run, entity):
 
 class BankData:
     """Two suppliers, four invoices, one line for every decision the bank
-    page lets a person take, and the two ways « Entrées d'argent » lets one
-    say what a credit is in the till: on the line, and for its payer."""
+    page lets a person take, the two ways « Entrées d'argent » lets one say
+    what a credit is in the till - on the line, and for its payer - and two
+    balances typed on « Trésorerie », one of them an overdraft, with two
+    adjustments, one without a reason."""
 
     def setUp(self):
         super().setUp()
@@ -294,6 +351,12 @@ class BankData:
         # of the lines above is read again with it: their fingerprints are
         # what their statements gave when they were imported.
         self.tab_format = make_statement_format(TAB_FORMAT, **TAB_LAYOUT)
+        # « Trésorerie »: two balances read on the bank's site, and two
+        # adjustments settling them. An import works no gap out between them.
+        self.june = make_checkpoint(date(2026, 6, 30), "2450.00")
+        self.july = make_checkpoint(date(2026, 7, 31), "-120.40")
+        self.fees = make_adjustment(date(2026, 7, 31), "-35.00", "Frais non relevés")
+        self.found = make_adjustment(date(2026, 7, 15), "12.30")
 
     def export(self) -> ArchiveReader:
         reader = export_archive({"banque"})
@@ -309,6 +372,12 @@ class BankData:
     def record(self, payload, line) -> dict:
         return next(item for item in payload["transactions"] if item["fingerprint"] == line.fingerprint)
 
+    def checkpoint_record(self, payload, day) -> dict:
+        return next(item for item in payload["treasury_checkpoints"] if item["date"] == day.isoformat())
+
+    def adjustment_record(self, payload, adjustment) -> dict:
+        return next(item for item in payload["treasury_adjustments"] if item["reference"] == adjustment.reference)
+
 
 class ContractTests(TestCase):
     def test_every_field_is_exported_or_said_why_not(self):
@@ -319,6 +388,13 @@ class ContractTests(TestCase):
                 concrete = {field.name for field in model._meta.concrete_fields}
                 self.assertEqual(concrete, set(exported) | set(section.NOT_EXPORTED[model]))
                 self.assertFalse(set(exported) & set(section.NOT_EXPORTED[model]))
+
+    def test_every_model_of_the_bank_is_carried(self):
+        # The guard above only sees the models EXPORTED names: a model added
+        # to the bank and left out of the archive passed it in silence, and
+        # an « Effacer » then a restore lost its rows for good.
+        self.assertEqual(set(section.EXPORTED), set(apps.get_app_config("bank").get_models()))
+        self.assertEqual(set(section.NOT_EXPORTED), set(section.EXPORTED))
 
     def test_the_section_is_registered_under_its_key(self):
         self.assertIsInstance(registry.get("banque"), BankSection)
@@ -332,9 +408,16 @@ class ContractTests(TestCase):
     def test_the_recognition_rules_have_a_count_of_their_own(self):
         # « règles » are the « sans facture » ones: one word for two lists
         # read as one on the page.
-        self.assertEqual(ENTITIES, (OPERATIONS, PAYMENTS, RULES, RECOGNITION, FORMATS, ALIASES, PAYERS))
+        self.assertEqual(
+            ENTITIES, (OPERATIONS, PAYMENTS, RULES, RECOGNITION, FORMATS, ALIASES, PAYERS, CHECKPOINTS, ADJUSTMENTS)
+        )
         self.assertNotEqual(RECOGNITION, RULES)
         self.assertEqual(len(set(ENTITIES)), len(ENTITIES))
+
+    def test_the_treasury_has_counts_of_its_own(self):
+        self.assertEqual((CHECKPOINTS, ADJUSTMENTS), ("points de trésorerie", "ajustements de trésorerie"))
+        self.assertIn("treasury_checkpoints", section.TOP_LEVEL)
+        self.assertIn("treasury_adjustments", section.TOP_LEVEL)
 
 
 class ExportTests(BankData, TestCase):
@@ -347,9 +430,59 @@ class ExportTests(BankData, TestCase):
             FORMATS: 2,
             ALIASES: 1,
             PAYERS: 2,
+            CHECKPOINTS: 2,
+            ADJUSTMENTS: 2,
         }
         self.assertEqual(BankSection().count(), expected)
         self.assertEqual(self.export().section("banque").counts, expected)
+
+    def test_the_treasury_points_are_exported_by_day(self):
+        # Signed (an overdraft), the moment they were typed, nothing else.
+        payload = self.export().section("banque").payload()
+        self.assertEqual(
+            payload["treasury_checkpoints"],
+            [
+                {"date": "2026-06-30", "balance": "2450.00", "created_at": "2026-08-02T19:20:10.375000+00:00"},
+                {"date": "2026-07-31", "balance": "-120.40", "created_at": "2026-08-02T19:20:10.375000+00:00"},
+            ],
+        )
+
+    def test_the_treasury_adjustments_are_exported_by_day_with_their_reference(self):
+        # By day: an export of the same rows is the same file in every
+        # database. The reference is the key, never the id.
+        payload = self.export().section("banque").payload()
+        self.assertEqual(
+            payload["treasury_adjustments"],
+            [
+                {
+                    "reference": self.found.reference,
+                    "date": "2026-07-15",
+                    "amount": "12.30",
+                    "reason": "",
+                    "created_at": "2026-08-02T19:25:40.625000+00:00",
+                },
+                {
+                    "reference": self.fees.reference,
+                    "date": "2026-07-31",
+                    "amount": "-35.00",
+                    "reason": "Frais non relevés",
+                    "created_at": "2026-08-02T19:25:40.625000+00:00",
+                },
+            ],
+        )
+        self.assertRegex(self.fees.reference, r"^[0-9a-f]{16}$")
+
+    def test_no_treasury_point_or_adjustment_is_an_empty_list_never_a_missing_one(self):
+        # Absent, the lists read as an archive written before bank/0008
+        # (« not said »), and « Remplacer » would keep this database's.
+        TreasuryCheckpoint.objects.all().delete()
+        TreasuryAdjustment.objects.all().delete()
+        reader = self.export()
+        payload = reader.section("banque").payload()
+        self.assertEqual((payload["treasury_checkpoints"], payload["treasury_adjustments"]), ([], []))
+        self.assertEqual(
+            (reader.section("banque").counts[CHECKPOINTS], reader.section("banque").counts[ADJUSTMENTS]), (0, 0)
+        )
 
     def test_the_statement_formats_are_exported_in_the_order_an_import_offers_them(self):
         # Every field but the id, the first the default - and the tab comes
@@ -577,6 +710,21 @@ class RoundTripTests(BankData, TestCase):
         self.assertEqual((tab.delimiter, tab.created_at), ("\t", FORMAT_MOMENT))
         self.assertEqual(StatementFormat.objects.first().name, SEEDED_FORMAT)
 
+    def assert_treasury_back(self):
+        # The balances typed, the overdraft signed; each adjustment under its
+        # own reference, never one drawn anew; each with the moment it was
+        # made, not the import's.
+        self.assertEqual(checkpoints(), {date(2026, 6, 30): Decimal("2450.00"), date(2026, 7, 31): Decimal("-120.40")})
+        self.assertEqual(
+            adjustments(),
+            {
+                self.fees.reference: (date(2026, 7, 31), Decimal("-35.00"), "Frais non relevés"),
+                self.found.reference: (date(2026, 7, 15), Decimal("12.30"), ""),
+            },
+        )
+        self.assertEqual(set(TreasuryCheckpoint.objects.values_list("created_at", flat=True)), {CHECKPOINT_MOMENT})
+        self.assertEqual(set(TreasuryAdjustment.objects.values_list("created_at", flat=True)), {ADJUSTMENT_MOMENT})
+
     def test_merge(self):
         rules, formats = recognition_rules(), statement_formats()
         before, after = round_trip({"banque"}, MERGE, after_clear=self.assert_empty)
@@ -584,6 +732,7 @@ class RoundTripTests(BankData, TestCase):
         self.assert_decisions_back()
         self.assert_recognition_back(rules)
         self.assert_formats_back(formats)
+        self.assert_treasury_back()
 
     def test_replace(self):
         rules, formats = recognition_rules(), statement_formats()
@@ -592,6 +741,7 @@ class RoundTripTests(BankData, TestCase):
         self.assert_decisions_back()
         self.assert_recognition_back(rules)
         self.assert_formats_back(formats)
+        self.assert_treasury_back()
 
     def test_formats_of_one_position_keep_their_order(self):
         # The first by (position, name) is the one an import uses when
@@ -655,7 +805,10 @@ class IdempotenceTests(BankData, TestCase):
             FORMATS: 2,
             ALIASES: 1,
             PAYERS: 2,
+            CHECKPOINTS: 2,
+            ADJUSTMENTS: 2,
         }
+        self.assertEqual(set(expected), set(ENTITIES))
         for entity, number in expected.items():
             with self.subTest(entity=entity):
                 counted = report.tallies[entity]
@@ -687,6 +840,8 @@ class IdempotenceTests(BankData, TestCase):
         IncomePayer.objects.update(created_at=datetime(2026, 9, 1, 12, 3, tzinfo=UTC))
         OperationRule.objects.update(created_at=datetime(2026, 9, 1, 12, 4, tzinfo=UTC))
         StatementFormat.objects.update(created_at=datetime(2026, 9, 1, 12, 5, tzinfo=UTC))
+        TreasuryCheckpoint.objects.update(created_at=datetime(2026, 9, 1, 12, 6, tzinfo=UTC))
+        TreasuryAdjustment.objects.update(created_at=datetime(2026, 9, 1, 12, 7, tzinfo=UTC))
         for strategy in (MERGE, REPLACE):
             with self.subTest(strategy=strategy):
                 before = db_fingerprint()
@@ -1395,11 +1550,176 @@ class PayerCreatedByTheRunTests(BankData, TestCase):
         )
 
 
+class CheckpointTests(BankData, TestCase):
+    """The balances typed moved on after the export: one said otherwise
+    here, one only here, one only in the archive. Merged like a payer: one
+    changed here is a conflict, kept, both balances said."""
+
+    def setUp(self):
+        super().setUp()
+        self.before = BankSection().snapshot()
+        self.reader = self.export()
+        TreasuryCheckpoint.objects.filter(pk=self.july.pk).update(balance=Decimal("-1120.40"))
+        make_checkpoint(date(2026, 8, 31), "310.00")
+        self.june.delete()
+
+    def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
+        run = import_archive(self.reader, MERGE)
+        counted = tally(run, CHECKPOINTS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 0, 0, 0))
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [f"Point de trésorerie du 31/07/2026 : -1{NBSP}120,40 € ici, -120,40 € dans l'archive — gardé tel quel"],
+        )
+        self.assertEqual(
+            checkpoints(),
+            {
+                date(2026, 6, 30): Decimal("2450.00"),
+                date(2026, 7, 31): Decimal("-1120.40"),
+                date(2026, 8, 31): Decimal("310.00"),
+            },
+        )
+        # Only in the archive: created, with the moment it was typed.
+        self.assertEqual(TreasuryCheckpoint.objects.get(date=date(2026, 6, 30)).created_at, CHECKPOINT_MOMENT)
+        # Nothing else of the bank moved.
+        self.assertEqual(tally(run, ADJUSTMENTS).unchanged, 2)
+        # A merge updates and deletes nothing: no safety export is needed.
+        self.assertFalse(run.affected())
+
+    def test_replace_makes_the_points_exactly_the_archives(self):
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, CHECKPOINTS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 1, 1, 0))
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(checkpoints(), {date(2026, 6, 30): Decimal("2450.00"), date(2026, 7, 31): Decimal("-120.40")})
+        self.assertEqual(BankSection().snapshot(), self.before)
+        self.assertEqual(run.affected(), {"banque"})
+
+    def test_a_preview_changes_nothing_and_says_what_the_confirm_does(self):
+        before = db_fingerprint()
+        preview = import_archive(self.reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        confirmed = import_archive(self.reader, REPLACE)
+        self.assertEqual(preview.outcome(), confirmed.outcome())
+
+    def test_an_empty_list_forgets_every_point_under_replace_only(self):
+        # Said empty, the archive holds no balance: « Remplacer » forgets
+        # them all, « Fusionner » adds nothing and forgets nothing. The
+        # adjustments the archive still names stay: with no point they count
+        # nowhere, which « Trésorerie » says.
+        def change(payload):
+            payload["treasury_checkpoints"] = []
+            return payload
+
+        reader = self.forged(change)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(tally(run, CHECKPOINTS).deleted, 0)
+        self.assertEqual(set(checkpoints()), {date(2026, 7, 31), date(2026, 8, 31)})
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(tally(run, CHECKPOINTS).deleted, 2)
+        self.assertEqual(checkpoints(), {})
+        self.assertEqual(set(adjustments()), {self.fees.reference, self.found.reference})
+
+
+class AdjustmentTests(BankData, TestCase):
+    """The adjustments moved on after the export: one changed here, one only
+    here, one only in the archive. Merged like a point: one changed here is
+    a conflict, kept - and named as « Trésorerie » shows it here."""
+
+    def setUp(self):
+        super().setUp()
+        self.before = BankSection().snapshot()
+        self.reader = self.export()
+        TreasuryAdjustment.objects.filter(pk=self.fees.pk).update(amount=Decimal("-53.00"))
+        self.extra = make_adjustment(date(2026, 8, 31), "8.00", "Dépôt non relevé")
+        self.found.delete()
+
+    def test_merge_adds_what_is_missing_and_keeps_what_differs(self):
+        run = import_archive(self.reader, MERGE)
+        counted = tally(run, ADJUSTMENTS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 0, 0, 0))
+        self.assertEqual(
+            bank_report(run).conflicts,
+            ["Ajustement de trésorerie du 31/07/2026 (-53,00 €) : différent dans l'archive (montant) — gardé tel quel"],
+        )
+        self.assertEqual(
+            adjustments(),
+            {
+                self.fees.reference: (date(2026, 7, 31), Decimal("-53.00"), "Frais non relevés"),
+                self.extra.reference: (date(2026, 8, 31), Decimal("8.00"), "Dépôt non relevé"),
+                # Only in the archive: created under its own reference, with
+                # the moment it was made.
+                self.found.reference: (date(2026, 7, 15), Decimal("12.30"), ""),
+            },
+        )
+        self.assertEqual(TreasuryAdjustment.objects.get(reference=self.found.reference).created_at, ADJUSTMENT_MOMENT)
+        self.assertEqual(tally(run, CHECKPOINTS).unchanged, 2)
+        self.assertFalse(run.affected())
+
+    def test_replace_makes_the_adjustments_exactly_the_archives(self):
+        run = import_archive(self.reader, REPLACE)
+        counted = tally(run, ADJUSTMENTS)
+        self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (1, 1, 1, 0))
+        self.assertEqual(bank_report(run).conflicts, [])
+        self.assertEqual(set(adjustments()), {self.fees.reference, self.found.reference})
+        self.assertEqual(BankSection().snapshot(), self.before)
+        self.assertEqual(run.affected(), {"banque"})
+
+    def test_a_preview_changes_nothing_and_says_what_the_confirm_does(self):
+        before = db_fingerprint()
+        preview = import_archive(self.reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        confirmed = import_archive(self.reader, REPLACE)
+        self.assertEqual(preview.outcome(), confirmed.outcome())
+
+    def test_an_empty_list_forgets_every_adjustment_under_replace_only(self):
+        def change(payload):
+            payload["treasury_adjustments"] = []
+            return payload
+
+        reader = self.forged(change)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(tally(run, ADJUSTMENTS).deleted, 0)
+        self.assertEqual(set(adjustments()), {self.fees.reference, self.extra.reference})
+        run = import_archive(reader, REPLACE)
+        self.assertEqual(tally(run, ADJUSTMENTS).deleted, 2)
+        self.assertEqual(adjustments(), {})
+        self.assertEqual(len(checkpoints()), 2)
+
+    def test_an_adjustment_whose_day_and_reason_were_corrected_is_the_same_one(self):
+        # Keyed by its reference, never by what it says: corrected here, it
+        # is a conflict under « Fusionner » - never a second adjustment beside
+        # it, counted twice - and written over in place under « Remplacer ».
+        TreasuryAdjustment.objects.filter(pk=self.fees.pk).update(
+            date=date(2026, 7, 30), amount=Decimal("-35.00"), reason="Frais de tenue de compte"
+        )
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual(
+            bank_report(run).conflicts,
+            [
+                "Ajustement de trésorerie du 30/07/2026 (-35,00 €) : différent dans l'archive (date, raison) — gardé tel quel"
+            ],
+        )
+        self.assertEqual(TreasuryAdjustment.objects.filter(amount=Decimal("-35.00")).count(), 1)
+        run = import_archive(self.reader, REPLACE)
+        self.assertEqual(tally(run, ADJUSTMENTS).updated, 1)
+        fees = TreasuryAdjustment.objects.get(pk=self.fees.pk)
+        self.assertEqual((fees.date, fees.reason), (date(2026, 7, 31), "Frais non relevés"))
+
+
+def written_before_treasury(payload) -> dict:
+    """banque.json as an archive written before bank/0008 holds it: no
+    treasury points nor adjustments."""
+    del payload["treasury_checkpoints"]
+    del payload["treasury_adjustments"]
+    return payload
+
+
 def written_before_formats(payload) -> dict:
     """banque.json as an archive written before bank/0007 holds it: no
-    statement formats."""
+    statement formats - nor the treasury, which came after them."""
     del payload["statement_formats"]
-    return payload
+    return written_before_treasury(payload)
 
 
 def written_before_recognition(payload) -> dict:
@@ -1441,6 +1761,8 @@ class OldArchiveTests(BankData, TestCase):
         self.assertFalse(StatementFormat.objects.exists())
         counted = tally(run, FORMATS)
         self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0))
+        # Nor any treasury point or adjustment.
+        self.assertEqual((checkpoints(), adjustments()), ({}, {}))
 
     def test_replace_keeps_this_databases_payers_and_marks(self):
         reader = self.forged(written_before_payers)
@@ -1530,6 +1852,49 @@ class OldFormatArchiveTests(BankData, TestCase):
         run = import_archive(self.reader, MERGE)
         self.assertFalse(StatementFormat.objects.exists())
         self.assertEqual(tally(run, FORMATS).created, 0)
+        self.assertEqual(tally(run, OPERATIONS).created, 6)
+
+
+class OldTreasuryArchiveTests(BankData, TestCase):
+    """An archive written before bank/0008 says nothing of the treasury's
+    points and adjustments - which is not « forget every balance typed »:
+    merged or replaced, this database's stay as they are, and nothing is
+    said about them."""
+
+    def setUp(self):
+        super().setUp()
+        self.reader = self.forged(written_before_treasury)
+        # Moved on since, of each: one changed, one added, one deleted.
+        TreasuryCheckpoint.objects.filter(pk=self.july.pk).update(balance=Decimal("-20.40"))
+        make_checkpoint(date(2026, 8, 31), "310.00")
+        self.june.delete()
+        TreasuryAdjustment.objects.filter(pk=self.fees.pk).update(reason="Frais bancaires")
+        make_adjustment(date(2026, 8, 31), "8.00")
+        self.found.delete()
+
+    def test_neither_strategy_touches_the_treasury_here(self):
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                before = db_fingerprint()
+                preview = import_archive(self.reader, strategy, preview=True)
+                run = import_archive(self.reader, strategy)
+                self.assertEqual(preview.outcome(), run.outcome())
+                report = bank_report(run)
+                self.assertEqual((report.conflicts, report.skipped), ([], []))
+                self.assertEqual([note for note in report.notes if "champ inconnu" in note], [])
+                for entity in (CHECKPOINTS, ADJUSTMENTS):
+                    counted = tally(run, entity)
+                    self.assertEqual(
+                        (counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 0)
+                    )
+                self.assertEqual(db_fingerprint(), before)
+                self.assertFalse(run.affected())
+
+    def test_after_a_wipe_nothing_is_made(self):
+        wipe_bank()
+        run = import_archive(self.reader, MERGE)
+        self.assertEqual((checkpoints(), adjustments()), ({}, {}))
+        self.assertEqual((tally(run, CHECKPOINTS).created, tally(run, ADJUSTMENTS).created), (0, 0))
         self.assertEqual(tally(run, OPERATIONS).created, 6)
 
 
@@ -2078,6 +2443,381 @@ class PayerCheckTests(BankData, TestCase):
         run = import_archive(self.forged(change), MERGE)
         self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : payeurs retenus › humeur"), 1)
         self.assertEqual(bank_report(run).skipped, [])
+
+
+class TreasuryCheckData(BankData):
+    """A forged archive's treasury lists, imported with « today » held to
+    `TODAY`: what the bound on the day says depends on it."""
+
+    def adding(self, name, *records) -> ArchiveReader:
+        def change(payload):
+            payload[name] += list(records)
+            return payload
+
+        return self.forged(change)
+
+    def imported(self, reader, strategy, *, today=TODAY, preview=False):
+        with mock.patch(TODAY_READ, return_value=today):
+            return import_archive(reader, strategy, preview=preview)
+
+    def assert_no_list_refuses_the_archive(self, name, values):
+        for value in values:
+            with self.subTest(value=value):
+
+                def change(payload, value=value):
+                    payload[name] = value
+                    return payload
+
+                reader = self.forged(change)
+                before = db_fingerprint()
+                with self.assertRaisesMessage(ArchiveError, f"« {name} » n'est pas une liste d'objets"):
+                    import_archive(reader, REPLACE)
+                self.assertEqual(db_fingerprint(), before)
+
+
+class CheckpointCheckTests(TreasuryCheckData, TestCase):
+    """What the archive says of the treasury points, read before it is
+    trusted: a day it can read, between 01/01/2000 and today, once; a
+    balance as the codec reads money; every point written checked by the
+    model, said in French."""
+
+    def test_points_that_are_no_list_of_objects_refuse_the_archive_before_anything_is_written(self):
+        self.assert_no_list_refuses_the_archive(
+            "treasury_checkpoints", ({}, "2026-07-31", ["2026-07-31"], [{"date": "2026-08-31", "balance": "1.00"}, 3])
+        )
+
+    def test_a_point_it_cannot_read_is_skipped_with_its_reason_and_the_others_come(self):
+        unread = "Point de trésorerie sans date lisible : "
+        cases = [
+            ({"balance": "10.00"}, f"{unread}« date » : valeur manquante"),
+            ({"date": "31/08/2026", "balance": "10.00"}, f"{unread}« date » : date illisible (« 31/08/2026 »)"),
+            ({"date": 20260831, "balance": "10.00"}, f"{unread}« date » : date illisible (« 20260831 »)"),
+            # A day is one point: the first of two is the one kept.
+            ({"date": "2026-06-30", "balance": "1.00"}, "Point de trésorerie du 30/06/2026 : en double dans l'archive"),
+            (
+                {"date": "2026-09-01", "balance": 10.5},
+                "Point de trésorerie du 01/09/2026 : « balance » : un nombre s'écrit entre guillemets (« 10.5 »)",
+            ),
+            (
+                {"date": "2026-09-02", "balance": "1,50"},
+                "Point de trésorerie du 02/09/2026 : « balance » : « 1,50 » n'est pas un nombre",
+            ),
+            (
+                {"date": "2026-09-03", "balance": "1.505"},
+                "Point de trésorerie du 03/09/2026 : « balance » : « 1.505 » a plus de 2 décimales",
+            ),
+            (
+                {"date": "2026-09-04", "balance": "10000000000.00"},
+                "Point de trésorerie du 04/09/2026 : « balance » : « 10000000000.00 » a trop de chiffres",
+            ),
+            (
+                {"date": "2026-09-05", "balance": "NaN"},
+                "Point de trésorerie du 05/09/2026 : « balance » : « NaN » n'est pas un nombre",
+            ),
+            ({"date": "2026-09-06"}, "Point de trésorerie du 06/09/2026 : « balance » : valeur manquante"),
+            (
+                {"date": "2026-09-07", "balance": "5.00", "created_at": "hier"},
+                "Point de trésorerie du 07/09/2026 : « created_at » : date illisible (« hier »)",
+            ),
+            # Not after today: a point dated tomorrow moved « Trésorerie au … »
+            # past today. Nor before a statement's first day, nor at the
+            # calendar's ends - each its record's reason, never a 500.
+            (
+                {"date": "2026-10-01", "balance": "5.00"},
+                (
+                    "Point de trésorerie du 01/10/2026 : « date » : date hors limites (« 2026-10-01 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            (
+                {"date": "1999-12-31", "balance": "5.00"},
+                (
+                    "Point de trésorerie du 31/12/1999 : « date » : date hors limites (« 1999-12-31 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            (
+                {"date": "9999-12-31", "balance": "5.00"},
+                (
+                    "Point de trésorerie du 31/12/9999 : « date » : date hors limites (« 9999-12-31 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            (
+                {"date": "0001-01-01", "balance": "5.00"},
+                (
+                    "Point de trésorerie du 01/01/0001 : « date » : date hors limites (« 0001-01-01 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            # At both ends of the bound, an account at nothing, an overdraft
+            # as wide as the column: taken.
+            ({"date": "2000-01-01", "balance": "0.00"}, None),
+            ({"date": "2026-09-30", "balance": "-9999999999.99"}, None),
+        ]
+        reader = self.adding("treasury_checkpoints", *(record for record, _reason in cases))
+        wipe_bank()
+        run = self.imported(reader, MERGE)
+        skipped = bank_report(run).skipped
+        self.assertEqual(skipped, [reason for _record, reason in cases if reason is not None])
+        for reason in skipped:
+            self.assertNotRegex(reason, DJANGO_ENGLISH)
+        self.assertEqual(tally(run, CHECKPOINTS).created, 4)
+        self.assertEqual(
+            checkpoints(),
+            {
+                date(2000, 1, 1): Decimal("0.00"),
+                date(2026, 6, 30): Decimal("2450.00"),
+                date(2026, 7, 31): Decimal("-120.40"),
+                date(2026, 9, 30): Decimal("-9999999999.99"),
+            },
+        )
+
+    def test_replace_keeps_a_point_whose_record_it_cannot_read(self):
+        def change(payload):
+            self.checkpoint_record(payload, self.july.date)["balance"] = "1,5"
+            return payload
+
+        run = self.imported(self.forged(change), REPLACE)
+        self.assertEqual(
+            bank_report(run).skipped, ["Point de trésorerie du 31/07/2026 : « balance » : « 1,5 » n'est pas un nombre"]
+        )
+        self.assertEqual(TreasuryCheckpoint.objects.get(pk=self.july.pk).balance, Decimal("-120.40"))
+        counted = tally(run, CHECKPOINTS)
+        self.assertEqual((counted.updated, counted.deleted, counted.unchanged), (0, 0, 1))
+
+    def test_a_point_past_today_is_still_named_and_never_pruned(self):
+        # Refused, it is named all the same: « Remplacer » never deletes a
+        # point the archive holds, even one it could not take.
+        run = self.imported(self.export(), REPLACE, today=date(2026, 7, 30))
+        self.assertEqual(
+            bank_report(run).skipped,
+            [
+                (
+                    "Point de trésorerie du 31/07/2026 : « date » : date hors limites (« 2026-07-31 ») : "
+                    "entre le 01/01/2000 et le 30/07/2026"
+                )
+            ],
+        )
+        self.assertEqual(tally(run, CHECKPOINTS).deleted, 0)
+        self.assertEqual(TreasuryCheckpoint.objects.get(pk=self.july.pk).balance, Decimal("-120.40"))
+
+    def test_an_unknown_field_of_a_point_is_said_once(self):
+        def change(payload):
+            for item in payload["treasury_checkpoints"]:
+                item["humeur"] = "calme"
+            return payload
+
+        run = self.imported(self.forged(change), MERGE)
+        self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : points de trésorerie › humeur"), 1)
+        self.assertEqual(bank_report(run).skipped, [])
+
+
+class AdjustmentCheckTests(TreasuryCheckData, TestCase):
+    """What the archive says of the treasury adjustments, read before it is
+    trusted: a reference it can read, once, and never one drawn here; a day
+    between 01/01/2000 and today; an amount as the codec reads money; every
+    adjustment written checked by the model, said in French."""
+
+    def test_adjustments_that_are_no_list_of_objects_refuse_the_archive_before_anything_is_written(self):
+        self.assert_no_list_refuses_the_archive(
+            "treasury_adjustments", ({}, "-35.00", [self.fees.reference], [{"reference": "a" * 16}, None])
+        )
+
+    def test_an_adjustment_it_cannot_read_is_skipped_with_its_reason_and_the_others_come(self):
+        unread = "Ajustement de trésorerie sans référence lisible : "
+        cases = [
+            ({"date": "2026-09-01", "amount": "1.00"}, f"{unread}référence manquante"),
+            ({"reference": "  ", "date": "2026-09-01", "amount": "1.00"}, f"{unread}référence manquante"),
+            ({"reference": 1234, "date": "2026-09-01", "amount": "1.00"}, f"{unread}référence manquante"),
+            (
+                {"reference": "0" * 17, "date": "2026-09-01", "amount": "1.00"},
+                f"{unread}« reference » : plus de 16 caractères",
+            ),
+            # One reference is one adjustment: the first of two is the one kept.
+            (
+                {"reference": self.fees.reference, "date": "2026-09-02", "amount": "2.00"},
+                "Ajustement de trésorerie du 02/09/2026 (2,00 €) : en double dans l'archive",
+            ),
+            (
+                {"reference": "c000000000000001", "amount": "1.00"},
+                "Ajustement de trésorerie sans date lisible : « date » : valeur manquante",
+            ),
+            (
+                {"reference": "c000000000000002", "date": "02/09/2026", "amount": "1.00"},
+                "Ajustement de trésorerie sans date lisible : « date » : date illisible (« 02/09/2026 »)",
+            ),
+            (
+                {"reference": "c000000000000003", "date": "2026-09-03"},
+                "Ajustement de trésorerie du 03/09/2026 : « amount » : valeur manquante",
+            ),
+            (
+                {"reference": "c000000000000004", "date": "2026-09-04", "amount": 4.5},
+                "Ajustement de trésorerie du 04/09/2026 : « amount » : un nombre s'écrit entre guillemets (« 4.5 »)",
+            ),
+            (
+                {"reference": "c000000000000005", "date": "2026-09-05", "amount": "4.555"},
+                "Ajustement de trésorerie du 05/09/2026 : « amount » : « 4.555 » a plus de 2 décimales",
+            ),
+            # The model's own check, in French: an adjustment of 0 € changes
+            # nothing.
+            (
+                {"reference": "c000000000000006", "date": "2026-09-06", "amount": "0.00"},
+                (
+                    "Ajustement de trésorerie du 06/09/2026 (0,00 €) : montant : un ajustement de 0 € ne change rien : "
+                    "tapez un montant"
+                ),
+            ),
+            (
+                {"reference": "c000000000000007", "date": "2026-10-01", "amount": "7.00"},
+                (
+                    "Ajustement de trésorerie du 01/10/2026 (7,00 €) : « date » : date hors limites (« 2026-10-01 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            (
+                {"reference": "c000000000000008", "date": "1999-12-31", "amount": "8.00"},
+                (
+                    "Ajustement de trésorerie du 31/12/1999 (8,00 €) : « date » : date hors limites (« 1999-12-31 ») : "
+                    "entre le 01/01/2000 et le 30/09/2026"
+                ),
+            ),
+            (
+                {"reference": "c000000000000009", "date": "2026-09-09", "amount": "9.00", "reason": "R" * 256},
+                "Ajustement de trésorerie du 09/09/2026 (9,00 €) : « reason » : plus de 255 caractères",
+            ),
+            # At both ends of the bound, a reason left blank, an amount as
+            # wide as the column: taken.
+            ({"reference": "c000000000000010", "date": "2000-01-01", "amount": "-9999999999.99"}, None),
+            ({"reference": "c000000000000011", "date": "2026-09-30", "amount": "0.01", "reason": ""}, None),
+        ]
+        reader = self.adding("treasury_adjustments", *(record for record, _reason in cases))
+        wipe_bank()
+        run = self.imported(reader, MERGE)
+        skipped = bank_report(run).skipped
+        self.assertEqual(skipped, [reason for _record, reason in cases if reason is not None])
+        for reason in skipped:
+            self.assertNotRegex(reason, DJANGO_ENGLISH)
+        self.assertEqual(tally(run, ADJUSTMENTS).created, 4)
+        # Each under the reference the archive gives it.
+        self.assertEqual(
+            adjustments(),
+            {
+                self.fees.reference: (date(2026, 7, 31), Decimal("-35.00"), "Frais non relevés"),
+                self.found.reference: (date(2026, 7, 15), Decimal("12.30"), ""),
+                "c000000000000010": (date(2000, 1, 1), Decimal("-9999999999.99"), ""),
+                "c000000000000011": (date(2026, 9, 30), Decimal("0.01"), ""),
+            },
+        )
+
+    def test_an_adjustment_without_a_reference_is_never_given_one(self):
+        """A reference drawn by the preview and another by the confirm would
+        make the two differ (`runner.NotAsPreviewed`), and one drawn at all
+        would make an adjustment the archive cannot name again: skipped.
+        Nothing is drawn either for the one it creates beside it."""
+
+        def change(payload):
+            del self.adjustment_record(payload, self.found)["reference"]
+            return payload
+
+        reader = self.forged(change)
+        wipe_bank()
+        with mock.patch("bank.models.secrets") as drawn:
+            preview = self.imported(reader, MERGE, preview=True)
+            run = self.imported(reader, MERGE)
+            drawn.token_hex.assert_not_called()
+            # What would have been seen: a new adjustment draws its own.
+            TreasuryAdjustment(date=date(2026, 9, 1), amount=Decimal("1.00"))
+            drawn.token_hex.assert_called_once_with(8)
+        self.assertEqual(preview.outcome(), run.outcome())
+        self.assertEqual(
+            bank_report(run).skipped, ["Ajustement de trésorerie sans référence lisible : référence manquante"]
+        )
+        self.assertEqual(list(adjustments()), [self.fees.reference])
+
+    def test_replace_checks_what_it_writes_and_keeps_the_adjustment_when_refused(self):
+        # Named as « Trésorerie » shows it here; kept as it is, never pruned.
+        for fields, reason in (
+            ({"amount": "0.00"}, "montant : un ajustement de 0 € ne change rien : tapez un montant"),
+            (
+                {"date": "2026-10-01"},
+                "« date » : date hors limites (« 2026-10-01 ») : entre le 01/01/2000 et le 30/09/2026",
+            ),
+            ({"amount": "1,5"}, "« amount » : « 1,5 » n'est pas un nombre"),
+        ):
+            with self.subTest(fields=fields):
+
+                def change(payload, fields=fields):
+                    self.adjustment_record(payload, self.fees).update(fields)
+                    return payload
+
+                reader = self.forged(change)
+                before = db_fingerprint()
+                preview = self.imported(reader, REPLACE, preview=True)
+                run = self.imported(reader, REPLACE)
+                self.assertEqual(preview.outcome(), run.outcome())
+                self.assertEqual(
+                    bank_report(run).skipped, [f"Ajustement de trésorerie du 31/07/2026 (-35,00 €) : {reason}"]
+                )
+                self.assertEqual(db_fingerprint(), before)
+                counted = tally(run, ADJUSTMENTS)
+                self.assertEqual((counted.updated, counted.deleted, counted.unchanged), (0, 0, 1))
+
+    def test_an_unknown_field_of_an_adjustment_is_said_once(self):
+        def change(payload):
+            for item in payload["treasury_adjustments"]:
+                item["humeur"] = "calme"
+            return payload
+
+        run = self.imported(self.forged(change), MERGE)
+        self.assertEqual(bank_report(run).notes.count("champ inconnu ignoré : ajustements de trésorerie › humeur"), 1)
+        self.assertEqual(bank_report(run).skipped, [])
+
+
+class TreasuryModelCheckTests(TestCase):
+    """`_check_treasury`: the model's refusals in its own French, after the
+    field they name, and Django's - which an archive cannot reach through
+    the codec, but which are English - never said: the field is named
+    instead."""
+
+    def refusal(self, row) -> str:
+        with self.assertRaises(codec.FieldValueError) as caught:
+            section._check_treasury(row)
+        reason = str(caught.exception)
+        self.assertNotRegex(reason, DJANGO_ENGLISH)
+        return reason
+
+    def test_the_models_own_refusals_are_said_after_their_field(self):
+        self.assertEqual(
+            self.refusal(TreasuryAdjustment(reference="d" * 16, date=date(2026, 9, 1), amount=Decimal("0.00"))),
+            "montant : un ajustement de 0 € ne change rien : tapez un montant",
+        )
+        self.assertEqual(
+            self.refusal(TreasuryCheckpoint(date=date(2100, 1, 1), balance=Decimal("1.00"))),
+            "date : date hors limites : entre le 01/01/2000 et le 31/12/2099",
+        )
+        self.assertEqual(
+            self.refusal(TreasuryCheckpoint(date=date(2026, 9, 1), balance=Decimal("10000000000.00"))),
+            f"solde : solde hors limites : 9{NBSP}999{NBSP}999{NBSP}999.99 € au plus, en plus ou en moins",
+        )
+
+    def test_djangos_own_refusals_name_the_field_never_in_english(self):
+        make_checkpoint(date(2026, 9, 1), "1.00")
+        self.assertEqual(
+            self.refusal(TreasuryCheckpoint(date=date(2026, 9, 1), balance=Decimal("2.00"))),
+            "« date » : valeur refusée",
+        )
+        taken = make_adjustment(date(2026, 9, 1), "1.00")
+        self.assertEqual(
+            self.refusal(TreasuryAdjustment(reference=taken.reference, date=date(2026, 9, 2), amount=Decimal("2.00"))),
+            "« reference » : valeur refusée",
+        )
+        # Wider than the column, past what `clean` measures (a third
+        # decimal): Django's validator, said in French.
+        self.assertEqual(
+            self.refusal(TreasuryCheckpoint(date=date(2026, 9, 2), balance=Decimal("1.005"))),
+            "« balance » : valeur refusée",
+        )
 
 
 class LinkTests(BankData, TestCase):
@@ -2740,6 +3480,38 @@ class UnreadableMomentTests(BankData, TestCase):
                 counted = tally(run, FORMATS)
                 self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
 
+    def test_a_treasury_point_whose_moment_cannot_be_read_is_kept_as_it_was(self):
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    self.checkpoint_record(payload, self.july.date).update(balance="-20.40", created_at=moment)
+                    return payload
+
+                run = self.assert_skipped_as_previewed(
+                    change, f"Point de trésorerie du 31/07/2026 : « created_at » : {reason}"
+                )
+                july = TreasuryCheckpoint.objects.get(pk=self.july.pk)
+                self.assertEqual((july.balance, july.created_at), (Decimal("-120.40"), CHECKPOINT_MOMENT))
+                counted = tally(run, CHECKPOINTS)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
+
+    def test_a_treasury_adjustment_whose_moment_cannot_be_read_is_kept_as_it_was(self):
+        for moment, reason in self.MOMENTS.items():
+            with self.subTest(moment=moment):
+
+                def change(payload, moment=moment):
+                    self.adjustment_record(payload, self.fees).update(reason="Frais du mois", created_at=moment)
+                    return payload
+
+                run = self.assert_skipped_as_previewed(
+                    change, f"Ajustement de trésorerie du 31/07/2026 (-35,00 €) : « created_at » : {reason}"
+                )
+                fees = TreasuryAdjustment.objects.get(pk=self.fees.pk)
+                self.assertEqual((fees.reason, fees.created_at), ("Frais non relevés", ADJUSTMENT_MOMENT))
+                counted = tally(run, ADJUSTMENTS)
+                self.assertEqual((counted.created, counted.updated, counted.deleted, counted.unchanged), (0, 0, 0, 1))
+
     def test_a_line_whose_import_moment_cannot_be_read_is_kept_with_its_links(self):
         # The archive also says the line pays nothing: written, it would lose
         # its link. The field is compared whatever the line's sign.
@@ -2801,6 +3573,22 @@ class ImportMakesNoDecisionTests(BankData, TestCase):
         # what it was stored as.
         self.assertEqual(BankTransaction.objects.get(fingerprint=card.fingerprint).kind, BankTransaction.Kind.OTHER)
 
+    def test_no_gap_is_worked_out_nor_settled(self):
+        """An import writes the points and adjustments the archive holds,
+        and nothing else: the two points of BankData disagree, and no
+        adjustment is made to settle them - « Trésorerie » asks a person."""
+        reader = self.export()
+        wipe_bank()
+        with (
+            mock.patch("bank.treasury.compute") as compute,
+            mock.patch("bank.treasury.load") as load,
+        ):
+            run = import_archive(reader, MERGE)
+        compute.assert_not_called()
+        load.assert_not_called()
+        self.assertEqual((tally(run, CHECKPOINTS).created, tally(run, ADJUSTMENTS).created), (2, 2))
+        self.assertEqual(set(adjustments()), {self.fees.reference, self.found.reference})
+
 
 class ClearTests(BankData, TestCase):
     def test_a_preview_changes_nothing(self):
@@ -2824,6 +3612,8 @@ class ClearTests(BankData, TestCase):
                 FORMATS: 2,
                 ALIASES: 1,
                 PAYERS: 2,
+                CHECKPOINTS: 2,
+                ADJUSTMENTS: 2,
             },
         )
         self.assertIn(section.CLEAR_NOTE, bank_report(run).notes)
@@ -2859,6 +3649,27 @@ class ClearTests(BankData, TestCase):
         # Nothing to take, nothing said.
         run = run_clear({"banque"}, preview=False)
         self.assertNotIn(FORMAT_CLEAR_NOTE, bank_report(run).notes)
+
+    def test_the_treasury_goes_and_the_report_says_what_that_costs(self):
+        # No statement brings a balance typed back: the Effacer tab says it
+        # goes before the clear, the report where it comes back from after.
+        run = run_clear({"banque"}, preview=False)
+        self.assertEqual((checkpoints(), adjustments()), ({}, {}))
+        self.assertIn(TREASURY_CLEAR_NOTE, bank_report(run).notes)
+        self.assertIn("sauvegarde", TREASURY_CLEAR_NOTE)
+        self.assertIn("points et les ajustements de trésorerie", registry.INFO["banque"].clear_note)
+        self.assertIn("points et ajustements de trésorerie", registry.INFO["banque"].description)
+        # Nothing to take, nothing said.
+        run = run_clear({"banque"}, preview=False)
+        self.assertNotIn(TREASURY_CLEAR_NOTE, bank_report(run).notes)
+
+    def test_adjustments_alone_say_the_treasurys_note(self):
+        # Points deleted on the page, adjustments left counting nowhere:
+        # they go too, and are said.
+        TreasuryCheckpoint.objects.all().delete()
+        run = run_clear({"banque"}, preview=False)
+        self.assertEqual((tally(run, CHECKPOINTS).deleted, tally(run, ADJUSTMENTS).deleted), (0, 2))
+        self.assertIn(TREASURY_CLEAR_NOTE, bank_report(run).notes)
 
     def test_the_formats_alone_say_their_note(self):
         # Every line and rule already gone: the formats' note is the one said.

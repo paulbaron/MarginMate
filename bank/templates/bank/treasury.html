@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Trésorerie - Banque - MarginMate{% endblock %}
+{% comment %}
+« Trésorerie », Banque's fourth tab (views.treasury_home, bank/treasury.py).
+A write's message is said where its redirect lands - « Saisir un solde »,
+« Écarts à résoudre », « Soldes saisis », « Ajustements »
+(views._treasury_messages) -, every other message at the top, once. The
+rows' sentences and addresses are built in the view: a comment inside a
+row loop prints a blank line per row.
+{% endcomment %}
+{% block messages %}{% include "bank/_treasury_messages.html" with shown=said.top %}{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Banque</h1>
+            <p class="page-subtitle">Le solde du compte, calculé depuis vos saisies et les opérations importées.</p>
+        </div>
+    </div>
+
+    {% include "bank/_tabs.html" %}
+
+    {% if latest %}
+        <div class="stat-row">
+            <div class="stat{% if headline_warn %} stat-warn{% endif %}">
+                <span class="stat-label">Trésorerie au {{ latest.day|date:"d/m/Y" }}</span>
+                <span class="stat-value">{{ latest.balance|money }} €</span>
+                <span class="stat-note">depuis le solde du {{ latest.reference.day|date:"d/m" }}{% if latest.provisional %} · provisoire{% endif %}</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Relevé importé jusqu'au</span>
+                <span class="stat-value">{% if last_operation %}{{ last_operation|date:"d/m/Y" }}{% else %}aucun{% endif %}</span>
+            </div>
+        </div>
+    {% else %}
+        <p class="lead">Saisissez le solde du compte à une date : la trésorerie des autres jours en est calculée.</p>
+    {% endif %}
+    {% if gap_cards %}
+        <div class="message message-warning"><a href="#ecarts">{{ gaps_to_resolve }}</a></div>
+    {% endif %}
+    {% if accounts > 1 %}
+        <p class="muted">{{ accounts }} comptes importés : saisissez le total de leurs soldes.</p>
+    {% endif %}
+    {% if not has_lines %}
+        <p class="muted">Aucun relevé importé : importez-le sur <a href="{{ bank_url }}">Banque</a>.</p>
+    {% endif %}
+
+    <div class="card" id="saisir">
+        <h2>Saisir un solde</h2>
+        <p class="muted small">Le solde et sa date, tels que la banque les affiche.</p>
+        {% include "bank/_treasury_messages.html" with shown=said.saisir %}
+        {% comment %}
+        The balance's input has no inputmode="decimal" (bank/forms.py): an
+        iPhone's decimal keypad has no « - », and an overdrawn account's
+        balance is negative - the full keyboard has it on its 123 layer.
+        « Enregistrer » comes first, so Enter never replaces a balance.
+        {% endcomment %}
+        <form method="post" action="{{ page_url }}#saisir">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=point_form %}
+            <div class="form-actions">
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+                {% if point_form.replacing %}
+                    <button class="btn btn-secondary" type="submit" name="action" value="remplacer">Remplacer</button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    {% if gap_cards %}
+        <section id="ecarts">
+            <h2>Écarts à résoudre</h2>
+            {% include "bank/_treasury_messages.html" with shown=said.ecarts %}
+            {% for card in gap_cards %}
+                <div class="card">
+                    <p><strong>Du {{ card.gap.before.day|date:"d/m/Y" }} au {{ card.gap.after.day|date:"d/m/Y" }}</strong></p>
+                    <p>{{ card.said }}</p>
+                    {% for hint in card.hints %}<p class="muted small">{{ hint }}</p>{% endfor %}
+                    {% if card.move_target %}
+                        <form method="post" action="{{ card.move_url }}"{% if card.move_confirm %} data-confirm="{{ card.move_confirm }}"{% endif %}>
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ page_url }}">
+                            <input type="hidden" name="date" value="{{ card.move_target|date:'Y-m-d' }}">
+                            <button class="btn btn-small" type="submit" name="action" value="veille">Dater ce point du {{ card.move_target|date:"d/m" }}</button>
+                        </form>
+                    {% endif %}
+                    {% for row in card.adjustments %}
+                        <div class="form-actions">
+                            <span>Ajustement du {{ row.correction.day|date:"d/m/Y" }} : {{ row.signed }} €{% if row.correction.reason %} ({{ row.correction.reason }}){% endif %}</span>
+                            <form method="post" action="{{ row.action_url }}" data-confirm="{{ row.confirm }}">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ page_url }}">
+                                <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                        aria-label="Supprimer l'ajustement du {{ row.correction.day|date:'d/m/Y' }}">Supprimer</button>
+                            </form>
+                        </div>
+                    {% endfor %}
+                    {% if card.gap.too_big %}
+                        <p class="muted small">Trop grand pour un ajustement : corrigez un des points.</p>
+                    {% else %}
+                        <form method="post" action="{{ adjustment_add_url }}" class="inline-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ page_url }}">
+                            <input type="hidden" name="avant" value="{{ card.gap.before.pk }}">
+                            <input type="hidden" name="apres" value="{{ card.gap.after.pk }}">
+                            <input type="hidden" name="ecart" value="{{ card.posted }}">
+                            <input type="text" name="raison" maxlength="{{ reason_max }}" placeholder="Écart non expliqué"
+                                   autocomplete="off" aria-label="Raison de l'ajustement du {{ card.gap.after.day|date:'d/m/Y' }}">
+                            <button class="btn btn-small" type="submit">Ajouter un ajustement de {{ card.signed }} €</button>
+                        </form>
+                    {% endif %}
+                    {% for end in card.ends %}
+                        <div class="form-actions">
+                            <span>Point du {{ end.point.day|date:"d/m/Y" }} : {{ end.point.balance|money }} €</span>
+                            <a class="btn btn-small btn-secondary" href="{{ end.correct_url }}"
+                               aria-label="Corriger le point du {{ end.point.day|date:'d/m/Y' }}">Corriger</a>
+                            <form method="post" action="{{ end.action_url }}" data-confirm="{{ end.confirm }}">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ page_url }}">
+                                <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                        aria-label="Supprimer le point du {{ end.point.day|date:'d/m/Y' }}">Supprimer le point du {{ end.point.day|date:"d/m" }}</button>
+                            </form>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endfor %}
+        </section>
+    {% endif %}
+
+    {% if latest %}
+        <section id="courbe">
+            <h2>Solde jour par jour</h2>
+            <form method="get" class="date-range">
+                <label class="inline-label">Du
+                    <input type="date" name="du" value="{{ date_window.start_value }}"{% if showing_all %} disabled{% endif %}>
+                </label>
+                <label class="inline-label">au
+                    <input type="date" name="au" value="{{ date_window.end_value }}"{% if showing_all %} disabled{% endif %}>
+                </label>
+                <button class="btn btn-small btn-secondary" type="submit">Afficher</button>
+                {% if date_window %}<a class="btn btn-small btn-secondary" href="{{ clear_url }}">Effacer</a>{% endif %}
+                {% if showing_all %}
+                    <a class="btn btn-small btn-secondary" href="{{ period_url }}">Revenir à une période</a>
+                {% else %}
+                    <a class="btn btn-small btn-secondary" href="{{ all_url }}">Tout l'historique</a>
+                {% endif %}
+            </form>
+            <p class="muted date-range-note">
+                {% if showing_all %}
+                    Tout l'historique
+                {% elif is_default %}
+                    Les douze derniers mois (par défaut), du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
+                {% elif window.start and window.end %}
+                    Du {{ window.start|date:"d/m/Y" }} au {{ window.end|date:"d/m/Y" }}
+                {% elif window.start %}
+                    Depuis le {{ window.start|date:"d/m/Y" }}
+                {% else %}
+                    Jusqu'au {{ window.end|date:"d/m/Y" }}
+                {% endif %}
+                (la courbe et les mois ; dates de passage en banque).
+            </p>
+            {% if chart_svg %}{{ chart_svg|safe }}{% endif %}
+            {% if provisional %}
+                {% comment %}
+                « complet », never « importé »: the stat above says « Relevé
+                importé jusqu'au » with the last day imported (last_operation),
+                and this day is complete_through - the day before it whenever
+                the statement was imported on the day of its last operation.
+                One phrase for both put two dates under the same words.
+                {% endcomment %}
+                <p class="muted">
+                    {% if provisional.0 == provisional.1 %}Provisoire le {{ provisional.0|date:"d/m" }}{% else %}Provisoire du {{ provisional.0|date:"d/m" }} au {{ provisional.1|date:"d/m" }}{% endif %} :
+                    {% if complete_through %}relevé complet jusqu'au {{ complete_through|date:"d/m" }}{% else %}aucun relevé importé{% endif %}.
+                </p>
+            {% endif %}
+            {% if months %}
+                <div class="table-wrap">
+                    <table data-table data-table-label="mois">
+                        <thead>
+                            <tr>
+                                <th>Mois</th>
+                                <th class="num">Entrées</th>
+                                <th class="num">Sorties</th>
+                                {% if months_adjusted %}<th class="num">Ajustements</th>{% endif %}
+                                <th class="num">Solde en fin de mois</th>
+                                {% if months_gaps %}<th class="num">Écart</th>{% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for label, row in months %}
+                                <tr>
+                                    <td data-sort="{{ row.month|date:'Y-m-d' }}">{{ label }}</td>
+                                    <td class="num" data-sort="{{ row.credits|stringformat:'s' }}">{{ row.credits|money }} €</td>
+                                    <td class="num" data-sort="{{ row.debits|stringformat:'s' }}">{{ row.debits|money }} €</td>
+                                    {% if months_adjusted %}<td class="num" data-sort="{{ row.adjustments|stringformat:'s' }}">{{ row.adjustments|money }} €</td>{% endif %}
+                                    <td class="num" data-sort="{% if row.closing is not None %}{{ row.closing|stringformat:'s' }}{% endif %}">
+                                        {% if row.closing is None %}—{% else %}{{ row.closing|money }} €{% endif %}{% if row.partial %} <span class="muted small">au {{ row.end|date:"d/m" }}</span>{% endif %}{% if row.closing_provisional %} <span class="muted small">provisoire</span>{% endif %}{% if row.gap_pending %} <span class="muted small">relevé à importer</span>{% endif %}
+                                    </td>
+                                    {% if months_gaps %}<td class="num" data-sort="{{ row.gap_to_resolve|stringformat:'s' }}">{% if row.gaps_to_resolve == 1 %}<a href="#ecarts">{{ row.gap_to_resolve|money }} €</a>{% elif row.gaps_to_resolve %}<a href="#ecarts">{{ row.gaps_to_resolve }} écarts</a>{% if row.gap_to_resolve %} <span class="muted small">{{ row.gap_to_resolve|money }} € en tout</span>{% endif %}{% else %}—{% endif %}</td>{% endif %}
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="muted">Rien sur cette période.</p>
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if point_rows %}
+        <section id="points">
+            <h2>Soldes saisis</h2>
+            {% include "bank/_treasury_messages.html" with shown=said.points %}
+            <div class="table-wrap">
+                <table data-table data-table-label="soldes saisis" class="phone-cards">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="num">Solde</th>
+                            <th>Avec le précédent</th>
+                            <th data-no-sort></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in point_rows %}
+                            <tr>
+                                <td data-sort="{{ row.point.day|date:'Y-m-d' }}">{{ row.point.day|date:"d/m/Y" }}</td>
+                                <td class="num" data-label="Solde" data-sort="{{ row.point.balance|stringformat:'s' }}">{{ row.point.balance|money }} €</td>
+                                <td data-label="Avec le précédent">{% if row.state == "to_resolve" %}<a href="#ecarts">{{ row.said }}</a>{% elif row.state == "agrees" %}{{ row.said }}{% else %}<span class="muted">{{ row.said }}</span>{% endif %}</td>
+                                <td class="row-actions">
+                                    <a href="{{ row.correct_url }}" aria-label="Corriger le point du {{ row.point.day|date:'d/m/Y' }}">Corriger</a>
+                                    <form method="post" action="{{ row.action_url }}" data-confirm="{{ row.confirm }}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="next" value="{{ page_url }}">
+                                        <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                                aria-label="Supprimer le point du {{ row.point.day|date:'d/m/Y' }}">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
+
+    {% if adjustment_rows %}
+        <section id="ajustements">
+            <h2>Ajustements</h2>
+            <p class="muted small">Ce que les opérations n'expliquent pas entre deux soldes ; hors de deux soldes, un ajustement ne compte pas.</p>
+            {% include "bank/_treasury_messages.html" with shown=said.ajustements %}
+            <div class="table-wrap">
+                <table data-table data-table-label="ajustements" class="phone-cards">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="num">Montant</th>
+                            <th>Raison</th>
+                            <th>État</th>
+                            <th data-no-sort></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in adjustment_rows %}
+                            <tr>
+                                <td data-sort="{{ row.correction.day|date:'Y-m-d' }}">{{ row.correction.day|date:"d/m/Y" }}</td>
+                                <td class="num" data-label="Montant" data-sort="{{ row.correction.amount|stringformat:'s' }}">{{ row.signed }} €</td>
+                                <td data-label="Raison">{{ row.correction.reason|default:"—" }}</td>
+                                <td data-label="État">{% if row.counts %}compte{% else %}<strong>ne compte pas</strong>{% endif %}</td>
+                                <td class="row-actions">
+                                    <form method="post" action="{{ row.action_url }}" data-confirm="{{ row.confirm }}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="next" value="{{ page_url }}">
+                                        <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                                aria-label="Supprimer l'ajustement du {{ row.correction.day|date:'d/m/Y' }}">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
+{% endblock %}

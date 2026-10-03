@@ -39,6 +39,16 @@ through the same guard), and an archive written before them says nothing of
 them. A line keeps the fingerprint it was imported with: a format changed
 by an import reads no statement again.
 
+The treasury's points (`TreasuryCheckpoint`, a balance typed for one day)
+and adjustments (`TreasuryAdjustment`) are decisions too, and travel like
+the payers: a point keyed by its day (unique), an adjustment by its random
+`reference` - never generated here, a record without one is skipped, or the
+confirm would differ from its preview. Every record written is checked by
+the model's own `clean`, said in French, and its day bound to 2000-today: a
+point dated tomorrow would move « Trésorerie au … » past today. An archive
+written before bank/0008 says nothing of them. An import computes no
+balance and resolves no gap: « Trésorerie » reads what it wrote.
+
 It requires nothing (§2.1): a hard link to the invoices would make
 « Effacer les factures » wipe the bank too. The invoices section counts the
 payments its deletions cascade into this section's report, and the lines
@@ -52,9 +62,11 @@ its own once the invoices are back, it cannot tell, and says so
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 
 from django.core.exceptions import ValidationError
 from django.db.models import Prefetch
+from django.utils import timezone
 
 from bank.income import payer_key
 from bank.matching import alias_key
@@ -67,9 +79,12 @@ from bank.models import (
     InvoicePayment,
     OperationRule,
     StatementFormat,
+    TreasuryAdjustment,
+    TreasuryCheckpoint,
 )
 from bank.recognition import PATTERN_LABEL, name_key
 from bank.reconcile import invoice_label
+from bank.statements import FIRST_DAY
 from common import format_money
 from invoices.models import Invoice, Supplier
 from transfer import codec, keys, registry
@@ -145,6 +160,16 @@ FORMAT_COMPARED = tuple(name for name in FORMAT_FIELDS if name != "created_at")
 # No default in the model: a format the archive creates without one is
 # skipped with « valeur manquante ».
 FORMAT_REQUIRED = ("date_column", "label_columns")
+# A treasury point is its day (unique): the date is the key, the balance all
+# that is compared.
+CHECKPOINT_FIELDS = ("date", "balance", "created_at")
+CHECKPOINT_COMPARED = ("balance",)
+CHECKPOINT_REQUIRED = ("balance",)
+# An adjustment is its random reference: its day, amount and reason may have
+# been corrected, it is the same adjustment.
+ADJUSTMENT_FIELDS = ("reference", "date", "amount", "reason", "created_at")
+ADJUSTMENT_COMPARED = ("date", "amount", "reason")
+ADJUSTMENT_REQUIRED = ("date", "amount")
 
 EXPORTED = {
     BankTransaction: ("fingerprint", *TRANSACTION_FIELDS),
@@ -154,6 +179,8 @@ EXPORTED = {
     IncomePayer: ("key", *PAYER_FIELDS),
     OperationRule: RECOGNITION_FIELDS,
     StatementFormat: FORMAT_FIELDS,
+    TreasuryCheckpoint: CHECKPOINT_FIELDS,
+    TreasuryAdjustment: ADJUSTMENT_FIELDS,
 }
 NOT_EXPORTED = {
     BankTransaction: {"id": "pk"},
@@ -163,6 +190,8 @@ NOT_EXPORTED = {
     IncomePayer: {"id": "pk"},
     OperationRule: {"id": "pk"},
     StatementFormat: {"id": "pk"},
+    TreasuryCheckpoint: {"id": "pk"},
+    TreasuryAdjustment: {"id": "pk"},
 }
 
 TOP_LEVEL = (
@@ -173,6 +202,8 @@ TOP_LEVEL = (
     "operation_rules",
     "statement_formats",
     "income_payers",
+    "treasury_checkpoints",
+    "treasury_adjustments",
 )
 TRANSACTION_KEYS = ("fingerprint", *TRANSACTION_FIELDS, "payments")
 PAYMENT_KEYS = ("invoice", *PAYMENT_FIELDS)
@@ -191,7 +222,10 @@ FORMATS = "formats de relevé"
 ALIASES = "noms de payeurs appris"
 # Not « payeurs » alone: « noms de payeurs appris » are the suppliers'.
 PAYERS = "payeurs retenus (entrées d'argent)"
-ENTITIES = (OPERATIONS, PAYMENTS, RULES, RECOGNITION, FORMATS, ALIASES, PAYERS)
+# « Trésorerie »: the balances typed (« Soldes saisis ») and the adjustments.
+CHECKPOINTS = "points de trésorerie"
+ADJUSTMENTS = "ajustements de trésorerie"
+ENTITIES = (OPERATIONS, PAYMENTS, RULES, RECOGNITION, FORMATS, ALIASES, PAYERS, CHECKPOINTS, ADJUSTMENTS)
 
 FIELD_LABELS = {
     "account": "compte",
@@ -227,6 +261,10 @@ FIELD_LABELS = {
     "value_date_column": "colonne de la date de valeur",
     "bank_type_column": "colonne du type d'opération",
     "account_pattern": "motif du numéro de compte",
+    "date": "date",
+    "balance": "solde",
+    # Never « motif », which is a regular expression on these pages.
+    "reason": "raison",
 }
 
 # The page's own button, which links what bank.matching is sure of.
@@ -247,6 +285,12 @@ RECOGNITION_CLEAR_NOTE = (
 FORMAT_CLEAR_NOTE = (
     "Sans format de relevé, aucun relevé ne s'importe : ramenez les formats de la sauvegarde ou saisissez-en un "
     "sur « Format du relevé »."
+)
+# Said when a clear takes treasury points or adjustments: no statement brings
+# them back, only an archive.
+TREASURY_CLEAR_NOTE = (
+    "Les soldes saisis et les ajustements de « Trésorerie » ne reviennent que d'une archive : ramenez-les de la "
+    "sauvegarde."
 )
 # Said once a run, beside the conflicts « réglée à la main ici sans payer … »:
 # the same line is left by a person's « délier » and by its invoice deleted
@@ -388,6 +432,62 @@ def _check_format(fmt: StatementFormat) -> None:
     _check_position(fmt)
 
 
+def _check_treasury(row: TreasuryCheckpoint | TreasuryAdjustment) -> None:
+    """The model's own check, the one « Trésorerie » saves through: `clean`
+    bounds the day and the figure (a statement's 2000-2099, the (12, 2)
+    column) and refuses an adjustment of 0 €, each in French, said after its
+    field. Only then Django's validators (a figure wider than the column, a
+    day or a reference another row holds), whose English is never said: the
+    field is named instead."""
+    try:
+        row.clean()
+    except ValidationError as exc:
+        errors = exc.message_dict if hasattr(exc, "error_dict") else {"": exc.messages}
+        field, messages = next(iter(errors.items()))
+        label = FIELD_LABELS.get(field, field)
+        raise codec.FieldValueError(f"{label} : {_sentence(' '.join(messages), label)}") from None
+    try:
+        row.full_clean()
+    except ValidationError as exc:
+        raise codec.FieldValueError(f"« {next(iter(exc.message_dict))} » : valeur refusée") from None
+
+
+def _check_day(name: str, value: date, today: date) -> date:
+    """`value` when it lies between the first day a statement may hold and
+    today, else that record's reason (skipped, said). The codec reads any ISO
+    date, and the model's own bound runs to 2099: a point dated tomorrow
+    moved « Trésorerie au … » past today, and the gap ending on it waited for
+    a statement for ever."""
+    if not FIRST_DAY <= value <= today:
+        raise codec.FieldValueError(
+            f"« {name} » : date hors limites (« {value.isoformat()} ») : "
+            f"entre le {FIRST_DAY:%d/%m/%Y} et le {today:%d/%m/%Y}"
+        )
+    return value
+
+
+def _checkpoint_said(day: date) -> str:
+    return f"Point de trésorerie du {day:%d/%m/%Y}"
+
+
+def _adjustment_said(adjustment: TreasuryAdjustment | None, record: dict) -> str:
+    """How the report names an adjustment - never by its reference, which
+    nobody has ever seen: its day and amount, this database's when it has
+    the adjustment (what « Trésorerie » shows of it), else the archive's,
+    as far as they can be read."""
+    if adjustment is not None:
+        return f"Ajustement de trésorerie du {adjustment.date:%d/%m/%Y} ({_euros(adjustment.amount)})"
+    try:
+        day = codec.load(TreasuryAdjustment, "date", record.get("date"))
+    except codec.FieldValueError:
+        return "Ajustement de trésorerie sans date lisible"
+    try:
+        amount = codec.load(TreasuryAdjustment, "amount", record.get("amount"))
+    except codec.FieldValueError:
+        return f"Ajustement de trésorerie du {day:%d/%m/%Y}"
+    return f"Ajustement de trésorerie du {day:%d/%m/%Y} ({_euros(amount)})"
+
+
 def _sentence(message: str, label: str) -> str:
     """A refusal of `check_format` said after its field's name: the name it
     may already open with left out, no closing full stop, a capital put
@@ -415,6 +515,8 @@ class BankSection(Section):
             FORMATS: StatementFormat.objects.count(),
             ALIASES: CounterpartyAlias.objects.count(),
             PAYERS: IncomePayer.objects.count(),
+            CHECKPOINTS: TreasuryCheckpoint.objects.count(),
+            ADJUSTMENTS: TreasuryAdjustment.objects.count(),
         }
 
     def snapshot(self):
@@ -453,6 +555,16 @@ class BankSection(Section):
             "income_payers": sorted(
                 [payer.key, *codec.record(payer, PAYER_FIELDS).values()] for payer in IncomePayer.objects.all()
             ),
+            # Each row opens on its key - the day, the reference - which is
+            # unique and never None.
+            "treasury_checkpoints": [
+                list(codec.record(checkpoint, CHECKPOINT_FIELDS).values())
+                for checkpoint in TreasuryCheckpoint.objects.order_by("date")
+            ],
+            "treasury_adjustments": sorted(
+                list(codec.record(adjustment, ADJUSTMENT_FIELDS).values())
+                for adjustment in TreasuryAdjustment.objects.all()
+            ),
         }
 
     # -- export ----------------------------------------------------------------
@@ -473,6 +585,10 @@ class BankSection(Section):
         # In the order the import card offers them, the first the default.
         formats = list(StatementFormat.objects.order_by("position", "name"))
         payers = list(IncomePayer.objects.order_by("key"))
+        # By day, then by reference rather than id: the same rows give the
+        # same file in every database.
+        checkpoints = list(TreasuryCheckpoint.objects.order_by("date"))
+        adjustments = list(TreasuryAdjustment.objects.order_by("date", "reference"))
         codes = {key["supplier"] for key in invoice_keys.values()} | {alias.supplier.code for alias in aliases}
         payload = {
             # A code may differ in the database this is imported into (LIDL
@@ -501,6 +617,11 @@ class BankSection(Section):
             # « \t » and reads back as the tab it was.
             "statement_formats": [codec.record(fmt, FORMAT_FIELDS) for fmt in formats],
             "income_payers": [{"key": payer.key, **codec.record(payer, PAYER_FIELDS)} for payer in payers],
+            # Always said too, an empty list included: absent, they read as
+            # an archive written before bank/0008, and « Remplacer » would
+            # keep this database's.
+            "treasury_checkpoints": [codec.record(checkpoint, CHECKPOINT_FIELDS) for checkpoint in checkpoints],
+            "treasury_adjustments": [codec.record(adjustment, ADJUSTMENT_FIELDS) for adjustment in adjustments],
         }
         out.write(
             payload,
@@ -512,6 +633,8 @@ class BankSection(Section):
                 FORMATS: len(formats),
                 ALIASES: len(aliases),
                 PAYERS: len(payers),
+                CHECKPOINTS: len(checkpoints),
+                ADJUSTMENTS: len(adjustments),
             },
         )
 
@@ -560,6 +683,10 @@ class BankSection(Section):
                 "Archive refusée : dans banque.json, « statement_formats » n'est pas une liste d'objets."
             )
         self._formats: list | None = formats
+        # The treasury's points and adjustments (bank/0008) alike: each list
+        # on its own, None when the archive does not say it.
+        self._checkpoints: list | None = self._optional_list(payload, "treasury_checkpoints")
+        self._adjustments: list | None = self._optional_list(payload, "treasury_adjustments")
         self.payload = payload
         # What the file names, whatever becomes of its records: prune never
         # deletes a line, rule or name the archive holds, even one it could
@@ -576,6 +703,9 @@ class BankSection(Section):
         # Statement formats the same way.
         self._format_keys: set[str] = set()
         self._format_ids: dict[str, int] = {}
+        # Treasury points by their day, adjustments by their reference.
+        self._checkpoint_days: set[date] = set()
+        self._adjustment_references: set[str] = set()
         # The payers this run creates: their lines' own choices travel with
         # them (`_apply_transactions`).
         self._created_payers: set[str] = set()
@@ -584,6 +714,17 @@ class BankSection(Section):
         # section has created its own. An invoice absent from this set came
         # with this run, so no person here can have undone a link to it.
         self._invoices_before: set[int] = set(Invoice.objects.values_list("pk", flat=True))
+
+    @staticmethod
+    def _optional_list(payload: dict, name: str) -> list | None:
+        """A list added after the first archives: None when the archive does
+        not say it - never an empty list, which « Remplacer » would read as
+        « forget everything here » - and never one of the required lists,
+        or every archive written before it would be refused."""
+        items = payload.get(name)
+        if items is not None and (not isinstance(items, list) or not all(isinstance(item, dict) for item in items)):
+            raise ArchiveError(f"Archive refusée : dans banque.json, « {name} » n'est pas une liste d'objets.")
+        return items
 
     def apply(self, ctx, report) -> None:
         for entity in ENTITIES:  # one row each, even when nothing moves
@@ -596,6 +737,11 @@ class BankSection(Section):
         self._apply_aliases(ctx, report)
         self._apply_payers(report, replacing)
         self._apply_transactions(ctx, report, replacing)
+        # Read once: every point and adjustment of the run is held to the
+        # same today.
+        today = timezone.localdate()
+        self._apply_checkpoints(report, replacing, today)
+        self._apply_adjustments(report, replacing, today)
 
     # rules -------------------------------------------------------------------
     def _apply_rules(self, report, replacing: bool) -> None:
@@ -876,6 +1022,138 @@ class BankSection(Section):
                     f"Payeur retenu « {key} » : « {payer.get_source_display()} » ici, « {there} » dans l'archive "
                     f"— gardé tel quel"
                 )
+        _restore(created, "created_at")
+
+    # treasury points ---------------------------------------------------------
+    def _apply_checkpoints(self, report, replacing: bool, today: date) -> None:
+        """A balance a person typed for one day (« Trésorerie »): a decision,
+        merged like a payer - one said otherwise here is a conflict, kept,
+        both balances said. Keyed by its day, which is unique. An archive
+        saying nothing of them (written before bank/0008) leaves them alone.
+        No gap is worked out here: the page reads what this writes."""
+        if self._checkpoints is None:
+            return
+        existing = {checkpoint.date: checkpoint for checkpoint in TreasuryCheckpoint.objects.all()}
+        created = []
+        for record in self._checkpoints:
+            codec.note_unknown(report, record, CHECKPOINT_FIELDS, where="points de trésorerie › ")
+            try:
+                day = codec.load(TreasuryCheckpoint, "date", record.get("date"))
+            except codec.FieldValueError as exc:
+                report.skip(f"Point de trésorerie sans date lisible : {exc}")
+                continue
+            said = _checkpoint_said(day)
+            if day in self._checkpoint_days:
+                report.skip(f"{said} : en double dans l'archive")
+                continue
+            # Named before the rest of its record is read: the prune never
+            # deletes a point the archive holds, even one it could not read.
+            self._checkpoint_days.add(day)
+            checkpoint = existing.get(day)
+            try:
+                _check_day("date", day, today)
+                if checkpoint is None:
+                    for name in CHECKPOINT_REQUIRED:
+                        codec.load(TreasuryCheckpoint, name, record.get(name))
+                    checkpoint = TreasuryCheckpoint(date=day)
+                    codec.assign(checkpoint, record, CHECKPOINT_FIELDS)
+                    _check_treasury(checkpoint)
+                    moment = checkpoint.created_at
+                    checkpoint.save()
+                    created.append((checkpoint, moment))
+                    report.created(CHECKPOINTS)
+                    continue
+                different = codec.differences(checkpoint, record, CHECKPOINT_COMPARED)
+            except codec.FieldValueError as exc:
+                report.skip(f"{said} : {exc}")
+                continue
+            if not different:
+                report.unchanged(CHECKPOINTS)
+            elif replacing:
+                # Every field, the moment included, then the model's check.
+                # What cannot be read leaves the point as it was.
+                try:
+                    changed = codec.assign(checkpoint, record, CHECKPOINT_FIELDS)
+                    _check_treasury(checkpoint)
+                except codec.FieldValueError as exc:
+                    report.skip(f"{said} : {exc}")
+                    continue
+                checkpoint.save(update_fields=changed)
+                report.updated(CHECKPOINTS)
+            else:
+                # The balance is all that is compared, and `differences` read it.
+                there = codec.load(TreasuryCheckpoint, "balance", record["balance"])
+                report.conflict(
+                    f"{said} : {_euros(checkpoint.balance)} ici, {_euros(there)} dans l'archive — gardé tel quel"
+                )
+        _restore(created, "created_at")
+
+    # treasury adjustments ----------------------------------------------------
+    def _apply_adjustments(self, report, replacing: bool, today: date) -> None:
+        """An amount a person added to settle two points (« Trésorerie »):
+        merged like a point - one changed here is a conflict, kept. Keyed by
+        its random `reference`, which is never made here: a record without a
+        readable one is skipped, since a reference drawn by the preview and
+        another by the confirm would make the two differ. An archive saying
+        nothing of them leaves them alone. Whether it counts - between two
+        points or nowhere - is the page's to say, not the import's."""
+        if self._adjustments is None:
+            return
+        existing = {adjustment.reference: adjustment for adjustment in TreasuryAdjustment.objects.all()}
+        created = []
+        for record in self._adjustments:
+            codec.note_unknown(report, record, ADJUSTMENT_FIELDS, where="ajustements de trésorerie › ")
+            reference = record.get("reference")
+            try:
+                if not isinstance(reference, str) or not reference.strip():
+                    raise codec.FieldValueError("référence manquante")
+                codec.load(TreasuryAdjustment, "reference", reference)
+            except codec.FieldValueError as exc:
+                report.skip(f"Ajustement de trésorerie sans référence lisible : {exc}")
+                continue
+            adjustment = existing.get(reference)
+            said = _adjustment_said(adjustment, record)
+            if reference in self._adjustment_references:
+                report.skip(f"{said} : en double dans l'archive")
+                continue
+            # Named before the rest of its record is read: the prune never
+            # deletes an adjustment the archive holds, even one it could not
+            # read.
+            self._adjustment_references.add(reference)
+            try:
+                if adjustment is None:
+                    for name in ADJUSTMENT_REQUIRED:
+                        codec.load(TreasuryAdjustment, name, record.get(name))
+                    # The reference given, so its default never draws one.
+                    adjustment = TreasuryAdjustment(reference=reference)
+                    codec.assign(adjustment, record, ADJUSTMENT_FIELDS)
+                    _check_day("date", adjustment.date, today)
+                    _check_treasury(adjustment)
+                    moment = adjustment.created_at
+                    adjustment.save()
+                    created.append((adjustment, moment))
+                    report.created(ADJUSTMENTS)
+                    continue
+                different = codec.differences(adjustment, record, ADJUSTMENT_COMPARED)
+            except codec.FieldValueError as exc:
+                report.skip(f"{said} : {exc}")
+                continue
+            if not different:
+                report.unchanged(ADJUSTMENTS)
+            elif replacing:
+                # Every field, the moment included, then the day's bound and
+                # the model's check. What cannot be read leaves it as it was.
+                try:
+                    changed = codec.assign(adjustment, record, ADJUSTMENT_FIELDS)
+                    _check_day("date", adjustment.date, today)
+                    _check_treasury(adjustment)
+                except codec.FieldValueError as exc:
+                    report.skip(f"{said} : {exc}")
+                    continue
+                adjustment.save(update_fields=changed)
+                report.updated(ADJUSTMENTS)
+            else:
+                report.conflict(f"{said} : différent dans l'archive ({_fields(different)}) — gardé tel quel")
         _restore(created, "created_at")
 
     # lines and their payments ------------------------------------------------
@@ -1209,6 +1487,23 @@ class BankSection(Section):
             payers = [pk for pk, key in IncomePayer.objects.values_list("pk", "key") if key not in self._payer_keys]
             if payers:
                 report.deleted(PAYERS, _delete_ids(IncomePayer, payers))
+        # Nor of the treasury's points and adjustments.
+        if self._checkpoints is not None:
+            doomed = [
+                pk
+                for pk, day in TreasuryCheckpoint.objects.values_list("pk", "date")
+                if day not in self._checkpoint_days
+            ]
+            if doomed:
+                report.deleted(CHECKPOINTS, _delete_ids(TreasuryCheckpoint, doomed))
+        if self._adjustments is not None:
+            doomed = [
+                pk
+                for pk, reference in TreasuryAdjustment.objects.values_list("pk", "reference")
+                if reference not in self._adjustment_references
+            ]
+            if doomed:
+                report.deleted(ADJUSTMENTS, _delete_ids(TreasuryAdjustment, doomed))
 
     # -- clear -----------------------------------------------------------------
     def clear(self, ctx, report) -> None:
@@ -1220,6 +1515,8 @@ class BankSection(Section):
             FORMATS: StatementFormat.objects.all().delete()[1].get(StatementFormat._meta.label, 0),
             ALIASES: CounterpartyAlias.objects.all().delete()[1].get(CounterpartyAlias._meta.label, 0),
             PAYERS: IncomePayer.objects.all().delete()[1].get(IncomePayer._meta.label, 0),
+            ADJUSTMENTS: TreasuryAdjustment.objects.all().delete()[1].get(TreasuryAdjustment._meta.label, 0),
+            CHECKPOINTS: TreasuryCheckpoint.objects.all().delete()[1].get(TreasuryCheckpoint._meta.label, 0),
         }
         for entity in ENTITIES:
             report.deleted(entity, counts[entity])
@@ -1229,3 +1526,5 @@ class BankSection(Section):
             report.note(RECOGNITION_CLEAR_NOTE)
         if counts[FORMATS]:
             report.note(FORMAT_CLEAR_NOTE)
+        if counts[CHECKPOINTS] or counts[ADJUSTMENTS]:
+            report.note(TREASURY_CLEAR_NOTE)

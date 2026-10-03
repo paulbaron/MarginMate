@@ -20,6 +20,7 @@ from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
 from common import (
+    AMBIGUOUS_THOUSANDS,
     DateRange,
     date_range,
     format_money,
@@ -1589,11 +1590,6 @@ def stock_take_variance(request, pk):
 #: to ring up (TTC), a field the add form posts, never read from an address.
 SINCE_PARAM = "depuis"
 AMOUNT_PARAM = "montant"
-#: « 10.000 » or « 1,500 »: one separator and three digits after it. A slip
-#: prints cents (read_number takes « 4,000 » for 4), but a person typing an
-#: amount may well mean ten thousand - read as 10,00 €, the page planned for
-#: that. Asked again rather than guessed.
-AMBIGUOUS_THOUSANDS = re.compile(r"-?[0-9]+[.,][0-9]{3}")
 
 
 #: The form field carrying the last entry the page showed ("" for none): a

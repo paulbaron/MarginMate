@@ -18,7 +18,9 @@ up at the bar, were tables two to three times as wide as the screen.
   d'argent » (01/10) is measured with every list it draws: a payer the bank
   prints as one word in « Autres entrées », a card payout printing no gross,
   a cash deposit and a payer retained - each credit's « En caisse » menu
-  beside it - and the card balance's chart.
+  beside it - and the card balance's chart. « Trésorerie » (02/10) with
+  three balances typed and a gap's card: its adjustment form, its points'
+  « Corriger » and « Supprimer », its adjustments' table.
 * **A table's search box sits before the box it scrolls in**, never inside
   it, where it scrolled away with the columns (static/js/datatable.js).
 * **A ticket's photo is part of the page** once stacked above its lines:
@@ -413,6 +415,17 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         terminal = BankTransaction.objects.get(counterparty=TERMINAL)
         IncomePayer.objects.create(key=income.payer_key(terminal), source=IncomeSource.CARD)
         self.income = f"{reverse('bank:income_home')}?du=2026-06-01&au=2026-06-30"
+        # « Trésorerie » over those June lines: 01/06 1 000,00; 08/06
+        # 1 258,60, what the operations explain; 15/06 12 345,60 - a gap to
+        # resolve, its card drawn - and an adjustment counting nowhere.
+        from bank.models import TreasuryAdjustment, TreasuryCheckpoint
+
+        for day, balance in ((1, "1000.00"), (8, "1258.60"), (15, "12345.60")):
+            TreasuryCheckpoint.objects.create(date=date(2026, 6, day), balance=Decimal(balance))
+        TreasuryAdjustment.objects.create(
+            date=date(2026, 5, 20), amount=Decimal("-1234.56"), reason="Frais de tenue de compte exemple"
+        )
+        self.treasury = f"{reverse('bank:treasury')}?tout=1"
 
     def test_no_page_is_wider_than_the_phone(self):
         """Measured on the code of 29/09 with this data, every page but
@@ -439,6 +452,7 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             # by its long note.
             "Combler les écarts": f"{reverse('inventory:stock_gap_filler')}?depuis={self.opening.pk}",
             "les entrées d'argent": self.income,
+            "la trésorerie": self.treasury,
         }
         problems = []
         for width in WIDTHS:
@@ -500,6 +514,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             (self.income, "table[data-table-label='versements carte']", "montant reçu"),
             (self.income, "table[data-table-label='payeurs retenus']", TERMINAL),
             (self.income, ".chart[data-chart='line']", "05/06/2026"),
+            (self.treasury, "#ecarts .card form.inline-form", "Ajouter un ajustement de"),
+            (self.treasury, "table[data-table-label='soldes saisis']", "à résoudre"),
+            (self.treasury, "table[data-table-label='ajustements']", "ne compte pas"),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)
