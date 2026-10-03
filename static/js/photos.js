@@ -1,8 +1,9 @@
 /* Photos taken with the phone's camera or picked from its gallery, into a
  * form - shared by « Consignes » (returnables/_pickup_fields.html: a
  * pickup's photos, set up by returnables.js) and Achats' import card
- * (invoices/_import_card.html: « Prendre une photo », set up by
- * purchases.html).
+ * (invoices/_receipt_upload_form.html, on « Factures »' import card and on
+ * « Ajouter des factures »: « Prendre une photo », set up by
+ * receipt_camera.js).
  *
  * Everything here is a convenience over a form that works without it: the
  * inputs are the browser's own, and the server checks everything again.

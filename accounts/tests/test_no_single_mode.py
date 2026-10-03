@@ -132,6 +132,7 @@ print("REPORT" + json.dumps({
 PUBLIC_VIEWS = [
     "accounts:login",
     "accounts:logout",
+    "accounts:member_invitation",
     "accounts:signup",
     "admin:login",
     "staff:sign",

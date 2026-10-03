@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
 from django.db import transaction
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -17,7 +17,9 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
+import common
 from accounts import sudo
+from accounts.access import access_of, refused
 from accounts.tenancy import bound, integrations_allowed, is_owner
 from accounts.views import file_response, open_stored
 from common import error_for_page, group_thousands, is_id, local_return, safe_next
@@ -72,7 +74,7 @@ from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .parsers import LLM_PARSER_KEY, get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .receipt_batches import READING_REFUSALS
-from .tasks import gather_invoices_task, test_email_pattern_task
+from .tasks import SLIPS_PREFIX, gather_invoices_task, test_email_pattern_task
 from .workspace import batch_deleted, batch_invoice_ids, batch_status_context, render_purchases
 
 
@@ -323,6 +325,33 @@ def _parse_date(value: str | None) -> date | None:
         return None
 
 
+def gathers_slips_only(request) -> bool:
+    """Whether this login may gather nothing but the returnables slips: an
+    employee given « Consignes » and not « Factures » (accounts/access.py)
+    - « Récupérer les bons » posts here. Every other source is the bar's
+    invoices, and their gather's card names them."""
+    return not access_of(request).allows("invoices")
+
+
+def _shows_gather(request, job, *, stopping: bool = False) -> bool:
+    """Whether this login may follow `job`: a source form's « Tester » (a
+    mailbox's senders and subjects, a portal's links, its log) only the
+    owner, whose form it is (accounts/access.py); a gather, any with
+    « Factures », and otherwise one of slips - or one that has not named
+    its sources yet. And stop it: a gather of slips, its sources named - a
+    gather just started may be the owner's invoices'."""
+    if job.kind != ScrapeJob.Kind.GATHER:
+        return access_of(request).owner
+    if not gathers_slips_only(request):
+        return True
+    return job.slips_only if stopping else (not job.progress or job.slips_only)
+
+
+#: Said to a login following gathers of slips only (Consignes) when the
+#: gather running is another's, whose card he is not shown.
+GATHER_ELSEWHERE = "Une récupération est déjà en cours sur Factures : réessayez une fois qu'elle sera finie."
+
+
 def trigger_gather(request):
     if request.method != "POST":
         return redirect("invoices:invoice_list")
@@ -349,8 +378,14 @@ def trigger_gather(request):
     metro_now = request.POST.get("metro_now") == "on"
     if metro_now:
         source_codes.add("METRO")
+    if gathers_slips_only(request) and not all(str(code).startswith(SLIPS_PREFIX) for code in source_codes):
+        return refused(request, access_of(request))
     if active_job is not None:
-        messages.info(request, "Une récupération est déjà en cours : elle s'affiche ci-dessous.")
+        if _shows_gather(request, active_job):
+            messages.info(request, "Une récupération est déjà en cours : elle s'affiche ci-dessous.")
+        else:
+            # Its card is not drawn for him (another's gather, on Factures).
+            messages.info(request, GATHER_ELSEWHERE)
     elif not source_codes:
         # It ran, searched nothing and said "Terminé".
         messages.error(request, "Aucune source cochée : rien à récupérer. Cochez-en au moins une.")
@@ -375,6 +410,14 @@ def gather_status(request, job_id):
     # polled, and its button stayed disabled, for good.
     ScrapeJob.reap_stale()
     job = get_object_or_404(ScrapeJob, pk=job_id)
+    if not _shows_gather(request, job):
+        if gathers_slips_only(request) and job.kind == ScrapeJob.Kind.GATHER:
+            # Consignes drew this card before the gather named its sources,
+            # and they are the bar's invoices: 286, which htmx takes for
+            # « stop polling » - the empty answer takes the card away. A 404
+            # was asked again every second, for as long as the page stayed.
+            return HttpResponse(status=286)
+        raise Http404
     response = render(request, "invoices/_gather_status.html", {"job": job})
     # Polled only while the gather runs: a finished answer is its end.
     return response if job.is_active else _documents_changed(response)
@@ -382,8 +425,10 @@ def gather_status(request, job_id):
 
 def cancel_gather(request, job_id):
     if request.method != "POST":
-        return redirect("invoices:invoice_list")
+        return redirect("returnables:home" if gathers_slips_only(request) else "invoices:invoice_list")
     job = get_object_or_404(ScrapeJob, pk=job_id)
+    if not _shows_gather(request, job, stopping=True):
+        raise Http404
     if job.status in (ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING):
         job.cancel_requested = True
         job.save(update_fields=["cancel_requested"])
@@ -665,25 +710,103 @@ def _pending_receipts():
     return pending_receipts().select_related("supplier").order_by("invoice_date", "id")
 
 
+# « Ajouter des factures » (/invoices/ajouter/): the import's form on a page
+# of its own, for whoever adds documents without going through « Factures » -
+# above all an employee given that page alone (accounts/access.py,
+# `invoices_add`). He follows the imports HIS login sent
+# (`ReceiptBatch.sent_by`), never another's: what they read is all he sees
+# of the documents (a ticket's shop, date and total), and checking them is
+# the owner's.
+
+#: How many of a login's imports « Vos derniers envois » lists.
+SENT_BATCHES_SHOWN = 10
+
+
+def _sender(request) -> str:
+    user = getattr(request, "user", None)
+    return user.get_username() if user is not None and user.is_authenticated else ""
+
+
+def _adds_only(request) -> bool:
+    """Whether this login may add documents and do nothing else with them."""
+    return not access_of(request).allows("invoices")
+
+
+def _followed_batch(request, pk):
+    """The import `pk`, when this login may follow it: any, with
+    « Factures »; one it sent, otherwise. A 404 else - the same as an import
+    that does not exist (their numbers follow each other)."""
+    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    if _adds_only(request) and (not batch.sent_by or batch.sent_by != _sender(request)):
+        raise Http404
+    return batch
+
+
+def _adding_page(request, form=None):
+    """« Ajouter des factures »: the import asked for (`?lot=`, one of this
+    login's) or its latest still running above the form, and its latest
+    imports under it."""
+    sender = _sender(request)
+    sent = list(ReceiptBatch.objects.filter(sent_by=sender)[:SENT_BATCHES_SHOWN]) if sender else []
+    asked = request.GET.get("lot", "")
+    shown = None
+    if is_id(asked):
+        shown = ReceiptBatch.objects.filter(pk=int(asked), sent_by=sender).first() if sender else None
+    elif sent and (sent[0].is_active or sent[0].can_resume):
+        shown = sent[0]
+    add_only = _adds_only(request)
+    context = {
+        "receipt_form": form or ReceiptBatchUploadForm(),
+        "upload_return": reverse("invoices:invoice_add"),
+        "camera_max_bytes": common.ONLINE_SEND_MAX_BYTES,
+        "sent_batches": sent,
+        "add_only": add_only,
+        "adding_page": True,
+    }
+    if shown is not None:
+        context.update(batch_status_context(shown, add_only=add_only))
+    return render(request, "invoices/invoice_add.html", context)
+
+
+#: Said on « Ajouter des factures » as an import starts: the files are on
+#: the server, and the phone may go back to the bar.
+ADDING_SENT = "Envoyé : la lecture continue même si vous quittez la page."
+
+
+def invoice_add(request):
+    ReceiptBatch.reap_stale()
+    return _adding_page(request)
+
+
 def receipt_upload(request):
     """Receipt photos in: a few files, or a whole folder, from the import card.
 
     The files are staged and handed to a background job
     (invoices/receipt_batches.py) - a folder is minutes of OCR, far too long
     to hold a request open - and the browser goes straight to that import,
-    which fills in file by file in the card.
+    which fills in file by file in the card: on « Factures », or back on
+    « Ajouter des factures » for a post from there (`retour`) or a login that
+    may only add.
     """
     from .receipt_batches import stage_batch, start_batch
 
     ReceiptBatch.reap_stale()
+    adding = _adds_only(request) or local_return(request) == reverse("invoices:invoice_add")
     if request.method != "POST":
+        if adding:
+            return redirect("invoices:invoice_add")
         return render_purchases(request, "documents", import_tab="tickets")
     form = ReceiptBatchUploadForm(request.POST, request.FILES)
     if not form.is_valid():
+        if adding:
+            return _adding_page(request, form)
         return render_purchases(request, "documents", import_tab="tickets", receipt_form=form)
     # A file over 25 MB is that file's error, never written (form.refused).
-    batch = stage_batch(form.cleaned_data["files"], form.ignored_names, form.refused)
+    batch = stage_batch(form.cleaned_data["files"], form.ignored_names, form.refused, sent_by=_sender(request))
     start_batch(batch)
+    if adding:
+        messages.success(request, ADDING_SENT)
+        return redirect(f"{reverse('invoices:invoice_add')}?lot={batch.pk}")
     return redirect("invoices:receipt_batch", pk=batch.pk)
 
 
@@ -695,23 +818,40 @@ def receipt_batch(request, pk):
     return render_purchases(request, "documents", import_tab="tickets", batch=batch)
 
 
+def _batch_status(request, batch):
+    """The import's live part, as this login may see it: without the ways
+    to check its documents or file them under a shop for one who may only
+    add (`add_only`, _receipt_batch_status.html)."""
+    add_only = _adds_only(request)
+    context = {**batch_status_context(batch, add_only=add_only), "add_only": add_only}
+    return render(request, "invoices/_receipt_batch_status.html", context)
+
+
 def receipt_batch_status(request, pk):
     """The live part of the batch page, re-fetched by htmx every second while
     the batch runs. It is all that changes on screen, so it has to notice a
     dead batch itself - or "En cours" stays up for ever."""
     ReceiptBatch.reap_stale()
-    batch = get_object_or_404(ReceiptBatch, pk=pk)
-    response = render(request, "invoices/_receipt_batch_status.html", batch_status_context(batch))
+    batch = _followed_batch(request, pk)
+    response = _batch_status(request, batch)
     # Polled only while the import runs: a finished answer is its end, and
     # the list below takes in its documents.
     return response if batch.is_active else _documents_changed(response)
+
+
+def _batch_page(request, batch):
+    """Where an import is followed: « Factures », or « Ajouter des
+    factures » for a login that may only add."""
+    if _adds_only(request):
+        return redirect(f"{reverse('invoices:invoice_add')}?lot={batch.pk}")
+    return redirect("invoices:receipt_batch", pk=batch.pk)
 
 
 def receipt_batch_resume(request, pk):
     """Carry on with the files an interrupted batch never reached."""
     from .receipt_batches import resume_batch
 
-    batch = get_object_or_404(ReceiptBatch, pk=pk)
+    batch = _followed_batch(request, pk)
     if request.method == "POST":
         resumed = resume_batch(batch)
         if resumed:
@@ -721,7 +861,7 @@ def receipt_batch_resume(request, pk):
                 request,
                 "Rien à reprendre : l'import tourne encore (réessayez dans une minute) ou tous ses tickets ont été lus.",
             )
-    return redirect("invoices:receipt_batch", pk=batch.pk)
+    return _batch_page(request, batch)
 
 
 def receipt_batch_assign(request, pk, index):
@@ -798,13 +938,13 @@ def _say_new_shop(request, supplier) -> None:
 
 def receipt_batch_cancel(request, pk):
     """Stop after the file being read now. What was already imported stays."""
+    batch = _followed_batch(request, pk)
     if request.method != "POST":
-        return redirect("invoices:receipt_batch", pk=pk)
-    batch = get_object_or_404(ReceiptBatch, pk=pk)
+        return _batch_page(request, batch)
     if batch.is_active:
         batch.cancel_requested = True
         batch.save(update_fields=["cancel_requested"])
-    return render(request, "invoices/_receipt_batch_status.html", batch_status_context(batch))
+    return _batch_status(request, batch)
 
 
 def supplier_expenses(request, pk):

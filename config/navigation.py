@@ -45,6 +45,14 @@ SECTION_BY_APP = {
     "accounts": "data",
 }
 
+#: Routes lighting another link than their app's: « Accès des employés »
+#: is about the employees (accounts/members.py), « Aucune page ouverte »
+#: lights nothing - the employee seeing it has no link to light.
+SECTION_BY_VIEW = {
+    "accounts:members": "staff",
+    "accounts:no_access": "",
+}
+
 #: What the folded topbar says under 860 px (base.html's .topbar-section):
 #: the words of the link a page lights. The links keep their own words in
 #: base.html; tests/test_navigation.py checks each page shows its lit link's.
@@ -64,12 +72,16 @@ SECTION_LABELS = {
 def section_of(match) -> str:
     if match is None:
         return ""
+    view_name = getattr(match, "view_name", None)
+    if view_name in SECTION_BY_VIEW:
+        return SECTION_BY_VIEW[view_name]
     if match.app_name == "inventory":
         return "stock_takes" if match.url_name in STOCK_TAKE_VIEWS else "products"
     return SECTION_BY_APP.get(match.app_name, "")
 
 
 def navigation(request):
+    from accounts.access import access_of
     from accounts.tenancy import current_tenant
     from recipes.models import PosProduct
 
@@ -78,8 +90,15 @@ def navigation(request):
         # section to light, no database to count in.
         return {}
     section = section_of(getattr(request, "resolver_match", None))
+    # The till products to link: counted for whoever has the link
+    # (accounts/access.py).
+    pending = (
+        PosProduct.objects.filter(recipe__isnull=True, ignored=False).count()
+        if access_of(request).allows("recipes")
+        else 0
+    )
     return {
         "nav_section": section,
         "nav_section_label": SECTION_LABELS.get(section, ""),
-        "pos_pending_count_nav": PosProduct.objects.filter(recipe__isnull=True, ignored=False).count(),
+        "pos_pending_count_nav": pending,
     }

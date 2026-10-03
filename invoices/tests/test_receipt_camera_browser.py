@@ -1,5 +1,5 @@
 """Achats' « Prendre une photo » in a real (headless) Chrome: what
-static/js/photos.js, purchases.html's script and marginmate.css do with the
+static/js/photos.js, static/js/receipt_camera.js and marginmate.css do with the
 import card's camera, which the test client cannot see (the owner, 01/10:
 « prendre les factures en photo directement depuis le site, comme pour les
 consignes »).

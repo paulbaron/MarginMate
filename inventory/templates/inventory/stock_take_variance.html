@@ -5,8 +5,8 @@
     <div class="page-header">
         <h1>Écarts de stock</h1>
         <div class="actions">
-            <a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}?inventaire={{ report.closing_take.pk }}">Voir article par article</a>
-            <a class="btn btn-secondary" href="{% url 'inventory:stock_take_detail' report.closing_take.pk %}">Retour à l'inventaire</a>
+            {% if can.products %}<a class="btn btn-secondary" href="{% url 'inventory:stock_list' %}?inventaire={{ report.closing_take.pk }}">Voir article par article</a>{% endif %}
+            {% if can.stock_takes %}<a class="btn btn-secondary" href="{% url 'inventory:stock_take_detail' report.closing_take.pk %}">Retour à l'inventaire</a>{% elif can.stock_gaps %}<a class="btn btn-secondary" href="{% url 'inventory:stock_gap_filler' %}?depuis={{ report.closing_take.pk }}">Combler les écarts</a>{% endif %}
         </div>
     </div>
 
@@ -56,7 +56,7 @@
             {% endcomment %}
             {% if unlinked_count == 1 %}1 article n'est utilisé{% else %}{{ unlinked_count }} articles ne sont utilisés{% endif %} par aucune recette :
             tout ce qui en sort apparaît comme manquant. À corriger par une recette, ou depuis
-            les produits caisse <a href="{% url 'recipes:pos_product_list' %}">à lier</a>.
+            les produits caisse {% if can.recipes %}<a href="{% url 'recipes:pos_product_list' %}">à lier</a>{% else %}à lier{% endif %}.
         </p>
         {% endif %}
 
@@ -68,7 +68,7 @@
             <p class="muted">
                 Les alternatives d'une recette (« vodka OU gin ») forment un groupe, valorisé au
                 moins cher. La <strong>perte estimée</strong> de chaque article (10 % par défaut,
-                <a href="{% url 'inventory:stock_list' %}">modifiable par article</a>) est déduite du manquant.
+                {% if can.products %}<a href="{% url 'inventory:stock_list' %}">modifiable par article</a>{% else %}modifiable par article{% endif %}) est déduite du manquant.
             </p>
             {% if report.missing %}
             <div class="table-wrap">
