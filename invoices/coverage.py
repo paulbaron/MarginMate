@@ -35,7 +35,8 @@ A source is a mailbox invoice type (« type-<id> ») or a slip format
     one ending before it changes nothing. `floor` (a slip format's, returnables.mail.lookback_floor): no
     search starts before it, so a stretch begun before it starts there.
 - `restart(code, own)`: the source's search settings changed (its patterns,
-  invoices/views.py, returnables/views.py) - its coverage goes back to `own`,
+  invoices/views.py, returnables/views.py, or a « Données » « Remplacer »:
+  transfer/sections/sources.py, returnable_types.py) - its coverage goes back to `own`,
   never forward: the days covered were searched for other mails.
 - `unattended_start(code, own, today)` is where an automatic run starts:
   `searched_until` less OVERLAP_DAYS when known - never the supplier's own

@@ -74,7 +74,7 @@ from returnables.forms import (
     TypeForm,
     check_pickup_date,
 )
-from returnables.mail import fetch_start
+from returnables.mail import SLIP_SOURCE_PREFIX, fetch_start
 from returnables.models import (
     MAX_PHOTOS,
     Pickup,
@@ -128,9 +128,6 @@ SAVED_FLAG = "enregistree"
 GATHER_SHOWN_FOR = timedelta(minutes=10)
 #: The latest gathers searched for one that fetched slips.
 GATHER_JOBS_SEARCHED = 20
-#: The gather's codes for a format's slips (invoices/tasks.py).
-SLIP_SOURCE_PREFIX = "bons-"
-
 ALREADY_GATHERING = "Une récupération est déjà en cours sur Factures."
 #: Said while an automatic gather (invoices/auto_gather.py) runs.
 AUTO_GATHERING = "Une récupération automatique est en cours."

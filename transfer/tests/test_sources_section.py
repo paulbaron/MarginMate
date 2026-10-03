@@ -10,13 +10,16 @@ Every name, address and pattern below is invented.
 
 import os
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 from django.test import TestCase
+from django.utils import timezone
 
 from accounts import paths
-from invoices.models import EmailInvoiceSource, InvoiceType, WebsiteInvoiceSource
+from invoices import coverage
+from invoices.models import EmailInvoiceSource, GatherCoverage, InvoiceType, WebsiteInvoiceSource
+from invoices.tasks import _own_start
 from tests.factories import make_supplier
 from transfer import registry
 from transfer.archive import ArchiveError, ArchiveReader
@@ -745,3 +748,70 @@ class ClearTests(TestCase):
         self.assertFalse(WebsiteInvoiceSource.objects.exists())
         self.assertEqual(run.section("sources").tallies["sources"].deleted, 4)
         self.assertEqual(registry.get("sources").count(), {"sources": 0})
+
+
+class CoverageTests(TestCase):
+    """A mailbox source whose search a « Remplacer » changes has its gather
+    coverage sent back to its own start, as the source form does
+    (invoices/views.py `_search_changed`): the days it covered were searched
+    for other mails, and the automatic gather would otherwise start from the
+    last of them and never fetch the older mails only the new search
+    finds."""
+
+    def setUp(self):
+        self.cellar, self.water = build_sources()
+        self.invoices = InvoiceType.objects.get(name="Cave Essai - Factures")
+        self.code = f"type-{self.invoices.pk}"
+        self.yesterday = timezone.localdate() - timedelta(days=1)
+        GatherCoverage.objects.create(code=self.code, searched_until=self.yesterday)
+        self.reader = export_archive({"sources"}, closed=False)
+        self.addCleanup(self.reader.close)
+
+    def searched_until(self):
+        return GatherCoverage.objects.get(code=self.code).searched_until
+
+    def own_start(self):
+        return _own_start(self.cellar) + timedelta(days=coverage.OVERLAP_DAYS)
+
+    def test_replacing_its_sender_restarts_its_coverage(self):
+        EmailInvoiceSource.objects.filter(invoice_type=self.invoices).update(sender_pattern=r"(?i)compta@cave\.example")
+        report = import_archive(self.reader, REPLACE).section("sources")
+        self.assertEqual(report.tallies["sources"].updated, 1)
+        self.assertEqual(
+            EmailInvoiceSource.objects.get(invoice_type=self.invoices).sender_pattern, r"(?i)factures@cave\.example"
+        )
+        self.assertEqual(self.searched_until(), self.own_start())
+        self.assertLess(self.searched_until(), self.yesterday)
+
+    def test_a_portal_turned_back_into_a_mailbox_search_restarts_its_coverage(self):
+        InvoiceType.objects.filter(pk=self.invoices.pk).update(source_kind=InvoiceType.SourceKind.WEBSITE)
+        EmailInvoiceSource.objects.filter(invoice_type=self.invoices).delete()
+        WebsiteInvoiceSource.objects.create(
+            invoice_type=self.invoices,
+            login_url="https://portail.cave.example/connexion",
+            username_env="CAVE_ESSAI_LOGIN",
+            password_env="CAVE_ESSAI_PASSWORD",
+        )
+        import_archive(self.reader, REPLACE)
+        self.assertEqual(InvoiceType.objects.get(pk=self.invoices.pk).source_kind, InvoiceType.SourceKind.EMAIL)
+        self.assertEqual(self.searched_until(), self.own_start())
+
+    def test_replacing_anything_else_leaves_its_coverage(self):
+        InvoiceType.objects.filter(pk=self.invoices.pk).update(is_active=False)
+        report = import_archive(self.reader, REPLACE).section("sources")
+        self.assertEqual(report.tallies["sources"].updated, 1)
+        self.assertTrue(InvoiceType.objects.get(pk=self.invoices.pk).is_active)
+        self.assertEqual(self.searched_until(), self.yesterday)
+
+    def test_a_merge_keeps_the_search_and_the_coverage(self):
+        EmailInvoiceSource.objects.filter(invoice_type=self.invoices).update(sender_pattern=r"(?i)compta@cave\.example")
+        report = import_archive(self.reader, MERGE).section("sources")
+        self.assertEqual(len(report.conflicts), 1)
+        self.assertEqual(self.searched_until(), self.yesterday)
+
+    def test_a_preview_leaves_the_coverage(self):
+        EmailInvoiceSource.objects.filter(invoice_type=self.invoices).update(sender_pattern=r"(?i)compta@cave\.example")
+        before = db_fingerprint()
+        import_archive(self.reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        self.assertEqual(self.searched_until(), self.yesterday)

@@ -4955,7 +4955,10 @@ imports (`transfer/legacy.py`).
   leaves it as it was - except that a « Ventes » clear or replace deleting
   till days LOWERS `ventes-<key>` to the day before the first of them,
   never forward, `sales.lower_till_coverage`, so the next automatic import
-  fetches them again): in no section, like « Personnel ». Suppliers
+  fetches them again; and a « Remplacer » of « Sources » or « Types et
+  formats de consignes » that changes a mailbox source's search or a slip
+  format's patterns RESTARTS its coverage, as their forms do): in no
+  section, like « Personnel ». Suppliers
   with a reader or a till of their own are never deleted by a clear or a
   replace; a clear only forgets what they learned.
 - **Nor the till's money and payments.** « Ventes » carries the quantities
@@ -8070,7 +8073,14 @@ never a lost bon.
     costs only duplicates refused by sha256; `own` = `fetch_start(saved,
     None, today)`. A name-only save changes nothing. A gather searching the
     source as the save lands records nothing for it (« Search settings
-    saved while it ran », above).
+    saved while it ran », above). **« Données »'s « Remplacer » restarts
+    it the same way** (`sources._restart_coverage`, by the form's rule;
+    `returnable_types.restart_coverage`, on `PATTERN_FIELDS`), inside the
+    run's transaction - a preview rolls it back, and the report does not
+    say it: rewritten in place with the coverage left at yesterday, the
+    older mails only the new search finds were never fetched, and nothing
+    asked for them (`CoverageTests` of both sections). A merge changes no
+    pattern, so no coverage.
   - A database too busy to record it costs a wider search next time, never
     the gather.
 - **Period of an automatic run** (`coverage.unattended_start`): each source

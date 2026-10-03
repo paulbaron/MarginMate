@@ -20,17 +20,20 @@ Every name, number, date, pattern and file below is invented.
 
 import json
 import zipfile
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 import regex
 from django.apps import apps
 from django.test import TestCase
+from django.utils import timezone
 
-from invoices.models import Supplier
+from invoices import coverage
+from invoices.models import GatherCoverage, Supplier
 from returnables import patterns
 from returnables.forms import TypeForm
+from returnables.mail import fetch_start
 from returnables.models import Pickup, ReturnableType, Slip, SlipFormat
 from returnables.tests.support import (
     UBA_PATTERNS,
@@ -1015,3 +1018,73 @@ class OlderArchiveTests(ReturnablesData, TestCase):
         self.assertEqual(ReturnableTypesSection().snapshot(), self.before[KEY])
         self.assertEqual(registry.get(RETURNABLES).snapshot(), pickups)
         self.assertIsNone(run.section(RETURNABLES))
+
+
+# -- the gather's coverage -------------------------------------------------------------------
+
+
+class CoverageTests(TypesData, TestCase):
+    """A format whose search patterns a « Remplacer » changes has its gather
+    coverage sent back to its own start, as its form does
+    (returnables/views.py): the days it covered were searched for other
+    slips, and the automatic gather would otherwise start from the last of
+    them and never fetch the older mails only the new patterns match."""
+
+    SENDER = r"(?i)bons@brasserie-essai\.example"
+    SUBJECT = "(?i)bon de reprise"
+
+    def setUp(self):
+        super().setUp()
+        self.code = f"bons-{self.brewer_format.pk}"
+        self.yesterday = timezone.localdate() - timedelta(days=1)
+        GatherCoverage.objects.create(code=self.code, searched_until=self.yesterday)
+
+    def changed(self, **fields) -> ArchiveReader:
+        """This database's export, the brewer's format changed in it."""
+
+        def change(payload):
+            for record in payload["formats"]:
+                if is_brewer_format(record):
+                    record.update(fields)
+            return payload
+
+        return self.forged(change)
+
+    def searched_until(self):
+        return GatherCoverage.objects.get(code=self.code).searched_until
+
+    def own_start(self):
+        fmt = SlipFormat.objects.get(pk=self.brewer_format.pk)
+        return fetch_start(fmt, None, timezone.localdate()) + timedelta(days=coverage.OVERLAP_DAYS)
+
+    def test_replacing_its_search_patterns_restarts_its_coverage(self):
+        reader = self.changed(sender_pattern=self.SENDER, subject_pattern=self.SUBJECT)
+        report = run_import(reader, REPLACE).section(KEY)
+        self.assertEqual(tally(report, FORMATS)[1], 1)
+        self.assertEqual(SlipFormat.objects.get(pk=self.brewer_format.pk).sender_pattern, self.SENDER)
+        self.assertEqual(self.searched_until(), self.own_start())
+        self.assertLess(self.searched_until(), self.yesterday)
+
+    def test_a_format_never_covered_is_given_its_own_start(self):
+        GatherCoverage.objects.filter(code=self.code).delete()
+        run_import(self.changed(subject_pattern=self.SUBJECT), REPLACE)
+        self.assertEqual(self.searched_until(), self.own_start())
+
+    def test_replacing_anything_else_leaves_its_coverage(self):
+        report = run_import(self.changed(is_active=False), REPLACE).section(KEY)
+        self.assertEqual(tally(report, FORMATS)[1], 1)
+        self.assertFalse(SlipFormat.objects.get(pk=self.brewer_format.pk).is_active)
+        self.assertEqual(self.searched_until(), self.yesterday)
+
+    def test_a_merge_keeps_the_patterns_and_the_coverage(self):
+        report = run_import(self.changed(sender_pattern=self.SENDER, subject_pattern=self.SUBJECT), MERGE).section(KEY)
+        self.assertEqual(len(report.conflicts), 1)
+        self.assertEqual(SlipFormat.objects.get(pk=self.brewer_format.pk).sender_pattern, "")
+        self.assertEqual(self.searched_until(), self.yesterday)
+
+    def test_a_preview_leaves_the_coverage(self):
+        reader = self.changed(sender_pattern=self.SENDER, subject_pattern=self.SUBJECT)
+        before = db_fingerprint()
+        run_import(reader, REPLACE, preview=True)
+        self.assertEqual(db_fingerprint(), before)
+        self.assertEqual(self.searched_until(), self.yesterday)

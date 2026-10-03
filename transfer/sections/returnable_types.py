@@ -202,6 +202,22 @@ def restore_moments(objects_and_moments, field_name: str) -> None:
         type(restored[0]).objects.bulk_update(restored, [field_name])
 
 
+def restart_coverage(fmt) -> None:
+    """A format whose search patterns an import replaced: its gather
+    coverage goes back to its own start, as its form sends it back
+    (returnables/views.py) - the days it covered were searched for other
+    slips, and an automatic gather starting from the last of them would never
+    fetch the older mails only the new patterns match. Inside the run's
+    transaction: a preview rolls it back with the rest, and the report does
+    not say it (`NotAsPreviewed` compares what a run does to the rows)."""
+    from django.utils import timezone
+
+    from invoices import coverage
+    from returnables.mail import SLIP_SOURCE_PREFIX, fetch_start
+
+    coverage.restart(f"{SLIP_SOURCE_PREFIX}{fmt.pk}", fetch_start(fmt, None, timezone.localdate()))
+
+
 def delete_ids(model, ids) -> None:
     """In batches: SQLite caps the variables of one statement."""
     ids = list(ids)
@@ -395,6 +411,8 @@ class ReturnableTypesSection(Section):
                 codec.assign(row, record, FORMAT_COMPARED)
                 row.supplier = supplier
                 row.save()
+                if set(PATTERN_FIELDS) & set(different):
+                    restart_coverage(row)
                 report.updated(FORMATS)
             else:
                 report.conflict(f"{label} : différent dans l'archive ({said(different, LABELS)}) — gardé tel quel")

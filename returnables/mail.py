@@ -23,6 +23,11 @@ from returnables.reading import clean_text
 
 logger = logging.getLogger(__name__)
 
+#: The gather's code for a format's slips is this prefix and the format's pk
+#: (invoices/tasks.SLIPS_PREFIX; its coverage row, invoices/coverage.py): the
+#: format's page and « Données » restart that coverage when its patterns change.
+SLIP_SOURCE_PREFIX = "bons-"
+
 #: The days before the newest slip already brought in that are searched
 #: again: a slip mailed just before it may not have been in the mailbox yet.
 OVERLAP_DAYS = 3

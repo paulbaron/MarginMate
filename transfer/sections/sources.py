@@ -169,6 +169,19 @@ def _messages(error: ValidationError) -> str:
     return " ".join(error.messages)
 
 
+def _restart_coverage(invoice_type) -> None:
+    """A mailbox source whose search an import replaced: its gather coverage
+    goes back to its own start, as the source form sends it back
+    (invoices/views.py) - the days it covered were searched for other mails,
+    and an automatic gather starting from the last of them would never fetch
+    the older mails only the new search finds. Inside the run's transaction:
+    a preview rolls it back with the rest, and the report does not say it."""
+    from invoices import coverage
+    from invoices.tasks import _own_start
+
+    coverage.restart(f"type-{invoice_type.pk}", _own_start(invoice_type.supplier))
+
+
 @registry.register
 class SourcesSection(Section):
     key = KEY
@@ -276,7 +289,10 @@ class SourcesSection(Section):
                 # Again: left inactive against the archive's word, a portal
                 # may differ from it in nothing else.
                 if self._differences(existing, record, supplier, kind, row_data):
+                    search_changed = self._search_changed(existing, kind, row_data)
                     self._replace(existing, record, supplier, kind, row_data)
+                    if search_changed:
+                        _restart_coverage(existing)
                     report.updated("sources")
                     if kind == WEBSITE:
                         portals.update(self._env_names(row_data))
@@ -307,6 +323,21 @@ class SourcesSection(Section):
                 f"Les identifiants des portails ({', '.join(sorted(portals))}) sont lus dans le fichier .env : "
                 "s'il s'agit d'un autre ordinateur, recopiez-les à la main."
             )
+
+    @staticmethod
+    def _search_changed(existing, kind: str, row_data: dict) -> bool:
+        """Whether replacing `existing` by the archive's record changes what
+        its mailbox search looks for - a search pattern, or a source that was
+        no mailbox search -, as the source form asks it (invoices/views.py
+        `_search_changed`). Asked before the replace rewrites the rows."""
+        from invoices.models import EMAIL_SEARCH_FIELDS
+
+        if kind != EMAIL:
+            return False
+        current = _row(existing) if existing.source_kind == EMAIL else None
+        if current is None:
+            return True
+        return bool(EMAIL_SEARCH_FIELDS & set(codec.differences(current, row_data, EMAIL_FIELDS)))
 
     @staticmethod
     def _left_off(existing, kind: str, different: list[str]) -> bool:
