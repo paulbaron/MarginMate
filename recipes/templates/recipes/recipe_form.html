@@ -23,6 +23,7 @@
         {% endfor %}
     </datalist>
     {{ ingredient_units|json_script:"ingredient-units-data" }}
+    {{ ingredient_categories|json_script:"ingredient-categories-data" }}
     <div class="card">
         <form method="post">
             {% csrf_token %}
@@ -30,8 +31,8 @@
 
             <h3>Ingrédients</h3>
             <p class="muted">
-                Chaque ingrédient est un article ou une autre recette. « OU » ajoute une alternative : une variante
-                par combinaison, au même prix de vente.
+                Chaque cadre est un ingrédient. « OU » ajoute une alternative dans le même cadre : une variante par
+                combinaison. Une catégorie ajoute tous ses articles en alternative ; retirez ceux qui ne conviennent pas.
             </p>
             {{ formset.management_form }}
             {% if formset.non_form_errors %}
@@ -48,7 +49,6 @@
                             <span class="muted">×</span>
                             {{ ingredient_form.quantity }}
                             <span class="muted ingredient-unit-label"></span>
-                            <button type="button" class="btn btn-small btn-secondary js-add-alternative">OU</button>
                             <button type="button" class="btn btn-small btn-secondary js-remove-ingredient">Retirer</button>
                         </div>
                         {% for error in ingredient_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
@@ -74,7 +74,6 @@
                 <span class="muted">×</span>
                 {{ formset.empty_form.quantity }}
                 <span class="muted ingredient-unit-label"></span>
-                <button type="button" class="btn btn-small btn-secondary js-add-alternative">OU</button>
                 <button type="button" class="btn btn-small btn-secondary js-remove-ingredient">Retirer</button>
             </div>
         </div>
@@ -82,12 +81,15 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-var ingredientUnits = {};
-try {
-    ingredientUnits = JSON.parse(document.getElementById("ingredient-units-data").textContent);
-} catch (e) {
-    // malformed data - unit labels just won't populate
+function readIsland(id, fallback) {
+    try {
+        return JSON.parse(document.getElementById(id).textContent);
+    } catch (e) {
+        return fallback;
+    }
 }
+var ingredientUnits = readIsland("ingredient-units-data", {});
+var ingredientCategories = readIsland("ingredient-categories-data", []);
 
 // The N existing (saved) ingredients occupy indices 0..N-1 - Django's
 // inline formset requires that exact range to always mean "these are the
@@ -102,8 +104,10 @@ try {
 // from whatever TOTAL_FORMS already was, and keeps that index for its
 // whole life on the page - a removed new row just leaves a gap, which an
 // empty, permitted-to-be-blank form index (anything beyond the original
-// count) is already designed to tolerate.
+// count) is already designed to tolerate. Moving a row into its group's
+// frame (renderGroups) moves the node, never its fields' names.
 var nextFormIndex = parseInt(document.getElementById("id_ingredients-TOTAL_FORMS").value, 10);
+var rowsBox = document.getElementById("ingredient-rows");
 
 // One past the highest group already on the page - the server renders the
 // spare blank row with its own fresh group (see BaseRecipeIngredientFormSet),
@@ -113,22 +117,284 @@ document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) 
     nextGroupId = Math.max(nextGroupId, parseInt(wrapper.dataset.group, 10) + 1);
 });
 
-function updateUnitLabel(row) {
-    var select = row.querySelector("select[name$='-source']");
-    var label = row.querySelector(".ingredient-unit-label");
+function plainText(text) {
+    return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+}
+
+// Every ingredient the picker offers, read once off the spare row's
+// <select> (each row's holds the same options), and the categories beside
+// them. A category is never a value of the <select>: picking one adds rows,
+// each posting one article.
+var pickable = [];
+var labelOf = {};
+(function () {
+    var select = document.getElementById("empty-ingredient-row").content.querySelector("select");
+    Array.prototype.forEach.call(select.options, function (option) {
+        if (!option.value) return;
+        var group = option.parentElement.tagName === "OPTGROUP" ? option.parentElement.label : "";
+        labelOf[option.value] = option.textContent;
+        pickable.push({
+            value: option.value,
+            label: option.textContent,
+            kind: group === "Recettes" ? "Recette" : "Article",
+            key: plainText(option.textContent),
+        });
+    });
+    ingredientCategories.forEach(function (category) {
+        var sources = category.sources.filter(function (source) { return source in labelOf; });
+        if (!sources.length) return;
+        pickable.push({
+            category: category.name,
+            sources: sources,
+            label: "Catégorie : " + category.name,
+            kind: sources.length + (sources.length > 1 ? " articles" : " article"),
+            key: plainText(category.name),
+        });
+    });
+})();
+
+var MAX_RESULTS = 40;
+
+function matches(query) {
+    var words = plainText(query).split(/\s+/).filter(Boolean);
+    var whole = words.join(" ");
+    var found = [];
+    pickable.forEach(function (entry) {
+        if (!words.every(function (word) { return entry.key.indexOf(word) >= 0; })) return;
+        var rank = entry.key.indexOf(whole) === 0 ? 0 : (" " + entry.key).indexOf(" " + words[0]) >= 0 ? 1 : 2;
+        // Categories first: there are few of them, and a word typed is
+        // usually one ("rhum" - the category, then every rum).
+        found.push({ entry: entry, rank: (entry.category ? 0 : 3) + rank });
+    });
+    found.sort(function (a, b) {
+        return a.rank - b.rank || a.entry.key.localeCompare(b.entry.key);
+    });
+    return found.map(function (item) { return item.entry; });
+}
+
+function selectOf(wrapper) { return wrapper.querySelector("select[name$='-source']"); }
+function quantityOf(wrapper) { return wrapper.querySelector("input[name$='-quantity']"); }
+function searchOf(wrapper) { return wrapper.querySelector(".ingredient-search"); }
+function visibleWrappers(groupId) {
+    return Array.from(document.querySelectorAll(".ingredient-row-wrapper")).filter(function (wrapper) {
+        return !wrapper.hidden && (groupId === undefined || wrapper.dataset.group === String(groupId));
+    });
+}
+
+function updateUnitLabel(wrapper) {
+    var select = selectOf(wrapper);
+    var label = wrapper.querySelector(".ingredient-unit-label");
     if (select && label) label.textContent = ingredientUnits[select.value] || "";
 }
 
-// Marks a wrapper with .js-same-group-follows whenever the NEXT visible
-// wrapper shares its group - purely visual (see the "OU" ::before rule in
-// marginmate.css), so alternatives read as one connected choice instead of
-// a row of otherwise-identical-looking ingredient lines.
-function renderGroupDividers() {
-    var wrappers = Array.from(document.querySelectorAll(".ingredient-row-wrapper")).filter(function (w) { return !w.hidden; });
-    wrappers.forEach(function (wrapper, index) {
-        var next = wrappers[index + 1];
-        var sameGroup = next && next.dataset.group === wrapper.dataset.group;
-        wrapper.classList.toggle("js-same-group-follows", !!sameGroup);
+function setSource(wrapper, value) {
+    var select = selectOf(wrapper);
+    select.value = value;
+    var search = searchOf(wrapper);
+    if (search) search.value = labelOf[value] || "";
+    updateUnitLabel(wrapper);
+}
+
+var pickerCount = 0;
+
+// The <select> stays the form's field (and the whole picker without
+// JavaScript); a search box takes its place on screen. Built from nodes and
+// text only: the labels are invoice text.
+function setUpPicker(wrapper) {
+    var select = selectOf(wrapper);
+    if (!select || select.hasAttribute("data-picker-ready")) return;
+    select.setAttribute("data-picker-ready", "");
+    var listId = "ingredient-results-" + pickerCount++;
+    var holder = document.createElement("div");
+    holder.className = "ingredient-picker";
+    var search = document.createElement("input");
+    search.type = "text";
+    search.className = "ingredient-search";
+    search.autocomplete = "off";
+    search.placeholder = "Chercher un article, une recette, une catégorie…";
+    search.setAttribute("aria-label", "Ingrédient");
+    search.setAttribute("role", "combobox");
+    search.setAttribute("aria-autocomplete", "list");
+    search.setAttribute("aria-expanded", "false");
+    search.setAttribute("aria-controls", listId);
+    search.value = labelOf[select.value] || "";
+    if (wrapper.querySelector(".message-error")) search.setAttribute("aria-invalid", "true");
+    var list = document.createElement("ul");
+    list.className = "ingredient-results";
+    list.id = listId;
+    list.setAttribute("role", "listbox");
+    list.hidden = true;
+    holder.appendChild(search);
+    holder.appendChild(list);
+    select.hidden = true;
+    select.parentNode.insertBefore(holder, select);
+    // A press on the list (an option, its scroll bar) keeps the focus in the
+    // box: a blur there would close the list before the click lands.
+    list.addEventListener("mousedown", function (event) { event.preventDefault(); });
+
+    var shown = [];
+    var active = -1;
+
+    function close() {
+        list.hidden = true;
+        search.setAttribute("aria-expanded", "false");
+        search.removeAttribute("aria-activedescendant");
+        active = -1;
+    }
+    function highlight(index) {
+        var items = list.querySelectorAll("[role=option]");
+        items.forEach(function (item, i) {
+            var on = i === index;
+            item.classList.toggle("is-active", on);
+            item.setAttribute("aria-selected", on ? "true" : "false");
+            if (on) {
+                search.setAttribute("aria-activedescendant", item.id);
+                item.scrollIntoView({ block: "nearest" });
+            }
+        });
+        active = index;
+    }
+    function render() {
+        var found = matches(search.value === labelOf[select.value] ? "" : search.value);
+        shown = found.slice(0, MAX_RESULTS);
+        list.textContent = "";
+        shown.forEach(function (entry, i) {
+            var item = document.createElement("li");
+            item.id = listId + "-" + i;
+            item.setAttribute("role", "option");
+            if (entry.category) item.className = "is-category";
+            var name = document.createElement("span");
+            name.textContent = entry.label;
+            var kind = document.createElement("span");
+            kind.className = "ingredient-result-kind";
+            kind.textContent = entry.kind;
+            item.appendChild(name);
+            item.appendChild(kind);
+            item.addEventListener("click", function () { pick(entry); });
+            list.appendChild(item);
+        });
+        var note = document.createElement("li");
+        note.className = "ingredient-results-note";
+        if (!found.length) note.textContent = "Rien ne correspond.";
+        else if (found.length > shown.length) note.textContent = "… et " + (found.length - shown.length) + " de plus : précisez la recherche.";
+        if (note.textContent) list.appendChild(note);
+        list.hidden = false;
+        search.setAttribute("aria-expanded", "true");
+        highlight(shown.length && search.value.trim() && search.value !== labelOf[select.value] ? 0 : -1);
+    }
+    function pick(entry) {
+        close();
+        if (entry.category) {
+            addCategory(wrapper, entry);
+            return;
+        }
+        setSource(wrapper, entry.value);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        var quantity = quantityOf(wrapper);
+        if (quantity) quantity.focus();
+    }
+    // What the box says once left: the ingredient chosen, or nothing when it
+    // was emptied - never a half-typed word that posts something else.
+    function settle() {
+        if (!search.value.trim()) {
+            if (select.value) {
+                select.value = "";
+                updateUnitLabel(wrapper);
+            }
+            return;
+        }
+        search.value = labelOf[select.value] || "";
+    }
+
+    search.addEventListener("focus", function () {
+        search.select();
+        render();
+    });
+    search.addEventListener("input", render);
+    search.addEventListener("blur", function () {
+        close();
+        settle();
+    });
+    search.addEventListener("keydown", function (event) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (list.hidden) render();
+            if (!shown.length) return;
+            var step = event.key === "ArrowDown" ? 1 : -1;
+            highlight((active + step + shown.length) % shown.length);
+        } else if (event.key === "Enter") {
+            // Enter picks; it never sends the recipe half written.
+            event.preventDefault();
+            if (!list.hidden && active >= 0) pick(shown[active]);
+        } else if (event.key === "Escape") {
+            if (list.hidden) return;
+            event.preventDefault();
+            close();
+            search.value = labelOf[select.value] || "";
+        }
+    });
+}
+
+// Each group is drawn as one frame: a lone ingredient, or a choice whose
+// options are separated by « OU ». The rows are gathered by their group,
+// wherever they sit in the page (a form sent back with an error lists the
+// rows added in the browser after the saved ones).
+function groupFrame(groupId) {
+    var frame = rowsBox.querySelector(".ingredient-group[data-group='" + groupId + "']");
+    if (frame) return frame;
+    frame = document.createElement("div");
+    frame.className = "ingredient-group";
+    frame.dataset.group = groupId;
+    var head = document.createElement("div");
+    head.className = "ingredient-group-head";
+    var title = document.createElement("span");
+    title.className = "ingredient-group-title";
+    var removeAll = document.createElement("button");
+    removeAll.type = "button";
+    removeAll.className = "btn btn-small btn-secondary js-remove-group";
+    removeAll.textContent = "Retirer tout le choix";
+    head.appendChild(title);
+    head.appendChild(removeAll);
+    var rows = document.createElement("div");
+    rows.className = "ingredient-group-rows";
+    var foot = document.createElement("div");
+    foot.className = "ingredient-group-foot";
+    var alternative = document.createElement("button");
+    alternative.type = "button";
+    alternative.className = "btn btn-small btn-secondary js-add-alternative";
+    alternative.textContent = "+ OU une autre option";
+    var status = document.createElement("p");
+    status.className = "ingredient-group-status";
+    status.setAttribute("role", "status");
+    foot.appendChild(alternative);
+    foot.appendChild(status);
+    frame.appendChild(head);
+    frame.appendChild(rows);
+    frame.appendChild(foot);
+    // In the page at once: the next lookup finds it rather than making a
+    // second, empty one.
+    rowsBox.appendChild(frame);
+    return frame;
+}
+
+function renderGroups() {
+    var order = [];
+    document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
+        var groupId = wrapper.dataset.group;
+        if (order.indexOf(groupId) < 0) order.push(groupId);
+        groupFrame(groupId).querySelector(".ingredient-group-rows").appendChild(wrapper);
+    });
+    rowsBox.querySelectorAll(".ingredient-group").forEach(function (frame) {
+        if (order.indexOf(frame.dataset.group) < 0) frame.remove();
+    });
+    order.forEach(function (groupId) {
+        var frame = groupFrame(groupId);
+        rowsBox.appendChild(frame);
+        var count = visibleWrappers(groupId).length;
+        frame.hidden = count === 0;
+        frame.classList.toggle("is-choice", count > 1);
+        frame.querySelector(".ingredient-group-head").hidden = count < 2;
+        frame.querySelector(".ingredient-group-title").textContent = "Au choix : une option parmi " + count;
     });
 }
 
@@ -136,43 +402,107 @@ function addRow(groupId) {
     var index = nextFormIndex++;
     document.getElementById("id_ingredients-TOTAL_FORMS").value = nextFormIndex;
     var html = document.getElementById("empty-ingredient-row").innerHTML.replace(/__prefix__/g, index);
-    var wrapper = document.createElement("div");
-    wrapper.innerHTML = html.trim();
-    var newRow = wrapper.firstElementChild;
+    var holder = document.createElement("div");
+    holder.innerHTML = html.trim();
+    var newRow = holder.firstElementChild;
     newRow.dataset.group = groupId;
     newRow.querySelector("input[name$='-group']").value = groupId;
+    setUpPicker(newRow);
     return newRow;
+}
+
+function insertInGroup(row, groupId, after) {
+    var rows = visibleWrappers(groupId);
+    var last = after || rows[rows.length - 1];
+    if (last) last.insertAdjacentElement("afterend", row);
+    else rowsBox.appendChild(row);
+}
+
+function sayInGroup(groupId, text) {
+    var frame = rowsBox.querySelector(".ingredient-group[data-group='" + groupId + "']");
+    if (frame) frame.querySelector(".ingredient-group-status").textContent = text;
+}
+
+// A category picked in a row: that row takes its first article, and every
+// other article of it joins the row's « OU » group with the same quantity.
+// What the group already offers is not added twice.
+function addCategory(wrapper, entry) {
+    var groupId = wrapper.dataset.group;
+    var already = {};
+    visibleWrappers(groupId).forEach(function (row) {
+        if (row !== wrapper && selectOf(row).value) already[selectOf(row).value] = true;
+    });
+    var sources = entry.sources.filter(function (source) { return !already[source]; });
+    if (!sources.length) {
+        searchOf(wrapper).value = labelOf[selectOf(wrapper).value] || "";
+        renderGroups();
+        sayInGroup(groupId, "Tous les articles de « " + entry.category + " » sont déjà dans ce choix.");
+        return;
+    }
+    var quantity = quantityOf(wrapper).value;
+    var rows = [wrapper];
+    setSource(wrapper, sources[0]);
+    var previous = wrapper;
+    sources.slice(1).forEach(function (source) {
+        var row = addRow(groupId);
+        setSource(row, source);
+        quantityOf(row).value = quantity;
+        insertInGroup(row, groupId, previous);
+        previous = row;
+        rows.push(row);
+    });
+    rows.forEach(function (row) { row.dataset.followsQuantity = ""; });
+    renderGroups();
+    sayInGroup(
+        groupId,
+        sources.length + (sources.length > 1 ? " articles" : " article") + " de « " + entry.category +
+        " » en alternative : retirez ceux qui ne conviennent pas" + (quantity ? "." : ", puis donnez la quantité.")
+    );
+    quantityOf(wrapper).focus();
+}
+
+function removeWrapper(wrapper) {
+    var idField = wrapper.querySelector("input[name$='-id']");
+    if (idField && idField.value) {
+        // an existing, saved ingredient - mark for deletion on save
+        // rather than removing outright, since blanking its other
+        // fields instead would fail "this field is required".
+        wrapper.querySelector("input[name$='-DELETE']").checked = true;
+        wrapper.hidden = true;
+    } else {
+        // never-saved row - just drop it, leaving a gap in the index
+        // range is fine (see the note above nextFormIndex).
+        wrapper.remove();
+    }
 }
 
 document.getElementById("add-ingredient-row").addEventListener("click", function () {
     var row = addRow(nextGroupId++);
-    document.getElementById("ingredient-rows").appendChild(row);
-    renderGroupDividers();
+    rowsBox.appendChild(row);
+    renderGroups();
+    searchOf(row).focus();
 });
 
 document.addEventListener("click", function (event) {
+    var frame = event.target.closest(".ingredient-group");
     if (event.target.matches(".js-add-alternative")) {
-        var wrapper = event.target.closest(".ingredient-row-wrapper");
-        var row = addRow(parseInt(wrapper.dataset.group, 10));
-        wrapper.insertAdjacentElement("afterend", row);
-        renderGroupDividers();
+        var groupId = frame.dataset.group;
+        var row = addRow(groupId);
+        insertInGroup(row, groupId);
+        renderGroups();
+        sayInGroup(groupId, "");
+        searchOf(row).focus();
         return;
     }
     if (event.target.matches(".js-remove-ingredient")) {
-        var wrapper = event.target.closest(".ingredient-row-wrapper");
-        var idField = wrapper.querySelector("input[name$='-id']");
-        if (idField && idField.value) {
-            // an existing, saved ingredient - mark for deletion on save
-            // rather than removing outright, since blanking its other
-            // fields instead would fail "this field is required".
-            wrapper.querySelector("input[name$='-DELETE']").checked = true;
-            wrapper.hidden = true;
-        } else {
-            // never-saved row - just drop it, leaving a gap in the index
-            // range is fine (see the note above nextFormIndex).
-            wrapper.remove();
-        }
-        renderGroupDividers();
+        removeWrapper(event.target.closest(".ingredient-row-wrapper"));
+        renderGroups();
+        sayInGroup(frame.dataset.group, "");
+        return;
+    }
+    if (event.target.matches(".js-remove-group")) {
+        visibleWrappers(frame.dataset.group).forEach(removeWrapper);
+        renderGroups();
     }
 });
 
@@ -180,9 +510,31 @@ document.addEventListener("change", function (event) {
     if (!event.target.matches("select[name$='-source']")) return;
     updateUnitLabel(event.target.closest(".ingredient-row-wrapper"));
 });
+
+// The rows a category added share their quantity until one of them is
+// given its own: typing in one changes those still showing what it showed.
+document.addEventListener("focusin", function (event) {
+    if (event.target.matches("input[name$='-quantity']")) event.target.dataset.before = event.target.value;
+});
+document.addEventListener("input", function (event) {
+    var input = event.target;
+    if (!input.matches("input[name$='-quantity']")) return;
+    var wrapper = input.closest(".ingredient-row-wrapper");
+    if (!("followsQuantity" in wrapper.dataset)) return;
+    var before = input.dataset.before || "";
+    visibleWrappers(wrapper.dataset.group).forEach(function (row) {
+        var other = quantityOf(row);
+        if (row !== wrapper && "followsQuantity" in row.dataset && other.value === before) other.value = input.value;
+    });
+    input.dataset.before = input.value;
+});
+
 document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll(".ingredient-row-wrapper").forEach(updateUnitLabel);
-    renderGroupDividers();
+    document.querySelectorAll(".ingredient-row-wrapper").forEach(function (wrapper) {
+        setUpPicker(wrapper);
+        updateUnitLabel(wrapper);
+    });
+    renderGroups();
 });
 </script>
 {% endblock %}

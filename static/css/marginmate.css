@@ -497,20 +497,79 @@ form p { margin: var(--s3) 0; }
 
 /* --------------------------------------------------------- recipe "OU" rows */
 
+/* Each ingredient is a frame; a choice (« OU ») is one frame holding its
+   options, amber-edged, « OU » between them - two ingredients are never
+   read as one choice, nor a choice as two ingredients. Without JavaScript
+   the rows stay as the server drew them, one under the other. */
 .ingredient-row-wrapper { margin-bottom: var(--s2); }
-.ingredient-row-wrapper.js-same-group-follows { margin-bottom: var(--s1); }
-.ingredient-row-wrapper.js-same-group-follows + .ingredient-row-wrapper::before {
+.ingredient-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    padding: var(--s2) var(--s3);
+    margin-bottom: var(--s3);
+}
+.ingredient-group.is-choice { border-color: var(--amber); border-left-width: 4px; }
+.ingredient-group .ingredient-row-wrapper { margin-bottom: 0; }
+.ingredient-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s2);
+    margin-bottom: var(--s2);
+}
+.ingredient-group-title { color: var(--amber); font-size: 0.8rem; font-weight: 700; }
+.ingredient-group.is-choice .ingredient-row-wrapper:not([hidden]) ~ .ingredient-row-wrapper:not([hidden])::before {
     content: "OU";
-    display: inline-block;
+    display: block;
+    width: max-content;
     color: var(--amber);
     background: var(--amber-bg);
     border-radius: var(--radius-pill);
-    padding: 0 0.5em;
+    padding: 0 0.6em;
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.05em;
-    margin: 0 0 var(--s1);
+    margin: var(--s2) 0;
 }
+.ingredient-group-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+.ingredient-group-status { margin: 0; color: var(--text-dim); font-size: 0.85rem; }
+.ingredient-group-status:empty { display: none; }
+
+/* The ingredient's search box, in place of its <select>. */
+.ingredient-picker { position: relative; flex: 1 1 18rem; min-width: 0; }
+.ingredient-search { width: 100%; }
+.ingredient-results {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    max-height: 18rem;
+    overflow-y: auto;
+    margin: 0;
+    padding: var(--s1);
+    list-style: none;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-pop);
+}
+.ingredient-results [role=option] {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s2);
+    padding: var(--s2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    overflow-wrap: anywhere;
+}
+.ingredient-results [role=option].is-active,
+.ingredient-results [role=option]:hover { background: var(--panel-hover); }
+.ingredient-results .is-category { color: var(--amber); font-weight: 600; }
+.ingredient-result-kind { color: var(--muted); font-size: 0.8rem; font-weight: 400; white-space: nowrap; }
+.ingredient-results-note { padding: var(--s2); color: var(--muted); font-size: 0.85rem; }
 
 /* ----------------------------------------------------------------- dropdown */
 
