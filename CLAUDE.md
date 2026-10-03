@@ -5986,6 +5986,27 @@ For the variance engine this means a nested choice must be pooled too:
 **never capped**, because a pool missing a member reports that member's whole
 consumption as unexplained. Amounts are capped (`MAX_SUB_VARIATIONS`).
 
+### The recipe form's ingredients (`recipe_form.html`, 03/10/2026)
+
+The owner: a choice (« OU ») and two ingredients looked alike; a category
+should add all its articles as alternatives, pruned by hand; a search box
+rather than a dropdown. All in the page's script, nothing saved differently:
+
+- **Each group is a frame** (`renderGroups`), a choice amber-edged with
+  « OU » between its options. Rows are gathered by `data-group` wherever
+  they sit - moving a node never renames its fields (the note above
+  `nextFormIndex`). Without JavaScript the rows stay flat.
+- **The `<select>` stays the field**, hidden behind a search box
+  (`setUpPicker`, nodes and text only), accents and case aside; Enter picks
+  and never sends the form; a box left half typed shows the choice again.
+- **A category is never a form choice** (`forms.ingredient_categories`,
+  the island `ingredient-categories-data`): picked, it becomes one row per
+  article in the row's group, what is already there skipped. Those rows
+  share their quantity until one is given its own.
+
+Tests: `recipes/tests/test_ingredient_picker.py`, and in Chrome
+`test_recipe_form_browser.py`.
+
 ### The recipes that use an article (`recipes/usage.py`)
 
 « Le sucre augmente, qu'est-ce que je dois reprendre ? » — the « Recettes »
