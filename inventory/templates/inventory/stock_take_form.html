@@ -52,10 +52,15 @@
             </div>
             <button type="button" class="btn btn-small btn-secondary" id="add-line-row">+ Ajouter une ligne</button>
 
+            {% comment %}
+            The value is shown to whoever is shown what articles cost (accounts/access.py
+            `sees_costs`); an employee counting without it sees the draft's state alone, and the page
+            prices nothing (VALUE_URL empty).
+            {% endcomment %}
             <div class="stock-take-total">
-                <span>Valeur de l'inventaire (HT)</span>
-                <strong id="inventory-total">—</strong>
-                <span class="muted" id="inventory-total-note"></span>
+                {% if can.sees_costs %}<span>Valeur de l'inventaire (HT)</span>{% endif %}
+                <strong id="inventory-total"{% if not can.sees_costs %} hidden{% endif %}>—</strong>
+                <span class="muted" id="inventory-total-note"{% if not can.sees_costs %} hidden{% endif %}></span>
                 <span class="muted draft-state" id="draft-state"></span>
             </div>
 
@@ -92,7 +97,7 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-var VALUE_URL = "{% url 'inventory:value_stock_take_line' %}";
+var VALUE_URL = "{% if can.sees_costs %}{% url 'inventory:value_stock_take_line' %}{% endif %}";
 
 var entryData = {};
 try {
@@ -282,6 +287,8 @@ function showRowValue(row, data, failed) {
 }
 
 function priceRow(row) {
+    // No price to show to this login (VALUE_URL empty): nothing asked.
+    if (!VALUE_URL) return;
     var entry = row.querySelector("input[name$='-entry_search']");
     var quantity = row.querySelector("input[name$='-counted_quantity']");
     var unit = row.querySelector("select[name$='-unit']");

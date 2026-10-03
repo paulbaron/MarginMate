@@ -140,12 +140,12 @@ class ShopChoiceError(Exception):
     message is for the operator."""
 
 
-def stage_batch(uploads, ignored_names=(), refused=()) -> ReceiptBatch:
+def stage_batch(uploads, ignored_names=(), refused=(), sent_by: str = "") -> ReceiptBatch:
     """Copy the uploaded files somewhere that outlives the request, and
     record one pending entry per file - plus one error per file `refused`
     before it was written ((name, sentence): too heavy, forms.py), and one
-    per ignored name."""
-    batch = ReceiptBatch.objects.create()
+    per ignored name. `sent_by`: the login sending them (its username)."""
+    batch = ReceiptBatch.objects.create(sent_by=sent_by)
     os.makedirs(_staging_folder(batch), exist_ok=True)
     results = []
     for index, upload in enumerate(uploads):

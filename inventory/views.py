@@ -19,6 +19,7 @@ from django.utils.html import escape
 from django.utils.http import urlencode
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
+from accounts.access import access_of
 from common import (
     DateRange,
     date_range,
@@ -1658,6 +1659,14 @@ def _chosen_take(asked: str, takes) -> StockTake | None:
     return next((take for take in takes if is_id(asked) and take.pk == int(asked)), None)
 
 
+def unlinked_till_products() -> int:
+    """How many till products no recipe claims (and not set aside): what
+    « Combler les écarts » warns about."""
+    from recipes.models import PosProduct
+
+    return PosProduct.objects.filter(recipe__isnull=True, ignored=False).count()
+
+
 def stock_gap_filler(request):
     """« Combler les écarts »: the sales to ring up so that every stock gap
     since a count shrinks by about the same share - see inventory/gaps.py and
@@ -1716,6 +1725,10 @@ def stock_gap_filler(request):
             "sales": sum(entry.sales for entry in entries),
             "shares": share_summary(report) if entries else None,
             "stale": list_is_stale(report, entries),
+            # Till products with no recipe: their sales count as gaps. The
+            # page's own count, for whoever opens it - the navigation's badge
+            # is counted for the logins given Recettes only (accounts/access.py).
+            "unlinked_till_products": unlinked_till_products(),
         }
     )
     return render(request, "inventory/stock_gap_filler.html", context)
@@ -2053,11 +2066,15 @@ def _stock_take_form_view(request, stock_take):
             # What the already-saved lines are worth, so the running total is
             # right the moment the page opens without valuing anything again
             # (a saved line's value is frozen - see StockTake's docstring).
+            # None for an employee shown no costs (accounts/access.py): the
+            # page prices nothing for him, and prints no value.
             "saved_values": {
                 str(line_form.instance.pk): str(line_form.instance.value_ht)
                 for line_form in formset.forms
                 if line_form.instance.pk and line_form.instance.value_ht is not None
-            },
+            }
+            if access_of(request).sees_costs
+            else {},
         },
     )
 

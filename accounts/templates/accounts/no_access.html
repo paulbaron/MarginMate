@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% comment %}
+An employee to whom no page is open yet (accounts.members.no_access, `Access.home_url`): his
+topbar holds no link, only « Se déconnecter ».
+{% endcomment %}
+{% block title %}Aucune page ouverte - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Aucune page ouverte</h1>
+            <p class="page-subtitle">
+                Votre employeur ne vous a encore donné accès à aucune page de l'espace « {{ request.tenant.name }} » :
+                demandez-lui de cocher celles dont vous avez besoin.
+            </p>
+        </div>
+    </div>
+{% endblock %}

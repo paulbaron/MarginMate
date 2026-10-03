@@ -133,7 +133,7 @@ class MembershipAdminTests(TwoTenantsTestCase):
 
         page = self.client.get(reverse("admin:accounts_membership_add"))
         self.assertEqual(page.context["adminform"].form.initial["role"], Membership.Role.MEMBER)
-        self.assertContains(page, '<option value="member" selected>Membre</option>', html=True)
+        self.assertContains(page, '<option value="member" selected>Employé</option>', html=True)
         self.assertContains(page, escape(ROLE_HELP))
         # The model is untouched: no migration for a default.
         self.assertEqual(Membership._meta.get_field("role").default, Membership.Role.OWNER)

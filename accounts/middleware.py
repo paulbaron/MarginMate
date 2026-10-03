@@ -69,6 +69,7 @@ from django.urls import Resolver404, resolve
 from django.utils.cache import add_never_cache_headers
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from .access import Access
 from .tenancy import TenancyError, bound_tenant, storage_scope
 
 logger = logging.getLogger(__name__)
@@ -118,15 +119,19 @@ class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
         )
 
 
-def tenant_of(user):
-    """The tenant a logged-in user works in: his first membership of an
-    active tenant (one per user today). One query on the accounts database;
-    None when he has none."""
+def membership_of(user):
+    """The membership a logged-in user works through: his first of an
+    active tenant (one per user today), its tenant with it - the role and
+    the pages it opens (accounts/access.py) come in the same row. One query
+    on the accounts database; None when he has none."""
     from .models import Membership
 
-    membership = (
-        Membership.objects.select_related("tenant").filter(user=user, tenant__is_active=True).order_by("pk").first()
-    )
+    return Membership.objects.select_related("tenant").filter(user=user, tenant__is_active=True).order_by("pk").first()
+
+
+def tenant_of(user):
+    """The tenant a logged-in user works in (`membership_of`'s), or None."""
+    membership = membership_of(user)
     return membership.tenant if membership else None
 
 
@@ -243,9 +248,10 @@ class TenantMiddleware:
             # Nothing of the visitor's is bound (the module's docstring).
             return self.get_response(request)
 
-        tenant = tenant_of(user)
-        if tenant is None:
+        membership = membership_of(user)
+        if membership is None:
             return render(request, "accounts/no_tenant.html", status=403)
+        tenant = membership.tenant
         if not _session_allows(request, tenant):
             return _logged_out_for_another_tenant(request, tenant)
 
@@ -264,6 +270,10 @@ class TenantMiddleware:
             return _unavailable(request, tenant)
 
         request.tenant = tenant
+        # What this login may open (accounts/access.py, whose
+        # AccessMiddleware is the gate): read from the same row, no query.
+        request.membership = membership
+        request.access = Access.of(membership)
         _scope_the_storage(request, tenant)
         with stack:
             response = self.get_response(request)

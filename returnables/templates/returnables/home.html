@@ -43,7 +43,8 @@
             <p class="empty-state pickup-strip-empty">Aucune reprise enregistrée.</p>
         {% endif %}
         {% if gather_running_sentence %}<p class="muted">{{ gather_running_sentence }}</p>{% endif %}
-        {% if gather_job %}{% include "invoices/_gather_status.html" with job=gather_job %}{% endif %}
+        {% comment %}A gather running whose card is withheld (another's): a stand-in that polls nothing holds the button (ui.js reads data-job-active).{% endcomment %}
+        {% if gather_job %}{% include "invoices/_gather_status.html" with job=gather_job %}{% elif gather_running %}<div id="gather-status" data-job-active hidden></div>{% endif %}
     </div>
 
     <section class="card pickup-new" id="new-pickup">
@@ -56,10 +57,10 @@
 
     <div id="returnables-live-bottom" hx-get="{{ live_url }}" hx-select="#returnables-live-bottom" hx-target="this" hx-swap="outerHTML" hx-trigger="documents-changed from:body">
         {% for fmt, problem in broken_formats %}
-            <p class="message message-error">Format « {{ fmt.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:format_edit' fmt.pk %}">corrigez-le</a></p>
+            <p class="message message-error">Format « {{ fmt.name }} » : motif invalide : {{ problem }}{% if can.owner %} — <a href="{% url 'returnables:format_edit' fmt.pk %}">corrigez-le</a>{% endif %}</p>
         {% endfor %}
         {% for kind, problem in type_errors %}
-            <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a></p>
+            <p class="message message-error">Type « {{ kind.name }} » : motif invalide : {{ problem }}{% if can.owner %} — <a href="{% url 'returnables:type_list' %}#type-{{ kind.pk }}">corrigez-le</a>{% endif %}</p>
         {% endfor %}
 
         {% if latest %}
@@ -156,7 +157,7 @@
         {% if upload_messages %}
             <ul class="messages">
                 {% for message in upload_messages %}
-                    <li class="message message-{{ message.level_tag }}">{{ message }}{% if new_format_tag in message.extra_tags.split %} <a href="{% url 'returnables:format_create' %}">Nouveau format</a>{% endif %}</li>
+                    <li class="message message-{{ message.level_tag }}">{{ message }}{% if can.owner and new_format_tag in message.extra_tags.split %} <a href="{% url 'returnables:format_create' %}">Nouveau format</a>{% endif %}</li>
                 {% endfor %}
             </ul>
         {% endif %}
@@ -205,9 +206,12 @@
         {% endif %}
     </section>
 
-    <p class="returnables-settings">
-        Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
-    </p>
+    {% if can.owner %}
+        {% comment %}The formats and types are the owner's (accounts/access.py): they decide what Achats files as a slip.{% endcomment %}
+        <p class="returnables-settings">
+            Réglages : <a href="{% url 'returnables:format_list' %}">Formats de bons</a> · <a href="{% url 'returnables:type_list' %}">Types de consigne</a>
+        </p>
+    {% endif %}
     <details class="explainer">
         <summary>Comment les reprises sont comparées aux bons</summary>
         <p>Les reprises d'un fournisseur le même jour sont additionnées et comparées à ses bons livrés ce jour-là.</p>

@@ -18,6 +18,9 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts import members
+from accounts.access import DEFAULT_AREAS
+from accounts.models import Membership, Tenant
 from bank.models import BankTransaction, OperationRule, StatementFormat
 from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
 from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
@@ -38,6 +41,7 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
+from tests.runner import TEST_EMAIL, TEST_TENANT_NAME, TEST_TENANT_PK, employee_of_the_test_tenant
 from tests.support import NoNetworkTestCase
 
 #: What « Combler les écarts » displays the till button of the red wine as.
@@ -511,6 +515,60 @@ class PageSmokeTests(TestCase):
     def test_receipt_upload(self):
         self.assertContains(self.assertPageOK("invoices:receipt_upload"), "Un dossier entier")
 
+    def test_invoice_add(self):
+        """« Ajouter des factures »: its form, then the import this login sent
+        drawn above it (`?lot=`) and listed under « Vos derniers envois ». The
+        fixture's import was sent by no login (made before `sent_by`): it is
+        shown to nobody there, asked for or not."""
+        url = reverse("invoices:invoice_add")
+        response = self.assertPageOK("invoices:invoice_add")
+        self.assertContains(response, "Prendre une photo")
+        self.assertNotContains(response, "Vos derniers envois")
+        sent = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS, results=self.batch.results, sent_by=TEST_EMAIL
+        )
+        for lot, shown in ((sent.pk, True), (self.batch.pk, False), ("abc", False)):
+            with self.subTest(lot=lot):
+                response = self.client.get(url, {"lot": lot})
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{url}?lot={lot}")
+                self.assertContains(response, "Vos derniers envois")
+                if shown:
+                    self.assertContains(response, "dup.pdf")
+                else:
+                    self.assertNotContains(response, "dup.pdf")
+        # Asked for none, the page shows this login's latest import while it
+        # still runs: the one a phone just sent.
+        ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.RUNNING,
+            results=[{"name": "photo-en-cours.jpg", "status": "pending"}],
+            sent_by=TEST_EMAIL,
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, f"{url} with an import running")
+        self.assertContains(response, "photo-en-cours.jpg")
+
+    def test_invoice_add_for_an_employee_who_may_only_add(self):
+        """The same page for an employee given « Ajouter des factures » alone
+        (accounts/access.py): his import is drawn without the ways to check
+        its documents or file them under a shop - the owner's - and says who
+        checks them."""
+        employee = employee_of_the_test_tenant("serveur-smoke@example.invalid", ("invoices_add",), name="Léo Exemple")
+        sent = ReceiptBatch.objects.create(
+            status=ReceiptBatch.Status.SUCCESS, results=self.batch.results, sent_by=employee.get_username()
+        )
+        self.client.force_login(employee)
+        url = reverse("invoices:invoice_add")
+        response = self.client.get(url, {"lot": sent.pk})
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, f"{url}?lot={sent.pk} for an employee")
+        self.assertContains(response, "dup.pdf")
+        self.assertContains(response, "Déjà envoyé")
+        self.assertContains(response, "Terminé : votre employeur vérifiera ces documents.")
+        self.assertNotContains(response, reverse("invoices:receipt_review", args=[self.receipt.pk]))
+        self.assertNotContains(response, "Toutes les factures")
+
     def test_receipt_batch(self):
         response = self.assertPageOK("invoices:receipt_batch", pk=self.batch.pk)
         for name in ("ok.pdf", "dup.pdf", "x.pdf", "Thumbs.db"):
@@ -706,8 +764,19 @@ class EmptyDatabasePageSmokeTests(TestCase):
     def test_receipt_upload(self):
         self.assertPageOK("invoices:receipt_upload")
 
+    def test_invoice_add(self):
+        self.assertPageOK("invoices:invoice_add")
+
     def test_receipt_queue(self):
         self.assertPageOK("invoices:receipt_queue")
+
+    def test_employee_access(self):
+        """No employee yet: the page says so and offers the first invitation."""
+        response = self.client.get(reverse("accounts:members"))
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "« Accès des employés » with nobody")
+        self.assertContains(response, "Aucun employé n'a encore d'accès")
+        self.assertContains(response, "Inviter un employé")
 
     def test_returnables(self):
         """With the seeds migration 0002 puts in every database, then
@@ -1388,6 +1457,132 @@ class StaffPageSmokeTests(TestCase):
         Employee.objects.all().delete()
         Establishment.objects.all().delete()
         self.assertPageOK("staff:home")
+
+
+class EmployeeAccessSmokeTests(TestCase):
+    """« Accès des employés » (accounts/members.py) with an employee in each
+    state its cards draw - invited, his link expired, active - and the two
+    pages an employee meets: « Votre accès », public, where his link lets him
+    choose a password, and « Aucune page ouverte ». Every name and address
+    INVENTED: the repository is public."""
+
+    @classmethod
+    def setUpTestData(cls):
+        tenant = Tenant.objects.get(pk=TEST_TENANT_PK)
+        cls.invited, cls.token = members.invite(
+            tenant, name="Jeanne Exemple", email="jeanne-exemple@example.invalid", pages=DEFAULT_AREAS
+        )
+        # Invited long enough ago for his link to have expired unused.
+        _, cls.expired_token = members.invite(
+            tenant,
+            name="Marc Exemple",
+            email="marc-exemple@example.invalid",
+            pages=(),
+            now=timezone.now() - timedelta(days=members.INVITATION_DAYS + 1),
+        )
+        cls.active = employee_of_the_test_tenant(
+            "paul-exemple@example.invalid",
+            ("returnables", "stock_takes"),
+            name="Paul Exemple",
+            password="mot-de-passe-essai-42",
+        )
+
+    def invitation(self, token) -> str:
+        return reverse("accounts:member_invitation", args=[token])
+
+    def test_the_owner_s_page(self):
+        url = reverse("accounts:members")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        for said in (
+            "Jeanne Exemple",
+            "Invitation en attente",
+            "Marc Exemple",
+            "Invitation expirée",
+            "Paul Exemple",
+            "Actif",
+            "Inviter un employé",
+        ):
+            with self.subTest(said=said):
+                self.assertContains(response, said)
+
+    def test_the_owner_s_page_showing_a_new_link(self):
+        """A link is drawn in the answer to the POST that made it, and
+        nowhere else: no GET ever renders that part of the page."""
+        url = reverse("accounts:members")
+        active = Membership.objects.get(user=self.active)
+        for action, data, said in (
+            (
+                "invite",
+                {"name": "Léa Exemple", "email": "lea-exemple@example.invalid", "pages": ["invoices_add"]},
+                "Lien d'invitation de Léa Exemple",
+            ),
+            ("renew", {"member": active.pk}, "Lien pour le nouveau mot de passe de Paul Exemple"),
+        ):
+            with self.subTest(action=action):
+                response = self.client.post(url, {"action": action, **data})
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"« Accès des employés » after {action}")
+                self.assertContains(response, said)
+                self.assertContains(response, "/invitation/")
+
+    def test_no_access_sends_whoever_has_a_page_to_it(self):
+        """The owner, and an employee given pages, never stay on « Aucune
+        page ouverte »: they go to their first page (Access.home_url)."""
+        url = reverse("accounts:no_access")
+        self.assertRedirects(self.client.get(url), reverse("inventory:stock_list"), fetch_redirect_response=False)
+        self.client.force_login(self.active)
+        self.assertRedirects(self.client.get(url), reverse("inventory:stock_take_list"), fetch_redirect_response=False)
+
+    def test_no_access_for_an_employee_given_no_page(self):
+        nobody = employee_of_the_test_tenant("sans-page@example.invalid", (), name="Lucie Exemple")
+        self.client.force_login(nobody)
+        url = reverse("accounts:no_access")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        self.assertContains(response, "Aucune page ouverte")
+        self.assertContains(response, TEST_TENANT_NAME)
+
+    def test_the_invitation_page(self):
+        """Opened by nobody logged in - the employee, on his phone - and by a
+        browser logged in as somebody else, which it warns."""
+        url = self.invitation(self.token)
+        response = Client().get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "« Votre accès »")
+        self.assertContains(response, f"Votre accès à « {TEST_TENANT_NAME} »")
+        self.assertContains(response, "jeanne-exemple@example.invalid")
+        self.assertContains(response, "Créer mon compte")
+        self.assertNotContains(response, "Ce navigateur est connecté avec un autre compte")
+        self.assertIn("noindex", response["X-Robots-Tag"])
+        # The owner's own browser.
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "« Votre accès » in another login's browser")
+        self.assertContains(response, "Ce navigateur est connecté avec un autre compte")
+
+    def test_the_invitation_page_for_a_new_password(self):
+        """« Nouveau mot de passe… » on an active employee: the same page, in
+        the words of a password changed."""
+        token = members.renew(Membership.objects.get(user=self.active))
+        response = Client().get(self.invitation(token))
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "« Votre accès » for a new password")
+        self.assertContains(response, "choisissez votre nouveau mot de passe")
+        self.assertContains(response, "Enregistrer mon mot de passe")
+
+    def test_a_link_that_opens_nothing(self):
+        """Unknown or expired: one 404 page, with the way to log in."""
+        for token in ("jeton-inconnu", self.expired_token):
+            with self.subTest(token=token[:6]):
+                response = Client().get(self.invitation(token))
+                self.assertEqual(response.status_code, 404)
+                assertNoUnrenderedTemplateSyntax(self, response, "« Votre accès » with a dead link")
+                self.assertContains(response, "Lien expiré ou déjà utilisé", status_code=404)
+                self.assertContains(response, reverse("accounts:login"), status_code=404)
+                self.assertIn("noindex", response["X-Robots-Tag"])
 
 
 class ReturnablesPageSmokeTests(TestCase):

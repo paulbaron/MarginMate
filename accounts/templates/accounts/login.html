@@ -14,7 +14,8 @@ URL of this site, or blank), `refused` (too many failures). The link to the sign
             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
             <button type="submit" class="btn public-submit">Se connecter</button>
         </form>
-        <p class="muted small">Pas encore de compte ? Avec un code d'invitation :
-            <a href="{% url 'accounts:signup' %}">créer votre espace</a>.</p>
+        {% comment %}An employee's account comes from his employer's link (accounts/members.py), never from the signup.{% endcomment %}
+        <p class="muted small">Pas encore de compte ? Employé d'un bar : ouvrez le lien reçu de votre employeur.
+            Nouveau bar, avec un code d'invitation : <a href="{% url 'accounts:signup' %}">créer votre espace</a>.</p>
     </section>
 {% endblock %}

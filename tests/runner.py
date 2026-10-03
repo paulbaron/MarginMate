@@ -107,6 +107,20 @@ def member_of_the_test_tenant(user):
     return user
 
 
+def employee_of_the_test_tenant(email, pages=(), *, name="", password=None):
+    """A new login, an EMPLOYEE (a MEMBER) of the test tenant opening the
+    areas `pages` (accounts/access.py) - log a client in as him with
+    `force_login`: a TenantClient's implicit login is the owner's. With no
+    `password`, an unusable one. Returns the login."""
+    from django.contrib.auth import get_user_model
+
+    from accounts.models import Membership
+
+    user = get_user_model().objects.create_user(username=email, email=email, first_name=name, password=password)
+    Membership.objects.create(user=user, tenant_id=TEST_TENANT_PK, role=Membership.Role.MEMBER, pages=list(pages))
+    return user
+
+
 def confirm_password(client, user=None, seconds=None):
     """`user`'s MarginMate password confirmed in `client`'s session, as
     accounts/sudo.py records it once typed (a time and the login's pk) -

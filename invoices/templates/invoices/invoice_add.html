@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load assets %}
+{% comment %}
+« Ajouter des factures » (invoices.views.invoice_add): the import's form on a page of its own, the
+import being followed above it (`batch`, polled as on « Factures ») and « Vos derniers envois »,
+the imports THIS login sent (`sent_batches`, ReceiptBatch.sent_by). `add_only`: a login that may add and nothing
+else (accounts/access.py) - no link to check a document, to file it under a shop, nor to
+« Factures ». Phone first: the camera's tile leads.
+{% endcomment %}
+{% block title %}Ajouter des factures - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <h1>Ajouter des factures</h1>
+            <p class="page-subtitle">
+                Photographiez ou déposez vos tickets et factures : ils sont lus puis rangés dans les factures.
+                {% if add_only %}Votre employeur vérifie ensuite ce qui a été lu.{% endif %}
+            </p>
+        </div>
+        {% if not add_only %}
+            <div class="actions">
+                <a class="btn btn-secondary" href="{% url 'invoices:invoice_list' %}">Toutes les factures</a>
+            </div>
+        {% endif %}
+    </div>
+
+    {% comment %}The import just sent first: on a phone, a form above it put it a screen away.{% endcomment %}
+    {% if batch %}
+        {% include "invoices/_receipt_batch_status.html" %}
+    {% endif %}
+
+    <section class="card import-card" id="add-card" aria-label="Envoyer des factures">
+        {% include "invoices/_receipt_upload_form.html" %}
+    </section>
+
+    {% if sent_batches %}
+        <section class="card" aria-labelledby="sent-title">
+            <h2 id="sent-title">Vos derniers envois</h2>
+            <div class="table-wrap">
+                <table class="sub-table phone-cards">
+                    <thead>
+                        <tr>
+                            <th>Envoyé le</th>
+                            <th>État</th>
+                            <th class="num">Fichiers</th>
+                            <th class="num">Importés</th>
+                            <th class="num">Échecs</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sent in sent_batches %}
+                            <tr{% if sent.pk == batch.pk %} class="is-new"{% endif %}>
+                                <td>{{ sent.started_at|date:"d/m/Y H:i" }}</td>
+                                <td data-label="État"><span class="status-pill status-{{ sent.status }}">{{ sent.get_status_display }}</span></td>
+                                <td class="num" data-label="Fichiers">{{ sent.to_read }}</td>
+                                <td class="num" data-label="Importés">{{ sent.imported_count }}</td>
+                                <td class="num" data-label="Échecs">{{ sent.failed_count }}</td>
+                                <td class="phone-card-wide"><a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_add' %}?lot={{ sent.pk }}">Voir</a></td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
+{% endblock %}
+{% block extra_js %}
+{% comment %}« Prendre une photo »: as on « Factures » (purchases.html), photos.js first.{% endcomment %}
+<script src="{% asset 'js/photos.js' %}" defer></script>
+<script src="{% asset 'js/receipt_camera.js' %}" defer></script>
+{% endblock %}

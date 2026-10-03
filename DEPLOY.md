@@ -859,6 +859,34 @@ ne montre plus de fenêtre (ses messages restent dans le journal, section 9), `d
 sous ce compte et doit pouvoir lire le dossier de développement, et les identifiants, réservés au
 compte qui fait tourner le serveur, sont à retaper une fois le changement fait.
 
+## 13. Les accès des employés
+
+Vos employés peuvent avoir leur propre accès au site, limité aux pages que vous choisissez pour
+chacun : par exemple photographier les tickets et factures, faire un inventaire, saisir les
+consignes. La page : **Personnel → « Accès des employés au site »** (aussi depuis Données). Elle vous
+redemande votre mot de passe.
+
+- **Inviter** : le nom, l'adresse e-mail de l'employé (elle lui sert d'identifiant ; rien n'y est
+  envoyé) et les pages à cocher. Le site affiche un **lien d'invitation**, une seule fois : envoyez-le
+  vous-même (SMS, WhatsApp…). En l'ouvrant, l'employé choisit son mot de passe ; vous ne le
+  connaissez jamais. Le lien vaut 7 jours. Pour qu'il s'ouvre sur un téléphone, le `.env` doit
+  contenir `MARGINMATE_SITE_URL=https://gestion.<votre-domaine>` (section 5), ou ouvrez la page depuis
+  l'adresse publique : un lien qui commence par `http://127.0.0.1` ne marche que sur le PC.
+- **Changer ses pages** : à tout moment, ça vaut dès sa page suivante.
+- **Mot de passe oublié** : « Nouveau mot de passe… » crée un lien du même genre ; l'ancien mot de
+  passe marche tant que le lien n'a pas servi.
+- **Retirer l'accès** : son compte est supprimé, une page déjà ouverte chez lui revient à la
+  connexion. Ce qu'il a saisi reste.
+- **Ce qui reste à vous seul**, quoi qu'on coche : Données, Identifiants, cette page, les sources
+  de factures, les formats et types de consignes, les signatures des fiches de temps, la suppression
+  d'un inventaire. Un employé qui fait les inventaires sans avoir une page qui montre les prix
+  (Factures, Produits & charges…) ne voit pas les prix d'achat.
+- **Une adresse, un espace** : une adresse qui a déjà un compte MarginMate (dans un autre bar) ne
+  peut pas être invitée ; prenez-en une autre.
+
+Cette version ajoute deux migrations : `deploy.cmd` les applique lui-même (étape `migrate_tenants`,
+après la sauvegarde).
+
 ## Limites connues
 
 - **Taille des envois.** Cloudflare, dans son offre gratuite, refuse les envois de plus de 100 Mo,

@@ -229,6 +229,27 @@ def _missed_again(job: ScrapeJob) -> bool:
     return previous is not None and previous.range_start == job.range_start and _missed(previous) == _missed(job)
 
 
+def _name_senders(request, batches) -> bool:
+    """Each import's `sender_name`: « Vous » for this login's, the name of
+    the employee who sent another (accounts/members.py; one query on the
+    accounts database, only when some import is another's), his address
+    when his login is gone. Whether any import is another's: the column is
+    drawn only then."""
+    me = request.user.get_username() if request.user.is_authenticated else ""
+    others = {batch.sent_by for batch in batches if batch.sent_by and batch.sent_by != me}
+    names = {}
+    if others:
+        from django.contrib.auth import get_user_model
+
+        names = {
+            user.username: user.first_name or user.email or user.username
+            for user in get_user_model().objects.filter(username__in=others)
+        }
+    for batch in batches:
+        batch.sender_name = "Vous" if batch.sent_by and batch.sent_by == me else names.get(batch.sent_by, batch.sent_by)
+    return bool(others)
+
+
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
@@ -290,6 +311,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
             gather_end = asked_until  # a past period, asked on purpose
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
+    senders_shown = _name_senders(request, recent_batches)
     shown = batch
     if shown is None and recent_batches:
         # An import still running, stopped halfway or with tickets to file
@@ -320,6 +342,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "default_end_date": gather_end,
         "latest_job": latest_job,
         "recent_batches": recent_batches,
+        "senders_shown": senders_shown,
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
         "ai_refused": None if allowed else integrations.AI_READING,
@@ -333,12 +356,17 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     return card
 
 
-def batch_status_context(batch) -> dict:
+def batch_status_context(batch, *, add_only: bool = False) -> dict:
     """What the live part of an import draws: the import, its files with the
     documents they became, the shops a file no shop was recognised on can be
-    filed under, and where checking its tickets starts."""
+    filed under, and where checking its tickets starts - neither of the last
+    two for a login that may only add (accounts/access.py): it files and
+    checks nothing, and the list of every shop is not its to read, every
+    second the import polls."""
     from .receipts import shop_choices
 
+    if add_only:
+        return {"batch": batch, "batch_rows": batch_rows(batch), "shop_groups": [], "batch_first_to_check": None}
     first, left = first_ticket_to_check(batch_invoice_ids(batch))
     return {
         "batch": batch,

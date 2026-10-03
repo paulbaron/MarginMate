@@ -35,10 +35,10 @@ the panel would be swapped inside itself.
                         the column that has to hold a long reference.
                         {% endcomment %}
                         <td>
-                            <a href="{% url 'invoices:invoice_detail' row.invoice.pk %}">
+                            {% if can.invoices %}<a href="{% url 'invoices:invoice_detail' row.invoice.pk %}">{% endif %}
                                 {% if row.invoice.invoice_number %}n° {{ row.invoice.invoice_number }}
                                 {% else %}Document sans numéro{% endif %}
-                            </a>
+                            {% if can.invoices %}</a>{% endif %}
                         </td>
                         <td class="nowrap" data-label="Date" data-sort="{{ row.invoice.invoice_date|date:'Y-m-d' }}">
                             {{ row.invoice.invoice_date|date:"d/m/Y"|default:"—" }}
@@ -52,7 +52,7 @@ the panel would be swapped inside itself.
                         <td class="num" data-label="TVA">{{ row.total_vat|money }} €</td>
                         <td class="num" data-label="TTC">{{ row.total_ttc|money }} €</td>
                         <td class="num phone-card-end">
-                            <a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' row.invoice.pk %}">Corriger</a>
+                            {% if can.invoices %}<a class="btn btn-small btn-secondary" href="{% url 'invoices:invoice_edit_lines' row.invoice.pk %}">Corriger</a>{% endif %}
                         </td>
                     </tr>
                 {% endfor %}
