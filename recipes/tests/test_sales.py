@@ -191,6 +191,16 @@ class SalesWindowTests(TestCase):
             {self.mule.pk: 12, spritz.pk: 3},
         )
 
+    def test_the_sales_are_summed_unsorted(self):
+        """RecipeSale's Meta.ordering (-sold_on, recipe name) would join
+        every sale row to its recipe and sort them all, only to be added up:
+        the whole history, when the report has no opening count."""
+        with CaptureQueriesContext(connection) as queries:
+            sales_between(None, date(2026, 3, 10))
+        sql = next(query["sql"] for query in queries if "recipes_recipesale" in query["sql"])
+        self.assertNotIn("ORDER BY", sql)
+        self.assertNotIn('recipes_recipe"', sql)
+
 
 class HappyHourNameTests(TestCase):
     """The till sells "Alcool + soda HH" as its own product, separate from

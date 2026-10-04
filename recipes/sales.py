@@ -252,7 +252,10 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
 
     totals: dict[int, int] = {}
 
-    queryset = RecipeSale.objects.filter(sold_on__lte=end)
+    # Unordered: Meta.ordering would join every row to its recipe and sort
+    # them all, the whole history when there is no opening count, only to
+    # add them up.
+    queryset = RecipeSale.objects.filter(sold_on__lte=end).order_by()
     if start is not None:
         queryset = queryset.filter(sold_on__gt=start)
     for recipe_id, quantity in queryset.values_list("recipe_id", "quantity"):
