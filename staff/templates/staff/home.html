@@ -79,7 +79,9 @@
             <h2>En-tête des fiches</h2>
             {% comment %}
             Filled in once and for all: when the name is typed, the card shows what will print and
-            folds the form away. Empty, or refused, it stays open.
+            folds the form away. Empty, or refused, it stays open. The owner's only (the view refuses
+            anyone else's): the name is the employer's on every sheet, its certificate and the
+            signature mails.
             {% endcomment %}
             <p class="muted">Imprimé en haut de chaque fiche. Sans nom, les fiches s'impriment sans en-tête.</p>
             {% if establishment.name %}
@@ -88,7 +90,7 @@
                     {% for line in establishment.address_lines %}<br>{{ line }}{% endfor %}
                 </div>
             {% endif %}
-            <details class="staff-disclosure"{% if not establishment.name or establishment_form.errors %} open{% endif %}>
+            {% if can.owner %}<details class="staff-disclosure"{% if not establishment.name or establishment_form.errors %} open{% endif %}>
                 <summary>{% if establishment.name %}Modifier l'en-tête{% else %}Saisir le nom et l'adresse{% endif %}</summary>
                 <form method="post" action="{% url 'staff:home' %}#en-tete">
                     {% csrf_token %}
@@ -98,7 +100,7 @@
                         <button class="btn btn-secondary" type="submit">Enregistrer l'en-tête</button>
                     </div>
                 </form>
-            </details>
+            </details>{% else %}<p class="muted">Seul votre employeur modifie l'en-tête.</p>{% endif %}
         </section>
     </div>
 {% endblock %}
