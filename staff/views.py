@@ -166,6 +166,15 @@ def _days_off_left(names: list[str]) -> str:
     return f"Jours de repos laissés tels quels : {listing}."
 
 
+def _worked_holidays_left(names: list[str]) -> str:
+    """« Férié travaillé laissé tel quel : 14 mai (Ascension). » - what the
+    holidays button did not touch because it was saved worked."""
+    if len(names) == 1:
+        return f"Férié travaillé laissé tel quel : {names[0]}."
+    listing = ", ".join(names[:-1]) + " et " + names[-1]
+    return f"Fériés travaillés laissés tels quels : {listing}."
+
+
 def _changed_words(days, *, name_them: bool = True, against: str = "") -> str:
     """« 1 jour modifié (mardi 2) », « 3 jours modifiés par rapport à la
     semaine type (…) », « aucun jour modifié »."""
@@ -568,7 +577,8 @@ def month_range(request, pk, month):
 def month_holidays_off(request, pk, month):
     """« Mettre les fériés du mois en Férié chômé » - the owner's decision,
     taken with this button, never assumed (`timesheet.mark_holidays_off`).
-    A holiday on a day off stays a day off, and the answer names it."""
+    A holiday on a day off stays a day off, one saved worked stays worked,
+    and the answer names them."""
     person = _employee(pk)
     back = redirect(_month_url(person, month))
     if request.method != "POST":
@@ -585,7 +595,9 @@ def month_holidays_off(request, pk, month):
         return back
     named = {day: f"{_in_prose(day)} ({name})" for day, name in sorted(holidays.items())}
     left = _days_off_left([named[day] for day in outcome.left_alone]) if outcome.left_alone else ""
-    marked = [label for day, label in named.items() if day not in outcome.left_alone]
+    if outcome.kept_worked:
+        left = " ".join(filter(None, [left, _worked_holidays_left([named[day] for day in outcome.kept_worked])]))
+    marked = [label for day, label in named.items() if day not in outcome.left_alone and day not in outcome.kept_worked]
     if not marked:
         messages.info(request, f"{left} Rien n'a été modifié.")
         return back

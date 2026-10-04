@@ -953,6 +953,9 @@ class Outcome:
     # « Du … au … » and the holidays: the days off among `touched`, left as
     # they were (`_is_day_off`).
     left_alone: tuple[date, ...] = ()
+    # The holidays button only: holidays saved worked on a working day, left
+    # as they were - apart from `left_alone`, which the page calls days off.
+    kept_worked: tuple[date, ...] = ()
 
     @property
     def week_changed(self) -> bool:
@@ -1181,8 +1184,10 @@ def mark_holidays_off(employee: Employee, month: date) -> Outcome:
     assumed. A holiday on a day off (`_is_day_off`: Whit Monday for an
     employee off on Mondays) stays as it is - blank on the sheet, as the
     PDF prints a day off, and not counted as a day of « Férié chômé » - and
-    is in `Outcome.left_alone`. A month with no holiday, or with holidays on
-    days off only, writes nothing (and does not save an unsaved month)."""
+    is in `Outcome.left_alone`. A holiday saved worked otherwise than the
+    week plans it (other hours, a note) was worked: the owner said so, and
+    it is in `Outcome.kept_worked`. A month with no holiday, or with none
+    left to mark, writes nothing (and does not save an unsaved month)."""
     first = first_of_month(month)
     holidays = sorted(month_holidays(first))
     if not holidays:
@@ -1193,14 +1198,22 @@ def mark_holidays_off(employee: Employee, month: date) -> Outcome:
         week = _week(employee, timesheet)
         after = dict(before)
         left_alone = tuple(day for day in holidays if _is_day_off(before[day], week))
-        if len(left_alone) == len(holidays):
-            return Outcome(timesheet, False, (), tuple(holidays), left_alone=left_alone)
+        # One button for the month's holidays: pressed for the ones not
+        # worked, it wiped the hours and the note of one saved worked.
+        kept_worked = tuple(
+            day
+            for day in holidays
+            if day not in left_alone and before[day].kind == WORK and before[day] != planned_day(week, day)
+        )
+        if len(left_alone) + len(kept_worked) == len(holidays):
+            return Outcome(timesheet, False, (), tuple(holidays), left_alone=left_alone, kept_worked=kept_worked)
         for day in holidays:
-            if day in left_alone:
+            if day in left_alone or day in kept_worked:
                 continue
             old = before[day]
             after[day] = DayEntry(day, ZERO, PUBLIC_HOLIDAY, old.note if old.kind == PUBLIC_HOLIDAY else "")
-        return replace(_store(employee, first, timesheet, before, after, holidays), left_alone=left_alone)
+        outcome = _store(employee, first, timesheet, before, after, holidays)
+        return replace(outcome, left_alone=left_alone, kept_worked=kept_worked)
 
 
 def reset_to_typical_week(employee: Employee, month: date) -> Outcome:
