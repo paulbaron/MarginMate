@@ -283,6 +283,24 @@ class ChooseShopInBatchTests(TestCase):
         self.assertIn(f"Enseigne {name} créée, sans ce fichier.", said)
         self.assertFalse(any("choisissez" in message for message in said), said)
 
+    def test_a_new_shop_made_for_a_slip_no_format_files_is_not_told_to_be_chosen(self):
+        """Not filed (ShopChoiceError): the page said to drop the slip on
+        Consignes and, beside it, to choose the new shop for it - which is
+        refused the same way until its formats are right, and then files it
+        in Consignes whatever the shop. The upload says neither for a slip,
+        filed or not."""
+        from invoices.importing import RoutedToReturnablesError
+
+        name = "Transports Exemple"
+        slip = RoutedToReturnablesError("Bon de consignes : déposez-le sur la page Consignes.", slip=None)
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=slip):
+            response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+        self.assertRedirects(response, self.page)
+        said = messages_of(response)
+        self.assertIn("Bon de consignes : déposez-le sur la page Consignes.", said)
+        self.assertIn(f"Enseigne {name} créée, sans ce fichier.", said)
+        self.assertFalse(any("choisissez" in message for message in said), said)
+
     def test_a_file_that_blows_up_while_being_described_is_said_on_the_page(self):
         """`_record_import` inside the try here too, as in `_read_file`: a
         figure the database cannot read back raised out of the `else:` and

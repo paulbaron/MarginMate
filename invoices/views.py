@@ -963,7 +963,10 @@ def receipt_batch_assign(request, pk, index):
             entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
         messages.error(request, str(exc))
-        _say_shop_made_anyway(request, supplier, created)
+        # A slip no format files (receipt_batches._unfiled_slip) is no more
+        # the new shop's than one filed in Consignes, as upload_invoice says.
+        slip = isinstance(exc.__cause__, RoutedToReturnablesError)
+        _say_shop_made_anyway(request, supplier, created, in_consignes=slip)
         return redirect("invoices:receipt_batch", pk=batch.pk)
     if entry["status"] != "ok":
         messages.warning(request, entry["message"])
@@ -981,7 +984,8 @@ def _say_shop_made_anyway(request, supplier, created: bool, in_consignes: bool =
     """A new shop named for a file that was not filed under it: made before
     the file was read, it stays (see upload_invoice), and is said."""
     if created:
-        # A slip put in Consignes leaves no file to name a shop for.
+        # A slip, put in Consignes or to be dropped there, leaves no file to
+        # name a shop for.
         then = "" if in_consignes else " : choisissez-la dans la liste"
         messages.info(request, f"Enseigne {supplier.name} créée, sans ce fichier{then}.")
 
