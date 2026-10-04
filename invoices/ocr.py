@@ -57,10 +57,13 @@ nothing newly wrong.
 from __future__ import annotations
 
 import math
+import os
+import re
 import statistics
 import threading
+from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import cast
 
 # Two boxes are on one line when, measured along the local slope of the
 # text, they share at least this fraction of the smaller one's height.
@@ -290,12 +293,48 @@ MIN_RENDER_SCALE = 100 / 72
 #: Pixels of one image taken as it is - a photo file, or a scan's embedded
 #: photo: Pillow's own bomb threshold (89 Mpx), above a 48 Mpx phone photo.
 IMAGE_MAX_PIXELS = 89_478_485
+#: What the content streams of one PDF may inflate together (one bound per
+#: stream holds for the whole process: returnables.reading.MAX_INFLATE_STAGE).
+#: Weighed before any page is read or rendered (`_weigh_contents`), and
+#: shared by the readers (`bounded_reading`): pdfminer keeps what it decoded
+#: until the file is closed, and PDFium decodes it all again. The heaviest
+#: of 1 374 real invoices inflates 1,1 MB, its fonts included.
+MAX_INFLATE_TOTAL = 64 * 1024 * 1024
+#: What pdfminer's interpreter may run of one PDF, a stream counted each
+#: time it runs - a page drawing one form a thousand times runs it a
+#: thousand times (returnables.reading.bound_pdf_interpreting), at 6 to
+#: 11 s of CPU a MB. The most of 1 374 real invoices is 340 KB. The same
+#: total for what PDFium will draw, weighed before it opens the file
+#: (`_decode_drawn`): about 20 bytes of page objects a byte of path.
+MAX_RUN_TOTAL = 8 * 1024 * 1024
+#: What drawing one PDF's pages may cost: PDFium runs in a process of its
+#: own (`page_images`, invoices/pdfium_worker.py), which may commit
+#: RENDER_MEMORY (a Job Object on Windows) and run RENDER_SECONDS, and whose
+#: pages may weigh RENDER_OUTPUT_BYTES once written - uncompressed while
+#: they weigh RENDER_RAW_BYTES together (an A4 page at 300 dpi is 25 MB, and
+#: PNG took 0,2 s to write it and 0,1 s to read it back), PNG after. One
+#: such process at a time (PDFIUM_LOCK). Of 1 374 real invoices, the
+#: heaviest took 133 MB, the slowest 1,7 s, and the longest wrote 131 MB of
+#: pages (six A4 pages, the last in PNG); a 120 KB tiling pattern took
+#: 1,3 GB and 26 s, an ink annotation of a million points 50 s.
+RENDER_MEMORY = 1536 * 1024 * 1024
+RENDER_SECONDS = 60
+RENDER_OUTPUT_BYTES = 512 * 1024 * 1024
+RENDER_RAW_BYTES = 128 * 1024 * 1024
 
 TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
 PAGE_TOO_LARGE = (
     "Page trop grande pour être lue (page {number} : {width} × {height} cm) : ce n'est ni un ticket ni une facture."
 )
 IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
+TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères, traits ou images sur une page."
+TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
+TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
+TOO_MANY_CODES = "Document trop chargé pour être lu : ses polices déclarent plus de {limit} caractères."
+TOO_BIG_OBJECTS = "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture."
+TOO_HEAVY_TO_DRAW = "Document trop lourd à afficher : plus de {weight} de mémoire pour dessiner ses pages."
+TOO_SLOW_TO_DRAW = "Document trop lourd à afficher : plus de {seconds} secondes pour dessiner ses pages."
+TOO_MUCH_DRAWN = "Document trop lourd à afficher : ses pages dessinées pèsent plus de {weight}."
 
 
 class DocumentTooBig(ValueError):
@@ -303,14 +342,28 @@ class DocumentTooBig(ValueError):
     person: its words are said on the file's line."""
 
 
-#: PDFium is not thread-safe (pypdfium2 says so: one thread at a time in a
-#: process), and `page_images` runs in a folder import's thread
-#: (receipt_batches, which takes no OCR_LOCK), a gather's, and the requests'
-#: - all in the one process serving every bar. Every call into it holds this
-#: lock; a page handed to the caller holds nothing. Re-entrant: a generator
-#: left half read closes its document whenever it is collected, possibly in
-#: a thread already inside the lock.
+class PdfiumBusy(DocumentTooBig):
+    """PDFIUM_LOCK not free within PDFIUM_WAIT_SECONDS (PDFIUM_BUSY): a
+    refusal of the moment, not of the document. Said on a file's line like
+    any DocumentTooBig; a gather fetches the document again (tasks.
+    _import_document_file: None) - taken once for a refusal of what it is,
+    it let an automatic gather's coverage move past it for good."""
+
+
+#: One process drawing a PDF at a time, for the whole server (`page_images`
+#: holds it while its PDFium process runs): it runs in a folder import's
+#: thread (receipt_batches, which takes no OCR_LOCK), a gather's, and the
+#: requests', and eight of them at RENDER_MEMORY each would be 12 GB. A page
+#: handed to the caller holds nothing. Re-entrant, as when PDFium ran in
+#: this process: a thread inside it may be the one collecting a generator.
+#: One document holds it RENDER_SECONDS at most, and a document waits for it
+#: PDFIUM_WAIT_SECONDS at most - then it is refused, « réessayez »
+#: (PDFIUM_BUSY): a folder's thread may queue heavy documents one after
+#: another, an RLock serves its waiters in no order, and a request already
+#: holding receipts.OCR_LOCK waited without a limit, every bar's OCR with it.
 PDFIUM_LOCK = threading.RLock()
+PDFIUM_WAIT_SECONDS = 2 * RENDER_SECONDS
+PDFIUM_BUSY = "Un autre document est en cours d'affichage : réessayez dans un instant."
 
 
 def _centimetres(points: float) -> str:
@@ -319,6 +372,10 @@ def _centimetres(points: float) -> str:
 
 def _millions(pixels: int) -> str:
     return f"{pixels / 1_000_000:.0f}"
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1024 / 1024:.0f} Mo"
 
 
 def _check_pixels(width: int, height: int, number: int) -> None:
@@ -341,29 +398,6 @@ def render_scale(width: float, height: float) -> float | None:
     return scale if scale >= MIN_RENDER_SCALE else None
 
 
-def _plan_pdf(document, pdfium_raw) -> list:
-    """(page, the one image to take as it is or None, the render scale) for
-    every page - every page weighed before the first is read."""
-    if len(document) > MAX_PAGES:
-        raise DocumentTooBig(TOO_MANY_PAGES.format(pages=len(document), limit=MAX_PAGES))
-    plan = []
-    for number, page in enumerate(document, start=1):
-        width, height = page.get_size()
-        images = list(page.get_objects(filter=(pdfium_raw.FPDF_PAGEOBJ_IMAGE,)))
-        for image in images:
-            _check_pixels(*cast("tuple[int, int]", image.get_px_size()), number)
-        if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
-            plan.append((page, images[0], None))
-            continue
-        scale = render_scale(width, height)
-        if scale is None:
-            raise DocumentTooBig(
-                PAGE_TOO_LARGE.format(number=number, width=_centimetres(width), height=_centimetres(height))
-            )
-        plan.append((page, None, scale))
-    return plan
-
-
 def page_images(path: str):
     """Yield one PIL image per page.
 
@@ -379,6 +413,10 @@ def page_images(path: str):
     document whose reading would cost more than MAX_PAGES pages,
     IMAGE_MAX_PIXELS for a photo, or RENDER_MAX_PIXELS for a rendered page
     at MIN_RENDER_SCALE (a bigger page is rendered at a lower resolution).
+
+    A PDF is drawn by PDFium in a process of its own (`_drawn_pages`), never
+    in this one; refused here first by its weighing (`_weigh_contents`,
+    which refuses what pdfminer cannot weigh: UnreadablePdf).
     """
     if path.lower().endswith(IMAGE_EXTENSIONS):
         from PIL import Image, ImageOps, ImageSequence
@@ -394,29 +432,125 @@ def page_images(path: str):
                 yield ImageOps.exif_transpose(frame).convert("RGB")
         return
 
-    import pypdfium2 as pdfium
-    import pypdfium2.raw as pdfium_raw
+    _weigh_contents(path, strict=True)
+    yield from _drawn_pages(path)
 
-    # One call into PDFium at a time in the process (PDFIUM_LOCK), and none
-    # held while the caller works on a page: its OCR takes seconds.
-    with PDFIUM_LOCK:
-        document = pdfium.PdfDocument(path)
-        try:
-            plan = _plan_pdf(document, pdfium_raw)
-        except BaseException:
-            document.close()
-            raise
+
+def _drawn_pages(path: str):
+    """The pages of the PDF at `path` as PDFium draws them - in a process of
+    its own (invoices/pdfium_worker.py), never in this one, which serves
+    every bar: what a PDF can make PDFium allocate or compute is not bounded
+    by anything weighed beforehand (security review: a tiling pattern, a
+    Type3 glyph, a soft mask of a few KB each took 700 MB to 1,3 GB and 20 s,
+    an ink annotation 53 s). Bounded by the operating system instead
+    (`pdfium_sandbox.run`): RENDER_MEMORY, RENDER_SECONDS, and its pages
+    RENDER_OUTPUT_BYTES once written - past which, DocumentTooBig « trop
+    lourd à afficher ». One such process at a time (PDFIUM_LOCK), held while
+    it draws every page and never while the caller works on one: its OCR
+    takes seconds; waited for PDFIUM_WAIT_SECONDS at most (PdfiumBusy,
+    a DocumentTooBig). The pages come back losslessly, the very pixels
+    PDFium gave, one at a time from a private folder removed whatever
+    happens. What PDFium cannot open is UnreadablePdf, said « PDF
+    illisible » as its own error was. About 0,4 s more a document than
+    PDFium in this process (starting Python and pypdfium2: 0,3 s)."""
+    import shutil
+    import tempfile
+
+    from common import UnreadablePdf, weight
+    from invoices import pdfium_sandbox
+    from invoices.pdfium_worker import LIMITS
+
+    os.makedirs(drawn_parent(), exist_ok=True)
+    folder = tempfile.mkdtemp(prefix=DRAWN_PREFIX, dir=drawn_parent())
     try:
-        for page, image, scale in plan:
-            with PDFIUM_LOCK:
-                if image is not None:
-                    picture = image.get_bitmap().to_pil().convert("RGB")
-                else:
-                    picture = page.render(scale=scale).to_pil().convert("RGB")
-            yield picture
+        limits = {name: globals()[name] for name in LIMITS}
+        if not PDFIUM_LOCK.acquire(timeout=PDFIUM_WAIT_SECONDS):
+            raise PdfiumBusy(PDFIUM_BUSY)
+        try:
+            outcome = pdfium_sandbox.run(os.path.abspath(path), folder, limits, RENDER_MEMORY, RENDER_SECONDS)
+        finally:
+            PDFIUM_LOCK.release()
+        result = outcome.result or {}
+        if outcome.expired:
+            raise DocumentTooBig(TOO_SLOW_TO_DRAW.format(seconds=RENDER_SECONDS))
+        if outcome.memory or result.get("memory"):
+            raise DocumentTooBig(TOO_HEAVY_TO_DRAW.format(weight=weight(RENDER_MEMORY)))
+        if isinstance(result.get("refused"), str):
+            raise DocumentTooBig(result["refused"][:SAID_CHARS])
+        if isinstance(result.get("unreadable"), str):
+            raise UnreadablePdf(f"PDFium : {result['unreadable'][:SAID_CHARS]}")
+        pages = result.get("pages")
+        if not isinstance(pages, int) or not 0 <= pages <= MAX_PAGES:
+            if outcome.capped and os.name != "nt":
+                # Killed by its rlimit, it could not say so.
+                raise DocumentTooBig(TOO_HEAVY_TO_DRAW.format(weight=weight(RENDER_MEMORY)))
+            raise UnreadablePdf(f"PDFium s'est arrêté sans réponse (code {outcome.returncode}).")
+        for number in range(1, pages + 1):
+            yield _drawn_page(os.path.join(folder, str(number)))
     finally:
-        with PDFIUM_LOCK:
-            document.close()
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+#: What is said of a refusal from PDFium's process at most: its sentence.
+SAID_CHARS = 300
+#: Each document's pages are written in a folder of their own (DRAWN_PREFIX),
+#: under this one in TEMP, removed by `_drawn_pages` whatever happens - but
+#: not when the server itself dies mid-render (a crash, a kill, a power cut):
+#: such a folder, up to RENDER_OUTPUT_BYTES, stayed for good. So the next
+#: start sweeps them (`sweep_drawn_folders`), only these, and only past
+#: DRAWN_FOLDER_SECONDS: a folder lives while its pages are drawn and OCRed,
+#: minutes for 30 pages.
+DRAWN_PARENT = "marginmate-pdfium"
+DRAWN_PREFIX = "pdfium-"
+DRAWN_FOLDER_SECONDS = 3600
+
+
+def drawn_parent() -> str:
+    import tempfile
+
+    return os.path.join(tempfile.gettempdir(), DRAWN_PARENT)
+
+
+def sweep_drawn_folders() -> None:
+    """Remove what a server killed mid-render left under drawn_parent(): the
+    DRAWN_PREFIX folders older than DRAWN_FOLDER_SECONDS (invoices/apps.py,
+    at start-up). Nothing else is touched, and a folder that cannot be
+    removed is left for the next start."""
+    import shutil
+    import time
+
+    try:
+        entries = list(os.scandir(drawn_parent()))
+    except OSError:
+        return  # nothing drawn yet on this machine
+    oldest = time.time() - DRAWN_FOLDER_SECONDS
+    for entry in entries:
+        try:
+            left = (
+                entry.name.startswith(DRAWN_PREFIX)
+                and entry.is_dir(follow_symlinks=False)
+                and entry.stat(follow_symlinks=False).st_mtime < oldest
+            )
+        except OSError:
+            continue
+        if left:
+            shutil.rmtree(entry.path, ignore_errors=True)
+
+
+def _drawn_page(path: str):
+    """A page PDFium's process wrote (uncompressed, or PNG): within the caps,
+    read whole."""
+    from PIL import Image
+
+    from common import UnreadablePdf
+
+    with open(path, "rb") as handle:
+        picture = Image.open(handle, formats=("PPM", "PNG"))
+        width, height = picture.size
+        if width * height > max(IMAGE_MAX_PIXELS, RENDER_MAX_PIXELS):
+            raise UnreadablePdf(f"PDFium : une page de {width} × {height} pixels.")
+        picture.load()
+    return picture if picture.mode == "RGB" else picture.convert("RGB")
 
 
 #: How much of its page an embedded image has to cover to be the page - a
@@ -483,6 +617,11 @@ def check_page_count(path: str) -> None:
     half a second and 1,8 MB, where pdfplumber's own count (`len(pdf.pages)`,
     every page made) took 4,5 s and 25 MB.
 
+    Then its pages' content streams are weighed (`_weigh_contents`): past
+    MAX_INFLATE_TOTAL inflated, or MAX_RUN_TOTAL drawn, DocumentTooBig too -
+    and so are, in either, objects past what pdfminer may parse
+    (reading.bound_pdf_parsing: TOO_BIG_OBJECTS).
+
     Not a PDF (by its name: a photo is `page_images`' to weigh), or one
     pdfminer cannot open or walk: it passes - what is wrong with it is said
     by what reads it next, as before."""
@@ -491,13 +630,251 @@ def check_page_count(path: str) -> None:
 
 
 def _refuse_past_the_cap(path: str) -> None:
+    from returnables import reading
+
     try:
         counted, declared = _walk_pages(path, MAX_PAGES + 1)
-    except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+    except Exception as error:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+        if reading.parse_refused(error):
+            raise DocumentTooBig(TOO_BIG_OBJECTS) from None
         return
     if counted > MAX_PAGES:
         said = declared if isinstance(declared, int) and declared > MAX_PAGES else f"plus de {MAX_PAGES}"
         raise DocumentTooBig(TOO_MANY_PAGES.format(pages=said, limit=MAX_PAGES))
+    _weigh_contents(path)
+
+
+def _too_heavy() -> DocumentTooBig:
+    from common import weight
+
+    return DocumentTooBig(TOO_HEAVY_CONTENT.format(weight=weight(MAX_INFLATE_TOTAL)))
+
+
+def _weigh_contents(path: str, strict: bool = False) -> None:
+    """Refuse (DocumentTooBig) a PDF whose pages' content streams, and the
+    forms they draw, inflate past MAX_INFLATE_TOTAL together - before
+    pdfplumber or PDFium decodes one (security audit: a 718 KB file listing
+    twelve 60 MB streams on its one page took 842 MB in the text layer, then
+    PDFium decoded them all again). Each is decoded through pdfminer's
+    bounded decoders as often as a page lists it, from a copy dropped at
+    once (the object itself stays cached undecoded: uncached, an object
+    stream was parsed again for every object it holds - 200 ms on a Free
+    invoice). What PDFium will draw of them is weighed as well
+    (`_decode_drawn`): past MAX_RUN_TOTAL drawn, or a page drawing more than
+    reading.MAX_PAGE_GLYPHS XObjects and annotations, DocumentTooBig. A file
+    pdfminer cannot open or walk, or a stream it cannot decode, passes: what
+    is wrong with it is said by what reads it next - unless `strict`
+    (`page_images`, before PDFium): then a file this cannot weigh, a stream
+    it cannot decode, or no page to weigh, is UnreadablePdf, « PDF
+    illisible ». PDFium rebuilds what pdfminer cannot open: the page of
+    30 MB of strokes this refuses, cut before its xref, went through to
+    PDFium (702 MB). pdfminer weighs every one of 1 374 real invoices, every
+    stream decoded."""
+    import itertools
+
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfpage import PDFPage
+    from pdfminer.pdfparser import PDFParser
+
+    from common import UnreadablePdf
+    from returnables import reading
+
+    with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
+        drawn, pages = [MAX_RUN_TOTAL], 0
+        try:
+            with open(path, "rb") as handle:
+                document = PDFDocument(PDFParser(handle))
+                for page in itertools.islice(PDFPage.create_pages(document), MAX_PAGES + 1):
+                    pages += 1
+                    _decode_drawn(page, budget, drawn, strict)
+        except (DocumentTooBig, UnreadablePdf):
+            raise
+        except Exception as error:  # pdfminer raises its own zoo for a broken file
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            if strict:
+                raise UnreadablePdf(f"pdfminer : {type(error).__name__}: {error}") from error
+            return
+        if budget[0] < 0:
+            raise _too_heavy()
+        if strict and not pages:
+            raise UnreadablePdf("pdfminer : aucune page.")
+
+
+#: What draws an XObject in a content stream, read as PDFium reads it: the
+#: operand before « Do » - a name (#xx escapes and all), or a string, which
+#: PDFium takes for a name too - a comment allowed in between; and an inline
+#: image's « BI ». Possessive, so a run of « % » never backtracks. Over,
+#: never under: a « /Fm1 Do » inside a string counts as well.
+_DELIMITER = rb"\s\x00/\[\]()<>{}%"
+_DRAWS = re.compile(
+    rb"(?:/(?P<name>[^" + _DELIMITER + rb"]*+)|\((?P<string>(?:[^()\\]|\\.)*+)\)|<(?P<hex>[0-9A-Fa-f\s\x00]*+)>)"
+    rb"(?:[\s\x00]++|%[^\r\n]*+)*+Do(?![^" + _DELIMITER + rb"])"
+    rb"|(?<![^\s\x00\[\]()<>{}%])BI(?![^" + _DELIMITER + rb"])",
+    re.DOTALL,
+)
+_NAME_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
+_STRING_ESCAPE = re.compile(rb"\\([0-7]{1,3}|\r\n|.)", re.DOTALL)
+_STRING_ESCAPES = {
+    b"n": b"\n",
+    b"r": b"\r",
+    b"t": b"\t",
+    b"b": b"\b",
+    b"f": b"\f",
+    b"\r\n": b"",
+    b"\r": b"",
+    b"\n": b"",
+}
+
+
+def _unescaped(escape) -> bytes:
+    if escape[1][:1].isdigit():
+        return bytes([int(escape[1], 8) & 0xFF])
+    return _STRING_ESCAPES.get(escape[1], escape[1])
+
+
+def _drawn(data: bytes) -> tuple[Counter, int]:
+    """What `data` draws (`_DRAWS`): how often each XObject name, as
+    pdfminer keys it, and how many inline images."""
+    names, inline = Counter(), 0
+    if b"Do" not in data and b"BI" not in data:
+        return names, inline
+    for match in _DRAWS.finditer(data):
+        name, string, digits = match.group("name", "string", "hex")
+        if name is not None:
+            raw = _NAME_ESCAPE.sub(lambda escape: bytes([int(escape[1], 16)]), name)
+        elif string is not None:
+            raw = _STRING_ESCAPE.sub(_unescaped, string)
+        elif digits is not None:
+            digits = re.sub(rb"[\s\x00]", b"", digits)
+            raw = bytes.fromhex((digits + b"0" * (len(digits) % 2)).decode())
+        else:
+            inline += 1
+            continue
+        try:
+            names[raw.decode()] += 1
+        except UnicodeDecodeError:
+            names[raw.decode("latin-1")] += 1
+    return names, inline
+
+
+def _decode_drawn(page, budget: list, drawn: list, strict: bool = False) -> None:
+    """Decode every content stream `page` draws, charging each to `drawn`
+    as often as PDFium draws it: its /Contents, every form each time a Do
+    draws it, every annotation's appearances (security review: PDFium
+    parses a form again for each, and keeps about 20 bytes of page objects
+    a byte of path - a 7,6 KB file whose 40 annotations share one 1 MB
+    appearance took 850 MB, and pdfminer reads no annotation). Past
+    MAX_RUN_TOTAL, DocumentTooBig; and past reading.MAX_PAGE_GLYPHS
+    XObjects, inline images and annotations on the page, PDFium keeping an
+    object of each. The forms its resources hold that nothing draws are
+    decoded too. A form is decoded once a page, and never drawn inside
+    itself, as pdfminer and PDFium do; what cannot be found draws nothing.
+    A stream pdfminer cannot decode weighs nothing - UnreadablePdf when
+    `strict`."""
+    import copy
+
+    from pdfminer.pdftypes import PDFStream, dict_value, list_value, resolve1
+    from pdfminer.psparser import LIT
+
+    from common import UnreadablePdf, group_thousands, weight
+    from returnables import reading
+
+    def resolved(item):
+        try:
+            return resolve1(item)
+        except Exception as error:  # noqa: BLE001 - a missing object, PDFium skips it too
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            return None
+
+    def decoded(stream) -> bytes:
+        try:
+            return copy.copy(stream).get_data()
+        except Exception as error:  # a damaged stream is the reader's to say
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            if strict:
+                raise UnreadablePdf(f"pdfminer : un flux illisible ({type(error).__name__}).") from error
+            return b""
+
+    known = {}
+
+    def form(item, appearance: bool = False) -> tuple | None:
+        """(the form, its size, what it draws), or None for no form - an
+        image is never decoded (pdfminer's CCITT decoder took 4 s on a real
+        invoice). An appearance is a form, whatever its Subtype says."""
+        stream = resolved(item)
+        if not isinstance(stream, PDFStream) or not (appearance or stream.get("Subtype") is LIT("Form")):
+            return None
+        key = id(stream) if stream.objid is None else stream.objid
+        if key not in known:
+            data = decoded(stream)
+            known[key] = (len(data), _drawn(data))
+        return (stream, *known[key])
+
+    def charge(size: int) -> None:
+        drawn[0] -= size
+        if drawn[0] < 0:
+            raise DocumentTooBig(TOO_LONG_CONTENT.format(weight=weight(MAX_RUN_TOTAL)))
+
+    objects = [0]
+
+    def count(times: int) -> None:
+        objects[0] += times
+        if objects[0] > reading.MAX_PAGE_GLYPHS:
+            raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=group_thousands(reading.MAX_PAGE_GLYPHS)))
+
+    resources = dict_value(page.resources)
+    contents = []
+    for item in page.contents:
+        stream = resolved(item)
+        if isinstance(stream, PDFStream):
+            contents.append(decoded(stream))
+            charge(len(contents[-1]))
+    # Read as one, as PDFium does: a name may end one stream and its Do start the next.
+    pending = [(_drawn(b"\n".join(contents)), resources, 1, frozenset())]
+    del contents
+    for annotation in list_value(resolved(page.annots)):
+        count(1)
+        appearances = dict_value(resolved(dict_value(resolved(annotation)).get("AP")))
+        for key in ("N", "R", "D"):
+            appearance = resolved(appearances.get(key))
+            for state in [appearance] if isinstance(appearance, PDFStream) else dict_value(appearance).values():
+                if (found := form(state, appearance=True)) is not None:
+                    stream, size, draws = found
+                    charge(size)
+                    own = dict_value(resolved(stream.get("Resources"))) or resources
+                    pending.append((draws, own, 1, frozenset([stream.objid])))
+    while pending:
+        (names, inline), outer, times, inside = pending.pop()
+        count(inline * times)
+        xobjects = dict_value(resolved(outer.get("XObject")))
+        for name, drawings in names.items():
+            count(drawings * times)
+            found = form(xobjects.get(name))
+            if found is None or found[0].objid in inside:
+                continue
+            stream, size, draws = found
+            charge(size * drawings * times)
+            own = dict_value(resolved(stream.get("Resources"))) or outer
+            pending.append((draws, own, drawings * times, inside | {stream.objid}))
+    holders, seen = [resources], set()
+    while holders:
+        for item in dict_value(resolved(holders.pop().get("XObject"))).values():
+            objid = getattr(item, "objid", None)
+            if objid is not None and objid in seen:
+                continue
+            seen.add(objid)
+            found = form(item)
+            if found is not None:
+                holders.append(dict_value(resolved(found[0].get("Resources"))))
 
 
 def pdf_pages(path: str):
@@ -522,6 +899,46 @@ def pdf_pages(path: str):
                 page.close()
 
 
+@contextmanager
+def bounded_reading():
+    """Around a reader walking `pdf_pages`: its decodes share
+    MAX_INFLATE_TOTAL (returnables.reading.inflate_budget - should a stream
+    escape `_weigh_contents`), what it runs MAX_RUN_TOTAL, and what pdfminer
+    stopped (those budgets, a page past reading.MAX_PAGE_GLYPHS glyphs, fonts
+    mapping past reading.MAX_CMAP_CODES codes, objects past what
+    reading.bound_pdf_parsing parses) is DocumentTooBig, said on the
+    file's line - not the PdfminerException pdfplumber wraps it in, which a
+    reader's caller takes for a broken file. Entered by the caller, not
+    inside `pdf_pages`: the page is read in the caller's loop, never in the
+    generator, and a ContextVar set across a generator's yields lives in
+    whichever context resumes it."""
+    from common import group_thousands, weight
+    from returnables import reading
+
+    with reading.inflate_budget(MAX_INFLATE_TOTAL, run=MAX_RUN_TOTAL) as budget:
+        try:
+            yield
+        except DocumentTooBig:
+            raise
+        except Exception as error:
+            if reading.glyphs_refused(error):
+                limit = group_thousands(reading.MAX_PAGE_GLYPHS)
+                raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
+            if reading.run_refused(error):
+                raise DocumentTooBig(TOO_LONG_CONTENT.format(weight=weight(MAX_RUN_TOTAL))) from None
+            if reading.codes_refused(error):
+                limit = group_thousands(reading.MAX_CMAP_CODES)
+                raise DocumentTooBig(TOO_MANY_CODES.format(limit=limit)) from None
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            raise
+        # pdfminer may swallow a refused decode and carry on without it.
+        if budget[0] < 0:
+            raise _too_heavy()
+
+
 def document_text(path: str) -> str:
     """The text a digital document carries, or "" for a photo or a scan.
     Raises DocumentTooBig as `text_layer_pages` does."""
@@ -536,18 +953,20 @@ def text_layer_pages(path: str) -> list[OcrPage | None]:
     says what is wrong with it.
 
     A PDF of more than MAX_PAGES pages raises DocumentTooBig, before any
-    page is read (`pdf_pages`) - never swallowed into « no layer » by the
-    handler below, which would send it on to be rendered."""
+    page is read (`pdf_pages`), and so does a page drawing too many glyphs
+    (`bounded_reading`) - never swallowed into « no layer » by the handler
+    below, which would send it on to be rendered."""
     if not path.lower().endswith(".pdf"):
         return []
     pages: list[OcrPage | None] = []
     try:
-        for page in pdf_pages(path):
-            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
-            if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
-                pages.append(None)
-                continue
-            pages.append(OcrPage(lines=_text_lines(words)))
+        with bounded_reading():
+            for page in pdf_pages(path):
+                words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+                if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
+                    pages.append(None)
+                    continue
+                pages.append(OcrPage(lines=_text_lines(words)))
     except DocumentTooBig:
         raise
     except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file

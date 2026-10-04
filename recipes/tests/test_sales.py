@@ -12,11 +12,13 @@ dropped (it would understate every variance report afterwards), and
 re-running an import must never double-count.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from recipes.models import RecipeSale
 from recipes.sales import record_sales, sales_between
@@ -89,6 +91,31 @@ class RecordSalesTests(TestCase):
         record_sales([("Mule", date(2026, 3, 5), 1)])
         result = record_sales([("Mule", date(2026, 3, 5), 2), ("Spritz", date(2026, 3, 5), 2)])
         self.assertEqual((result.created, result.updated, result.recorded), (1, 1, 2))
+
+    def test_a_long_import_is_written_in_a_few_statements(self):
+        """Three years of a till is thousands of recipe/days, written while
+        the import holds the bar's write lock: one upsert for all of them,
+        not four statements each (savepoint, read, write, release). Same
+        outcome: counts, quantities, an updated row's recorded_at kept, and a
+        sale typed by hand on the same day left alone."""
+        days = [date(2026, 1, 1) + timedelta(days=n) for n in range(60)]
+        record_sales([("Mule", day, 1) for day in days[:30]], source="laddition")
+        before = dict(RecipeSale.objects.filter(source="laddition").values_list("sold_on", "recorded_at"))
+        RecipeSale.objects.create(recipe=self.mule, sold_on=days[0], source="manual", quantity=9)
+
+        entries = [("Mule", day, 2) for day in days] + [("Spritz", day, 3) for day in days]
+        with CaptureQueriesContext(connection) as queries:
+            result = record_sales(entries, source="laddition")
+
+        self.assertLess(len(queries), 15)
+        self.assertEqual((result.created, result.updated), (90, 30))
+        laddition = RecipeSale.objects.filter(source="laddition")
+        self.assertEqual(laddition.count(), 120)
+        self.assertEqual(set(laddition.filter(recipe=self.mule).values_list("quantity", flat=True)), {2})
+        self.assertEqual(set(laddition.filter(recipe=self.spritz).values_list("quantity", flat=True)), {3})
+        for sold_on, recorded_at in before.items():
+            self.assertEqual(laddition.get(recipe=self.mule, sold_on=sold_on).recorded_at, recorded_at)
+        self.assertEqual(RecipeSale.objects.get(source="manual").quantity, 9)
 
 
 class PluggableSourceTests(TestCase):
@@ -163,6 +190,16 @@ class SalesWindowTests(TestCase):
             sales_between(date(2026, 3, 1), date(2026, 3, 10)),
             {self.mule.pk: 12, spritz.pk: 3},
         )
+
+    def test_the_sales_are_summed_unsorted(self):
+        """RecipeSale's Meta.ordering (-sold_on, recipe name) would join
+        every sale row to its recipe and sort them all, only to be added up:
+        the whole history, when the report has no opening count."""
+        with CaptureQueriesContext(connection) as queries:
+            sales_between(None, date(2026, 3, 10))
+        sql = next(query["sql"] for query in queries if "recipes_recipesale" in query["sql"])
+        self.assertNotIn("ORDER BY", sql)
+        self.assertNotIn('recipes_recipe"', sql)
 
 
 class HappyHourNameTests(TestCase):

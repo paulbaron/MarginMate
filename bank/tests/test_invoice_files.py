@@ -5,12 +5,15 @@ every document the period's spending paid, one zip, each file named
 import io
 import zipfile
 from datetime import date
+from pathlib import Path
+from unittest import mock
 
 from django.core.files.base import ContentFile
 from django.test import TestCase
 from django.urls import reverse
 
-from bank import reconcile
+from accounts import paths
+from bank import invoice_files, reconcile
 from bank.models import BankTransaction, InvoicePayment
 from bank.tests.test_reconcile import Fixtures, debit_row
 from invoices.models import Supplier
@@ -144,6 +147,29 @@ class InvoiceFilesTests(Fixtures, TestCase):
         self.metro_again.save(update_fields=["source_file"])
         _, archive = self.download(mois="2026-07")
         self.assertNotIn("Metro 120€00 29_06_2026 (2).pdf", archive.namelist())
+
+    def test_a_pdf_or_a_photo_goes_in_as_it_is_and_the_rest_deflated(self):
+        """A PDF or a photo is compressed already: deflated again, a whole
+        history of them was seconds of a thread every bar shares, for a few
+        percent."""
+        self.metro_again.source_file.save("metro-juin-bis.xml", ContentFile(b"<Invoice/>" * 50))
+        _, archive = self.download(mois="2026-07")
+        kinds = {Path(info.filename).suffix: info.compress_type for info in archive.infolist()}
+        self.assertEqual(
+            kinds, {".pdf": zipfile.ZIP_STORED, ".xml": zipfile.ZIP_DEFLATED, ".txt": zipfile.ZIP_DEFLATED}
+        )
+        self.assertEqual(archive.read("Metro 120€00 29_06_2026.pdf"), b"%PDF metro")
+        self.assertEqual(archive.read("Metro 120€00 29_06_2026.xml"), b"<Invoice/>" * 50)
+
+    def test_the_media_folder_is_found_once_for_the_whole_zip(self):
+        """Not once a file: resolved, and its folder made, for each of
+        hundreds of invoices, it was most of what a whole history cost. Each
+        file is still resolved and checked inside it (the test above)."""
+        invoices = invoice_files.paid_by(BankTransaction.objects.all())
+        with mock.patch("accounts.paths.media_root", wraps=paths.media_root) as media_root:
+            missing = invoice_files.write_zip(invoices, io.BytesIO())
+        self.assertEqual(media_root.call_count, 1)
+        self.assertEqual(missing, [self.typed])
 
     def test_a_chosen_month_wins_over_the_dates(self):
         response, archive = self.download(mois="2026-07", du="2026-08-01", au="2026-08-31")

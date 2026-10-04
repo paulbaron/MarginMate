@@ -374,6 +374,61 @@ class RefusalTests(SimpleTestCase):
         with mock.patch.object(archive, "MAX_JSON_BYTES", 1000):
             self.assertRefused(path, "Archive refusée : fournisseurs.json est trop gros.")
 
+    def test_a_section_file_of_too_many_values(self):
+        """Few bytes, millions of lists once parsed: refused while it is read,
+        before json.loads makes them (audit 04/10/2026)."""
+        path = write_zip(
+            {"fournisseurs.json": '{"suppliers": [' + ",".join(["[]"] * 3000) + "]}"}, manifest_for(["fournisseurs"])
+        )
+        with mock.patch.object(archive, "MAX_JSON_VALUES", 1000), ArchiveReader(path) as reader:
+            with self.assertRaises(ArchiveError) as caught:
+                reader.section("fournisseurs").payload()
+        self.assertEqual(str(caught.exception), "Archive refusée : fournisseurs.json est trop gros.")
+
+    def test_the_values_are_counted_across_the_archive(self):
+        """Every section's parse stays in memory until the import ends: one
+        member just under the cap per section added up to gigabytes (audit
+        04/10/2026)."""
+        lists = '{"suppliers": [' + ",".join(["[]"] * 300) + "]}"
+        path = write_zip({"fournisseurs.json": lists, "sources.json": lists}, manifest_for(["fournisseurs", "sources"]))
+        with mock.patch.object(archive, "MAX_JSON_VALUES", 1000), ArchiveReader(path) as reader:
+            reader.section("fournisseurs").payload()
+            with self.assertRaises(ArchiveError) as caught:
+                reader.section("sources").payload()
+        self.assertEqual(str(caught.exception), "Archive refusée : sources.json est trop gros.")
+
+    def test_the_manifest_values_count_too(self):
+        manifest = {**manifest_for(["fournisseurs"]), "padding": [[]] * 300}
+        path = write_zip({"fournisseurs.json": '{"suppliers": [' + ",".join(["[]"] * 300) + "]}"}, manifest)
+        with mock.patch.object(archive, "MAX_JSON_VALUES", 1000), ArchiveReader(path) as reader:
+            with self.assertRaises(ArchiveError) as caught:
+                reader.section("fournisseurs").payload()
+        self.assertEqual(str(caught.exception), "Archive refusée : fournisseurs.json est trop gros.")
+
+    def test_a_file_two_sections_read_is_counted_once(self):
+        path = old_archive(banque=({**OLD_BANK, "padding": [[]] * 300}, OLD_BANK_COUNTS))
+        with mock.patch.object(archive, "MAX_JSON_VALUES", 1000), ArchiveReader(path) as reader:
+            reader.section("banque").payload()
+            self.assertEqual(
+                only(reader.section("regles_banque").payload(), BANK_RULES_KEYS), only(OLD_BANK, BANK_RULES_KEYS)
+            )
+
+    def test_a_manifest_too_big(self):
+        manifest = manifest_for(["fournisseurs"])
+        path = write_zip({"fournisseurs.json": "{}"}, {**manifest, "padding": "x" * 5000})
+        with mock.patch.object(archive, "MAX_MANIFEST_BYTES", 1000):
+            self.assertRefused(path, "Archive refusée : manifest.json est trop gros.")
+
+    def test_a_manifest_has_a_value_bound_of_its_own(self):
+        """A real manifest is a few values a file. With the archive's whole
+        budget (25 million), « "padding": [[], [], …] » under its 16 MB was
+        parsed at every stage, preview and import, and kept whole in the
+        stage's state.json (review 04/10/2026)."""
+        manifest = {**manifest_for(["fournisseurs"]), "padding": [[]] * 1_000_000}
+        path = write_zip({"fournisseurs.json": "{}"}, manifest)
+        with mock.patch("transfer.archive.json.loads", side_effect=AssertionError("parsed")):
+            self.assertRefused(path, "Archive refusée : manifest.json est trop gros.")
+
     def test_a_declared_section_missing(self):
         self.assertRefused(write_zip({}, manifest_for(["fournisseurs"])), "Archive refusée : fournisseurs.json manque.")
 

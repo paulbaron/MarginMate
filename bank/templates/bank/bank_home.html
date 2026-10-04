@@ -362,6 +362,7 @@
                                                 {% csrf_token %}
                                                 <input type="hidden" name="next" value="{{ page_url }}">
                                                 {% if row.status == "linked" %}
+                                                    {# The invoices this row shows: « Délier » takes these off, or nothing (views._unlink_as_shown). #}{% for payment in row.payments %}<input type="hidden" name="shown" value="{{ payment.invoice_id }}">{% endfor %}
                                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="unlink">{% if row.payments|length > 1 %}Tout délier{% else %}Délier{% endif %}</button>
                                                 {% elif row.status == "todo" %}
                                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="no_invoice">Pas de facture</button>

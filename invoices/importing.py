@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 from django.core.files import File
 from django.db import transaction
@@ -11,7 +11,7 @@ from django.utils import timezone
 from common import group_thousands
 from inventory.matching import resolve_products
 from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
-from inventory.services import create_stock_movement_for_line, expense_product
+from inventory.services import create_stock_movement_for_line, expense_product, movement_refusal
 
 from .charges import read_charge
 from .deletion import remove_orphan_products
@@ -47,13 +47,39 @@ def import_parsed_invoice(
     source_file_path: str | None = None,
     display_filename: str | None = None,
 ) -> Invoice:
-    if (
-        parsed.invoice_number
-        and Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists()
-    ):
-        raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
+    known = (
+        Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).first()
+        if parsed.invoice_number
+        else None
+    )
+    if known is not None:
+        # With the day of the one already in: a count of the day filed bare
+        # names another day's ticket, and the date shows it is not this one.
+        day = f" du {known.invoice_date:%d/%m/%Y}" if known.invoice_date else ""
+        raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}{day}.")
     if supplier.expenses_only:
         parsed.printed_total_ttc = charge_reading(parsed)[0]
+    # A supplier of charges has no products: its document is filed as the
+    # charge items it names, or as one line per VAT rate, on products that
+    # carry its charges and reach no stock page.
+    lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
+    # The lines written, refused before anything is - the source file
+    # included (_fitting says why).
+    for parsed_line in lines:
+        _line_values(parsed_line)
+    if not supplier.expenses_only:
+        # A delivery typed on the hand-entry page arrives here rather than
+        # through replace_invoice_lines, and its share has to be on the lines
+        # before the movements below are booked from them.
+        spread_charges(lines)
+        resolved = resolve_products(
+            supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
+        )
+        flag_products(supplier, lines, resolved)
+        # And the movements they book, before the source file is copied too.
+        for parsed_line, (product, _created) in zip(lines, resolved):
+            if not product.needs_review:
+                _refuse_wide_movement(InvoiceLine(product=product, **_line_values(parsed_line)))
 
     invoice = Invoice(
         supplier=supplier,
@@ -71,23 +97,11 @@ def import_parsed_invoice(
             invoice.source_file.save(name, File(fh), save=False)
     invoice.save()
 
-    # A supplier of charges has no products: its document is filed as the
-    # charge items it names, or as one line per VAT rate, on products that
-    # carry its charges and reach no stock page.
-    lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
     needs_review = False
     if supplier.expenses_only:
         for parsed_line in lines:
             _create_line(invoice, expense_product(supplier, parsed_line.raw_name), parsed_line)
     else:
-        # A delivery typed on the hand-entry page arrives here rather than
-        # through replace_invoice_lines, and its share has to be on the lines
-        # before the movements below are booked from them.
-        spread_charges(lines)
-        resolved = resolve_products(
-            supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
-        )
-        flag_products(supplier, lines, resolved)
         for parsed_line, (product, _created) in zip(lines, resolved):
             line = _create_line(invoice, product, parsed_line)
             if product.needs_review:
@@ -108,6 +122,10 @@ def import_parsed_invoice(
         charge_needs_a_look(invoice, parsed.printed_total_ttc)
     return invoice
 
+
+#: Said on a supplier's PDF with no date read; taken off once one is typed
+#: in (receipts.without_date_problem).
+PDF_NO_DATE = "Date introuvable dans le document : saisissez-la dans « Corriger les lignes »."
 
 UNREAD_CHARGE = (
     "Le total de ce document n'a pas été lu : le montant de la charge vient de ce qui a pu être lu, "
@@ -273,12 +291,14 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
     return charge_state(invoice, total) or changed
 
 
-def redo_as_expenses(supplier: Supplier) -> int:
+def redo_as_expenses(supplier: Supplier) -> tuple[int, list[Invoice]]:
     """File the documents already in as charges: their charge items, or the
     one line their total makes, and the products their old lines named go with
     them (remove_orphan_products). Returns how many documents changed - one
     whose lines a stock take was priced from is left alone, since it was
-    stock after all.
+    stock after all - and the documents left alone because their charge
+    reading holds a figure no column does (LineTooWideError: ten at
+    200 000 fit, one line of 2 000 000 does not), for the page to name.
 
     Each document is **read again from its own text** where it kept some,
     rather than from the lines it is filed as: a rent statement filed at
@@ -291,15 +311,22 @@ def redo_as_expenses(supplier: Supplier) -> int:
     settled by the move rather than left flagged with nothing to say.
     """
     done = 0
+    left = []
     for invoice in Invoice.objects.filter(supplier=supplier).prefetch_related("lines"):
-        done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
+        # Refused, its savepoint takes back what it wrote: raised past here,
+        # the page answered 500 with the box saved and the documents after
+        # this one never refiled.
+        try:
+            done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
+        except LineTooWideError:
+            left.append(invoice)
     # Whatever the documents needed, what this supplier sends is a charge:
     # unticked and ticked again, not one line changes, so nothing else
     # would put the flag back on its charge items. Not a product a stock item
     # claimed - it is stock after all, which is the same reason a document
     # a stock take was priced from is left alone above.
     Product.objects.filter(supplier=supplier, is_expense=False, stock_type__isnull=True).update(is_expense=True)
-    return done
+    return done, left
 
 
 def charge_credits(supplier: Supplier):
@@ -541,8 +568,54 @@ def flag_products(supplier: Supplier, parsed_lines, resolved) -> None:
             product.save(update_fields=["is_expense"])
 
 
+class LineTooWideError(ValueError):
+    """A line with a figure wider than the column it goes into, said in
+    French: a ValueError, as every refusal of a reading is."""
+
+
+#: Each figure of a line its column bounds, as the refusal names it.
+_LINE_FIGURES = {
+    "quantity": "la quantité",
+    "total_volume": "le poids / volume",
+    "unit_cost_ht": "le prix unitaire",
+    "total_ht": "le montant HT",
+    "taxes": "les taxes",
+    "discount": "la remise",
+    "vat_rate": "le taux de TVA",
+    "printed_ttc": "le montant TTC",
+    "discount_ttc": "la remise TTC",
+    "spread_ht": "la part des frais",
+}
+
+
+def _fitting(values: dict) -> dict:
+    """`values`, or a refusal naming the first figure its column cannot hold.
+
+    The last guard, under every path that writes lines (a hand-typed
+    invoice, the correction page, an OCR reading, a move, a re-read). SQLite
+    stores 1 500 000 in `unit_cost_ht` (10,4) without a word and Django's
+    converter raises on every read of it - the document, « Produits &
+    charges » and « Banque » answer 500 until raw SQL takes the line out
+    (CLAUDE.md « A figure wider than the column behind it is refused, at the
+    door »). Checked the way that read does it, so the cliff is the column
+    exactly."""
+    for name, what in _LINE_FIGURES.items():
+        value = values[name]
+        if value is None:
+            continue
+        field = InvoiceLine._meta.get_field(name)
+        try:
+            Decimal(value).quantize(Decimal(1).scaleb(-field.decimal_places), context=field.context)
+        except InvalidOperation:
+            raise LineTooWideError(
+                f"« {values['raw_name']} » : {what} ({group_thousands(value)}) dépasse ce que MarginMate peut "
+                "enregistrer - vérifiez la quantité et le montant de la ligne."
+            ) from None
+    return values
+
+
 def _line_values(parsed_line: ParsedLine) -> dict:
-    return {
+    values = {
         "raw_name": parsed_line.raw_name,
         "read_as": parsed_line.read_as,
         "quantity": parsed_line.quantity,
@@ -559,10 +632,21 @@ def _line_values(parsed_line: ParsedLine) -> dict:
         "is_spread_charge": parsed_line.is_spread_charge,
         "spread_ht": parsed_line.spread_ht,
     }
+    return _fitting(values)
 
 
 def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceLine:
     return InvoiceLine.objects.create(invoice=invoice, product=product, **_line_values(parsed_line))
+
+
+def _refuse_wide_movement(line) -> None:
+    """_fitting's guard for the movement a line books: a line whose own
+    figures fit can still divide, by a small factor, into a unit cost
+    StockMovement.unit_cost_ht (10,4) cannot hold - stored, the home page and
+    Marges answered 500 for the whole bar (inventory.services.movement_refusal)."""
+    refusal = movement_refusal(line)
+    if refusal:
+        raise LineTooWideError(refusal)
 
 
 class InvoiceLinesInUseError(Exception):
@@ -706,7 +790,7 @@ def parse_and_import(
         )
     if invoice.invoice_date is None:
         # Undated, it sits outside every stock valuation and the bank match.
-        problems.append("Date introuvable dans le document : saisissez-la dans « Corriger les lignes ».")
+        problems.append(PDF_NO_DATE)
     if problems:
         invoice.error_message = " ".join(problems)
         invoice.status = Invoice.Status.NEEDS_REVIEW
@@ -743,6 +827,9 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     # before the delivery was shared out, and nothing would recreate them
     # until somebody happened to save the page again.
     spread_charges(parsed_lines)
+    # Refused before anything is written either (_fitting).
+    for parsed_line in parsed_lines:
+        _line_values(parsed_line)
     stored = {line.pk: line for line in invoice.lines.all()}
     corrected = {parsed.line_id for parsed in parsed_lines if parsed.line_id in stored}
     removed = [line for pk, line in stored.items() if pk not in corrected]
@@ -787,6 +874,8 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
         if product.needs_review:
             needs_review = True
         else:
+            # In this function's transaction: refused, nothing above stays.
+            _refuse_wide_movement(line)
             create_stock_movement_for_line(line)
     remove_orphan_products(previous_products)
 

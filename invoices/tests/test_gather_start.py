@@ -53,3 +53,17 @@ class DefaultGatherStartTests(TestCase):
         response = self.client.get(reverse("invoices:invoice_list"))
         self.assertEqual(response.context["default_start_date"], date(2026, 8, 28))
         self.assertContains(response, 'value="2026-08-28"')
+
+
+class EarliestGatherStartTests(TestCase):
+    def test_the_page_never_offers_a_start_before_2000(self):
+        """An e-invoice may state the year 0001: the newest one a source
+        brought in, it was offered as the start, a value the date box
+        refuses - the start had to be typed again."""
+        source = make_supplier(code="EXEMPLE", name="Exemple")
+        make_invoice_type(supplier=source)
+        make_invoice(supplier=source, invoice_date=date(1, 1, 1))
+        response = self.client.get(reverse("invoices:invoice_list"))
+        self.assertEqual(response.context["default_start_date"], date(2000, 1, 1))
+        self.assertContains(response, 'name="start_date" min="2000-01-01"')
+        self.assertContains(response, 'value="2000-01-01"')

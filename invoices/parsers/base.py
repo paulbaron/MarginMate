@@ -220,18 +220,20 @@ class InvoiceParser:
         more than ocr.MAX_PAGES pages; each page is released once its text
         and tables are taken (ocr.pdf_pages - security review HARDEN-01:
         this loop read and kept every page of whatever it was handed, and a
-        supplier's reader never reaches the page cap of ocr.page_images)."""
+        supplier's reader never reaches the page cap of ocr.page_images),
+        and for a page drawing too many glyphs (ocr.bounded_reading)."""
         import os
 
-        from ..ocr import pdf_pages
+        from ..ocr import bounded_reading, pdf_pages
 
-        pages = [
-            PdfPage(
-                text=page.extract_text(**self.text_extraction_kwargs) or "",
-                tables=page.extract_tables() if self.needs_tables else [],
-            )
-            for page in pdf_pages(pdf_path)
-        ]
+        with bounded_reading():
+            pages = [
+                PdfPage(
+                    text=page.extract_text(**self.text_extraction_kwargs) or "",
+                    tables=page.extract_tables() if self.needs_tables else [],
+                )
+                for page in pdf_pages(pdf_path)
+            ]
         return self.parse_pages(pages, date_hint=date_hint, source_name=os.path.basename(pdf_path))
 
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:

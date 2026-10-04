@@ -19,11 +19,15 @@ its padding zeros stopped counting (generic_receipt.DAILY_COUNT_DIGITS) -
 takes its date the same way (« 000172-20251119 »): bare, a second photo of
 that ticket would no longer be recognised, since it now reads dated. Only
 when the text prints that very number after « Ticket »: a short number read
-any other way is the document's own.
+any other way is the document's own. So does Franprix's store, till and
+count of the day (« R1 007418-02 317 », « 007418-02-317-20250323 »). And a
+number a dot cut short was filed as the document's date (« 20250314 » for
+« 20250314.38604 »): it takes the whole number.
 """
 
 import re
 from collections import Counter
+from datetime import date
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -34,6 +38,8 @@ from invoices.receipts import has_own_reader
 
 MADE_UP_RE = re.compile(r"\d{8}-\d+\.\d{2}")
 DIGIT_RUN_RE = re.compile(r"\d{18,26}")
+# generic_receipt.STORE_TILL_RE's number, filed bare.
+STORE_TILL_COUNT_RE = re.compile(r"\d{5,6}-\d{2}-\d{2,4}")
 
 
 def stands_in(number: str) -> bool:
@@ -43,7 +49,23 @@ def stands_in(number: str) -> bool:
 
 def bare_count(number: str) -> bool:
     """A number short enough to be a till's count of the day, undated."""
-    return number.isdigit() and len(number.lstrip("0")) <= DAILY_COUNT_DIGITS
+    return (number.isdigit() and len(number.lstrip("0")) <= DAILY_COUNT_DIGITS) or bool(
+        STORE_TILL_COUNT_RE.fullmatch(number)
+    )
+
+
+def is_day(number: str, day: date | None) -> bool:
+    """The document's own date, all its number was read as."""
+    return day is not None and number == f"{day:%Y%m%d}"
+
+
+def completes(number: str, printed: str, day: date | None) -> bool:
+    """`printed` is `number` made whole: a count of the day with its date
+    (« 000172-20251119 »), or a date with the rest of the number the dot cut
+    off (« 20250314.38604 »)."""
+    if day is None:
+        return False
+    return printed == f"{number}-{day:%Y%m%d}" or (is_day(number, day) and printed.startswith(f"{number}."))
 
 
 class Command(BaseCommand):
@@ -63,12 +85,17 @@ class Command(BaseCommand):
             for invoice in documents:
                 text = invoice.document_text
                 number = invoice.invoice_number
-                if not text or not (stands_in(number) or bare_count(number)) or has_own_reader(invoice.supplier):
+                day = invoice.invoice_date
+                if (
+                    not text
+                    or not (stands_in(number) or bare_count(number) or is_day(number, day))
+                    or has_own_reader(invoice.supplier)
+                ):
                     continue
-                printed = _ticket_number(text, invoice.invoice_date)
+                printed = _ticket_number(text, day)
                 if not printed or stands_in(printed) or printed == number:
                     continue
-                if not stands_in(number) and printed != f"{number}-{invoice.invoice_date:%Y%m%d}":
+                if not stands_in(number) and not completes(number, printed, day):
                     continue
                 if (
                     Invoice.objects.filter(supplier=invoice.supplier, invoice_number=printed)

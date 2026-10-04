@@ -420,6 +420,33 @@ class HolidaysOffTests(TestCase):
         self.assertEqual(outcome.left_alone, (date(2026, 5, 25),))
         self.assertEqual(stored(self.person, MAY)[25], ("travail", Decimal("5"), ""))
 
+    def test_a_holiday_worked_on_a_working_day_stays_worked(self):
+        """Ascension saved worked, 9 h with a note, then the button pressed
+        for the month's other holidays: it wiped the 9 h and the note, on a
+        sheet the employee signs (audit, 04/10/2026)."""
+        save_month(self.person, MAY, [PostedDay(date(2026, 5, 14), hours=Decimal("9"), note="ouvert, payé double")])
+        outcome = mark_holidays_off(self.person, MAY)
+        days = stored(self.person, MAY)
+        self.assertEqual(days[14], ("travail", Decimal("9"), "ouvert, payé double"))
+        self.assertEqual({days[day] for day in (1, 8)}, {("ferie", Decimal("0"), "")})
+        self.assertEqual(outcome.changed, (date(2026, 5, 1), date(2026, 5, 8)))
+        self.assertEqual(outcome.kept_worked, (date(2026, 5, 14),))
+        self.assertEqual(outcome.left_alone, (date(2026, 5, 25),))
+
+    def test_a_holiday_worked_at_its_planned_hours_with_a_note_stays_worked(self):
+        save_month(self.person, MAY, [PostedDay(date(2026, 5, 14), hours=Decimal("7.5"), note="ouvert")])
+        outcome = mark_holidays_off(self.person, MAY)
+        self.assertEqual(stored(self.person, MAY)[14], ("travail", Decimal("7.5"), "ouvert"))
+        self.assertEqual(outcome.kept_worked, (date(2026, 5, 14),))
+
+    def test_a_month_whose_only_holiday_was_worked_writes_nothing(self):
+        """July 2026: 14 July, a Tuesday, worked 10 h."""
+        july = date(2026, 7, 1)
+        save_month(self.person, july, [PostedDay(date(2026, 7, 14), hours=Decimal("10"))])
+        outcome = mark_holidays_off(self.person, july)
+        self.assertEqual((outcome.changed, outcome.kept_worked), ((), (date(2026, 7, 14),)))
+        self.assertEqual(stored(self.person, july)[14], ("travail", Decimal("10"), ""))
+
 
 class ResetToTypicalWeekTests(TestCase):
     def setUp(self):

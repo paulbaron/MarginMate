@@ -36,6 +36,8 @@ import importlib
 import json
 import logging
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -112,6 +114,8 @@ GONE = "Cette archive n'est plus en attente : envoyez-la de nouveau."
 #: A member's import or clear (`_refused`).
 OWNER_ONLY = "Seul le propriétaire de l'espace peut importer ou effacer des données."
 TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
+#: A second preview or import of an espace while one runs (`_one_import`).
+IMPORT_RUNNING = "Un import est déjà en cours pour cet espace : réessayez dans un instant."
 #: Installed by the migrations into every database: a database holding only
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
 #: archive's settings. A new hosted espace holds only some of them - not the
@@ -520,8 +524,11 @@ def data_import(request):
             messages.error(request, "Choisissez un fichier à importer.")
             return redirect("transfer:data_import")
         try:
-            stage = staging.stage_upload(upload)
-        except ArchiveError as exc:
+            # Staging parses what was sent (an old associations file, a
+            # manifest): one at a time with the previews (`_one_import`).
+            with _one_import():
+                stage = staging.stage_upload(upload)
+        except (ArchiveError, Busy) as exc:
             messages.error(request, str(exc))
             return redirect("transfer:data_import")
         except OSError as exc:
@@ -582,8 +589,9 @@ def data_import_backup(request):
         messages.error(request, busy)
         return redirect("transfer:data_import")
     try:
-        stage = staging.stage_backup(request.POST.get("nom", ""))
-    except ArchiveError as exc:
+        with _one_import():
+            stage = staging.stage_backup(request.POST.get("nom", ""))
+    except (ArchiveError, Busy) as exc:
         messages.error(request, str(exc))
         return redirect("transfer:data_import")
     return redirect("transfer:data_import_stage", token=stage.token)
@@ -745,6 +753,34 @@ def _preview_import(stage, strategies: dict[str, Strategy]) -> RunReport:
     return report
 
 
+#: The espaces (`tenant_key`) whose preview or import runs in this process
+#: (`serve` is one): an entry lives for the run only.
+_imports_running: set[str] = set()
+_imports_lock = threading.Lock()
+
+
+@contextmanager
+def _one_import():
+    """One preview or import of the bound espace at a time, the next one
+    refused at once (Busy, IMPORT_RUNNING) rather than queued. Each holds the
+    archive's sections parsed - up to about 0.9 GB for a hostile archive
+    (archive.py's value budget) - and posted from several tabs, eight could
+    fill the server's threads (review, 04/10/2026). Staging an upload or a
+    backup takes the same turn: it parses the manifest, or an old
+    associations file whole. Per espace: another bar never waits on this
+    one."""
+    key = tenant_key()
+    with _imports_lock:
+        if key in _imports_running:
+            raise Busy(IMPORT_RUNNING)
+        _imports_running.add(key)
+    try:
+        yield
+    finally:
+        with _imports_lock:
+            _imports_running.discard(key)
+
+
 def data_import_stage(request, token):
     stage = staging.get(token)
     if request.method == "POST":
@@ -788,27 +824,35 @@ def data_import_stage(request, token):
         return redirect("transfer:data_import_stage", token=token)
 
     try:
-        if action == "importer":
-            same = stage.state.get("sections") == {key: value.value for key, value in strategies.items()}
-            previewed = bool(stage.state.get("preview"))
-            if not (same and previewed and _fresh(stage.preview_at)):
-                _preview_import(stage, strategies)
-                messages.warning(request, EXPIRED if same and previewed else CHANGED)
-                return redirect("transfer:data_import_stage", token=token)
-            if not _shows(request, stage.state["preview"]):
-                # The preview stored is another page's (a second tab, an
-                # earlier confirm). What this page announced still decides:
-                # worked out again, it either says the same - and runs, held
-                # to it - or something changed since and nothing is done.
-                fresh = _preview_import(stage, strategies)
-                if _still_shown(request, fresh):
-                    return _confirm_import(request, stage, strategies)
-                messages.warning(request, _why_not_shown(request, OLD_PAGE_IMPORT, OTHER_TAB_IMPORT))
-                return redirect("transfer:data_import_stage", token=token)
-            return _confirm_import(request, stage, strategies)
-        _preview_import(stage, strategies)
+        with _one_import():
+            if action == "importer":
+                same = stage.state.get("sections") == {key: value.value for key, value in strategies.items()}
+                previewed = bool(stage.state.get("preview"))
+                if not (same and previewed and _fresh(stage.preview_at)):
+                    _preview_import(stage, strategies)
+                    messages.warning(request, EXPIRED if same and previewed else CHANGED)
+                    return redirect("transfer:data_import_stage", token=token)
+                if not _shows(request, stage.state["preview"]):
+                    # The preview stored is another page's (a second tab, an
+                    # earlier confirm). What this page announced still decides:
+                    # worked out again, it either says the same - and runs, held
+                    # to it - or something changed since and nothing is done.
+                    fresh = _preview_import(stage, strategies)
+                    if _still_shown(request, fresh):
+                        return _confirm_import(request, stage, strategies)
+                    messages.warning(request, _why_not_shown(request, OLD_PAGE_IMPORT, OTHER_TAB_IMPORT))
+                    return redirect("transfer:data_import_stage", token=token)
+                return _confirm_import(request, stage, strategies)
+            _preview_import(stage, strategies)
     except (ArchiveError, Busy) as exc:
         messages.error(request, str(exc))
+    except Exception as exc:  # a preview is rolled back; the stage is kept to try again
+        # « Importer » clicked is an import that failed, whichever step of it
+        # did - the backup's folder, a preview worked out again.
+        importing = action == "importer"
+        logger.exception("import failed" if importing else "import preview failed")
+        what = "L'import" if importing else "L'aperçu"
+        messages.error(request, f"{what} a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
     return redirect("transfer:data_import_stage", token=token)
 
 

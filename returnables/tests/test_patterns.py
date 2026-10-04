@@ -568,8 +568,8 @@ class MailMatcherTests(SimpleTestCase):
         said = []
         with self.assertLogs("returnables.patterns", level="WARNING") as logs:
             self.assertIsNone(patterns.MailMatcher(SlowPattern(), log=said.append).search("Livraison du 14/05/2025"))
-        self.assertIn("motif trop lent sur un mail : ignoré", said[0])
-        self.assertIn("motif trop lent sur un mail : ignoré", logs.output[0])
+        self.assertIn("motif trop lent sur un mail, laissé pour la prochaine recherche", said[0])
+        self.assertIn("motif trop lent sur un mail, laissé pour la prochaine recherche", logs.output[0])
 
     def test_a_refused_pattern_is_refused_before_compiling(self):
         never = NeverCompile()

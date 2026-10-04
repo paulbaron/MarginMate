@@ -57,6 +57,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.access import access_of
 from common import is_id
 
 from . import signature_views, timesheet
@@ -166,6 +167,15 @@ def _days_off_left(names: list[str]) -> str:
     return f"Jours de repos laissés tels quels : {listing}."
 
 
+def _worked_holidays_left(names: list[str]) -> str:
+    """« Férié travaillé laissé tel quel : 14 mai (Ascension). » - what the
+    holidays button did not touch because it was saved worked."""
+    if len(names) == 1:
+        return f"Férié travaillé laissé tel quel : {names[0]}."
+    listing = ", ".join(names[:-1]) + " et " + names[-1]
+    return f"Fériés travaillés laissés tels quels : {listing}."
+
+
 def _changed_words(days, *, name_them: bool = True, against: str = "") -> str:
     """« 1 jour modifié (mardi 2) », « 3 jours modifiés par rapport à la
     semaine type (…) », « aucun jour modifié »."""
@@ -191,18 +201,24 @@ def home(request):
     """The establishment's header, the employees, « Ajouter un salarié ».
     Both forms post here, each saying which it is (`action`): a refused one
     is drawn back with its errors, the other one untouched."""
+    owner = access_of(request).owner
     establishment = Establishment.current()
     establishment_form = EstablishmentForm(instance=establishment)
-    employee_form = EmployeeForm()
+    employee_form = EmployeeForm(owner=owner)
     if request.method == "POST":
         action = request.POST.get(ACTION_FIELD)
+        if action == SAVE_ESTABLISHMENT and not owner:
+            # The name is the employer's on every sheet, its certificate and
+            # the signature mails (`signing.employer_identity`).
+            messages.error(request, "Seul votre employeur modifie l'en-tête des fiches : rien n'a été modifié.")
+            return redirect("staff:home")
         if action == SAVE_ESTABLISHMENT:
             establishment_form = EstablishmentForm(request.POST, instance=Establishment.current())
             if establishment_form.is_valid():
                 _say_header(request, establishment_form.save())
                 return redirect("staff:home")
         elif action == ADD_EMPLOYEE:
-            employee_form = EmployeeForm(request.POST)
+            employee_form = EmployeeForm(request.POST, owner=owner)
             if employee_form.is_valid():
                 person = employee_form.save()
                 messages.success(request, f"Salarié ajouté : {person.display_name}, {week_summary(person)}.")
@@ -276,16 +292,17 @@ def employee(request, pk):
     never rewrites a month already saved - that is what the employee signed
     - and the page and its message both say so."""
     person = _employee(pk)
+    owner = access_of(request).owner
     if request.method == "POST":
         # Bound to a copy of its own: a refused form writes what was typed
         # onto its instance, and the page's header and its list of months
         # must go on showing the employee as saved.
-        form = EmployeeForm(request.POST, instance=_employee(pk))
+        form = EmployeeForm(request.POST, instance=_employee(pk), owner=owner)
         if form.is_valid():
             _say_employee_saved(request, form)
             return redirect("staff:employee", pk=person.pk)
     else:
-        form = EmployeeForm(instance=person)
+        form = EmployeeForm(instance=person, owner=owner)
 
     current = this_month()
     sheets = saved_month_sheets(person)
@@ -568,7 +585,8 @@ def month_range(request, pk, month):
 def month_holidays_off(request, pk, month):
     """« Mettre les fériés du mois en Férié chômé » - the owner's decision,
     taken with this button, never assumed (`timesheet.mark_holidays_off`).
-    A holiday on a day off stays a day off, and the answer names it."""
+    A holiday on a day off stays a day off, one saved worked stays worked,
+    and the answer names them."""
     person = _employee(pk)
     back = redirect(_month_url(person, month))
     if request.method != "POST":
@@ -585,7 +603,9 @@ def month_holidays_off(request, pk, month):
         return back
     named = {day: f"{_in_prose(day)} ({name})" for day, name in sorted(holidays.items())}
     left = _days_off_left([named[day] for day in outcome.left_alone]) if outcome.left_alone else ""
-    marked = [label for day, label in named.items() if day not in outcome.left_alone]
+    if outcome.kept_worked:
+        left = " ".join(filter(None, [left, _worked_holidays_left([named[day] for day in outcome.kept_worked])]))
+    marked = [label for day, label in named.items() if day not in outcome.left_alone and day not in outcome.kept_worked]
     if not marked:
         messages.info(request, f"{left} Rien n'a été modifié.")
         return back

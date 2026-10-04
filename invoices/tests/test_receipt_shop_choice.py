@@ -12,8 +12,9 @@ OCR never runs here: `receipts.recognise` is replaced.
 
 import os
 import shutil
+from contextlib import nullcontext
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from unittest import mock
 
 from django.contrib.messages import get_messages
@@ -235,6 +236,70 @@ class ChooseShopInBatchTests(TestCase):
         self.assertFalse(any("photo illisible" in message for message in messages_of(response)))
         self.assertNotIn("photo illisible", self.batch.log)
         self.assertIn("photo illisible", "\n".join(logged.output))
+
+    def test_a_new_shop_made_for_a_file_that_fails_is_said(self):
+        """Made before the file is read, it stays: said, not left to be
+        found in « Enseignes et fournisseurs »."""
+        outcomes = (RuntimeError("photo illisible"), DuplicateInvoiceError("Déjà dans MarginMate."))
+        for number, outcome in enumerate(outcomes):
+            with self.subTest(outcome=type(outcome).__name__):
+                name = f"Épicerie Exemple {number}"
+                with (
+                    mock.patch("invoices.receipt_batches.import_document", side_effect=outcome),
+                    self.assertLogs("invoices.receipt_batches", "ERROR")
+                    if isinstance(outcome, RuntimeError)
+                    else nullcontext(),
+                ):
+                    response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+                self.assertRedirects(response, self.page)
+                self.assertTrue(Supplier.objects.filter(name=name).exists())
+                self.assertTrue(
+                    any(f"Enseigne {name} créée" in message for message in messages_of(response)),
+                    messages_of(response),
+                )
+
+    def test_a_new_shop_made_for_a_slip_put_in_consignes_is_not_told_to_be_chosen(self):
+        """The file went to Consignes on purpose: there is nothing left to
+        name a shop for, and « choisissez-la dans la liste » said otherwise."""
+        name = "Transports Exemple"
+        entry = {"name": "bon.pdf", "status": "duplicate", "message": "Bon de consignes : rangé.", "consignes": True}
+        with mock.patch("invoices.receipt_batches.import_with_shop", return_value=entry):
+            response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+        self.assertRedirects(response, self.page)
+        said = messages_of(response)
+        self.assertIn(f"Enseigne {name} créée, sans ce fichier.", said)
+        self.assertFalse(any("choisissez" in message for message in said), said)
+
+    def test_a_new_shop_made_for_a_slip_no_format_files_is_not_told_to_be_chosen(self):
+        """Not filed (ShopChoiceError): the page said to drop the slip on
+        Consignes and, beside it, to choose the new shop for it - which is
+        refused the same way until its formats are right, and then files it
+        in Consignes whatever the shop. The upload says neither for a slip,
+        filed or not."""
+        from invoices.importing import RoutedToReturnablesError
+
+        name = "Transports Exemple"
+        slip = RoutedToReturnablesError("Bon de consignes : déposez-le sur la page Consignes.", slip=None)
+        with mock.patch("invoices.receipt_batches.import_document", side_effect=slip):
+            response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+        self.assertRedirects(response, self.page)
+        said = messages_of(response)
+        self.assertIn("Bon de consignes : déposez-le sur la page Consignes.", said)
+        self.assertIn(f"Enseigne {name} créée, sans ce fichier.", said)
+        self.assertFalse(any("choisissez" in message for message in said), said)
+
+    def test_a_file_that_blows_up_while_being_described_is_said_on_the_page(self):
+        """`_record_import` inside the try here too, as in `_read_file`: a
+        figure the database cannot read back raised out of the `else:` and
+        the shop chosen by hand answered 500."""
+        with (
+            mock.patch("invoices.receipt_batches._record_import", side_effect=InvalidOperation),
+            self.assertLogs("invoices.receipt_batches", "ERROR"),
+        ):
+            response, _ = self.choose()
+        self.assertRedirects(response, self.page)
+        self.assertTrue(any("n'a pas pu être importé comme ticket" in message for message in messages_of(response)))
+        self.assertEqual(self.batch.results[0]["status"], "unrecognised")
 
     def test_the_shop_can_be_chosen_while_the_batch_runs(self):
         """No need to wait for a folder of a hundred tickets to check the

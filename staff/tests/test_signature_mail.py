@@ -124,7 +124,7 @@ class CodeMailTests(MailCase):
         self.assertNotIn(code, str(self.request.events.last().detail))
         session = {}
         requests_.check_code(self.request, code, session, now=NOW, ip="203.0.113.20", user_agent="Téléphone")
-        self.assertTrue(requests_.is_identified(session, self.request))
+        self.assertTrue(requests_.is_identified(session, self.request, now=NOW))
         self.assertEqual(self.request.identification, SignatureRequest.Identification.CODE_BY_EMAIL)
 
     def test_a_code_that_could_not_be_sent_is_withdrawn_and_counted(self):

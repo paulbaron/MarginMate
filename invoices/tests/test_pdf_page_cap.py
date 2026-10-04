@@ -22,6 +22,7 @@ past a cap patched down to 2; nothing is rendered."""
 import os
 import shutil
 import tempfile
+import zlib
 from unittest import mock
 
 import pdfplumber
@@ -40,6 +41,7 @@ from invoices.parsers import get_parser
 from invoices.parsers.base import InvoiceParser
 from invoices.receipt_batches import run_receipt_batch, stage_batch
 from invoices.receipts import RereadError, import_document, reread_document
+from returnables import reading
 from tests.factories import make_invoice
 
 LINE = "ARTICLE EXEMPLE CONDITIONNE PAR SIX  2  12,50  25,00"
@@ -389,3 +391,476 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
             with self.assertRaises(RereadError) as refused:
                 reread_document(invoice)
         self.assertEqual(str(refused.exception), f"{TOO_LONG} La facture n'a pas été modifiée.")
+
+
+TOO_DENSE = (
+    "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères, traits ou images sur une page."
+)
+
+
+class TooManyGlyphsTests(TestCase):
+    """A page drawing hundreds of thousands of glyphs from one compressed
+    Tj (1 KB of PDF, 1,4 GB once pdfminer had made a character of each):
+    every Achats reader stops at `returnables.reading.MAX_PAGE_GLYPHS` a
+    page and says it on the file's line - never « no text layer », which
+    sent the file on to be rendered. Machine safety: the cap is patched down
+    to 1 000, the page draws 5 000."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "dense.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_of_pages(1, line="A" * 5_000))
+        patch = mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        readers = {
+            "text_layer_pages": ocr.text_layer_pages,
+            "document_text": ocr.document_text,
+            "InvoiceParser.parse": Recorder().parse,
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(str(refused.exception), TOO_DENSE)
+
+    def test_images_drawn_say_it_too(self):
+        """A figure and an image kept for every image drawn, about 2 KB:
+        100 000 draws of one 1x1 image took 263 MB in the text layer."""
+        from returnables.tests.test_reading import drawing_images
+
+        for inline in (False, True):
+            with open(self.path, "wb") as handle:
+                handle.write(drawing_images(1_500, inline=inline))
+            with self.subTest(inline=inline):
+                with self.assertRaises(ocr.DocumentTooBig) as refused:
+                    ocr.text_layer_pages(self.path)
+                self.assertEqual(str(refused.exception), TOO_DENSE)
+
+    def test_the_one_import_files_nothing(self):
+        with mock.patch("invoices.receipts.page_images", never("page_images")) as rendered:
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                import_document(self.path, display_filename="dense.pdf")
+        rendered.assert_not_called()
+        self.assertEqual(str(refused.exception), TOO_DENSE)
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_a_page_within_the_cap_reads(self):
+        path = os.path.join(self.folder, "facture.pdf")
+        with open(path, "wb") as handle:
+            handle.write(pdf_of_pages(2))
+        self.assertEqual(ocr.document_text(path).count("ARTICLE EXEMPLE"), 2)
+
+
+def drawn_line(text: str, top: int, size: int) -> bytes:
+    """A content stream printing `text` at `top`, padded with spaces to
+    `size` bytes."""
+    return f"BT /F1 10 Tf 40 {top} Td ({text}) Tj ET\n".encode().ljust(size)
+
+
+HEAVY = "Document trop lourd pour être lu : plus de 6 Ko une fois décompressé."
+
+
+class InflatedContentTests(TestCase):
+    """Only a bon's reading shared one inflate budget: Achats' readers gave
+    every stream the 64 MB of the per-stream bound, with no total, and
+    pdfminer keeps what it decoded until the file closes - a 718 KB PDF
+    listing twelve 60 MB content streams took 842 MB in the text layer,
+    then PDFium decoded them all again to render (120 MB a stream). Now a
+    PDF's content streams are weighed under `ocr.MAX_INFLATE_TOTAL` before
+    any page is read or rendered, and the readers share that budget too.
+    Machine safety: the bounds are patched down to a few KB."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import pdf_with_streams
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "lourd.pdf")
+        streams = [(["FlateDecode"], zlib.compress(drawn_line(LINE, top, 4_000))) for top in (700, 600)]
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_with_streams(streams))
+
+    def test_every_reader_refuses_before_reading_a_page(self):
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with (
+                self.subTest(reader=name),
+                mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+                mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")),
+                mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")),
+                mock.patch("invoices.pdfium_sandbox.run", never("PDFium")),
+            ):
+                with self.assertRaises(ocr.DocumentTooBig) as refused:
+                    reader(self.path)
+                self.assertEqual(str(refused.exception), HEAVY)
+
+    def test_within_the_budget_the_document_reads(self):
+        with mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 9_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.document_text(self.path).count("ARTICLE EXEMPLE"), 2)
+
+    def test_a_stream_listed_again_is_weighed_again(self):
+        """pdfminer decodes a stream once, however often /Contents lists
+        it; PDFium and the interpreter go through it every time."""
+        from returnables.tests.test_reading import pdf_with_streams
+
+        streams = [(["FlateDecode"], zlib.compress(drawn_line(LINE, 700, 4_000)))] * 3
+        content = pdf_with_streams(streams).replace(b"/Contents [4 0 R 5 0 R 6 0 R]", b"/Contents [4 0 R 4 0 R 4 0 R]")
+        self.assertIn(b"/Contents [4 0 R 4 0 R 4 0 R]", content)
+        with open(self.path, "wb") as handle:
+            handle.write(content)
+        with mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 9_000):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.check_page_count(self.path)
+        self.assertEqual(str(refused.exception), HEAVY.replace("6 Ko", "9 Ko"))
+
+    def test_a_form_drawn_again_is_counted_again_by_the_readers(self):
+        """Weighed once, a form the page draws over and over is interpreted
+        each time (6 to 11 s of CPU a MB): the readers count every run."""
+        from returnables.tests.test_reading import pdf_drawing_a_form
+
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_drawing_a_form(3, 4_000))
+        # Should the weighing (DrawnContentTests) miss it.
+        with (
+            mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000),
+            mock.patch.object(ocr, "_weigh_contents", lambda path: None),
+        ):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.text_layer_pages(self.path)
+        self.assertEqual(str(refused.exception), "Document trop long à lire : plus de 9 Ko de contenu à dessiner.")
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
+            self.assertEqual(ocr.document_text(self.path).count("REPRISE VIDE"), 3)
+
+    def test_the_readers_share_the_budget_too(self):
+        """Should a stream escape the weighing (a form a page draws, a
+        stream pdfminer decodes for itself), the reading is bounded all the
+        same - and never « no text layer », which sent it on to PDFium."""
+        with (
+            mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+            mock.patch.object(ocr, "_weigh_contents", lambda path: None),
+        ):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.text_layer_pages(self.path)
+        self.assertEqual(str(refused.exception), HEAVY)
+
+    def test_a_stream_past_the_per_stream_bound_is_refused_not_unread(self):
+        with mock.patch.object(reading, "MAX_INFLATE_STAGE", 1_000):
+            with self.assertRaises(ocr.DocumentTooBig):
+                ocr.text_layer_pages(self.path)
+
+    def test_the_one_import_files_nothing(self):
+        with (
+            mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+            mock.patch("invoices.receipts.page_images", never("page_images")),
+        ):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                import_document(self.path, display_filename="lourd.pdf")
+        self.assertEqual(str(refused.exception), HEAVY)
+        self.assertFalse(Invoice.objects.exists())
+
+
+def pdf_with_annotations(count: int, size: int) -> bytes:
+    """A one-page PDF whose `count` annotations share one appearance: a form
+    of DRAWN padded to `size` bytes."""
+    from returnables.tests.test_reading import DRAWN, pdf_of_objects
+
+    form = zlib.compress(DRAWN.ljust(size))
+    annotations = " ".join(f"{7 + index} 0 R" for index in range(count)).encode()
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 6 0 R >> >> /Annots [" + annotations + b"] >>"
+            ),
+            b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 595 842] /Filter /FlateDecode /Length "
+            + str(len(form)).encode()
+            + b" >>\nstream\n"
+            + form
+            + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+        + [b"<< /Type /Annot /Subtype /Square /Rect [0 0 595 842] /AP << /N 5 0 R >> >>"] * count
+    )
+
+
+DRAWN_TOO_LONG = "Document trop long à lire : plus de 9 Ko de contenu à dessiner."
+
+
+class DrawnContentTests(TestCase):
+    """PDFium draws more than pdfminer reads, and parses a form again every
+    time it is drawn, keeping about 20 bytes of page objects a byte of path:
+    a 7,6 KB PDF whose 40 annotations share one 1 MB appearance took 850 MB
+    under PDFIUM_LOCK, past every reader's bound (pdfminer never reads an
+    annotation); a form drawn 20 times by Do took 512 MB on the path that
+    renders with no text layer first (`ocr_pdf`). Now what a page draws -
+    its /Contents, every form each time it is drawn, every annotation's
+    appearance - is weighed under `ocr.MAX_RUN_TOTAL` before PDFium opens
+    the file, and every XObject drawn or annotation counts against
+    reading.MAX_PAGE_GLYPHS. Machine safety: the bounds are patched down
+    to a few KB; nothing is rendered."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "dessin.pdf")
+
+    def write(self, content: bytes) -> None:
+        with open(self.path, "wb") as handle:
+            handle.write(content)
+
+    def assert_refused_before_pdfium(self, said: str) -> None:
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "page_images": lambda path: list(ocr.page_images(path)),
+            "ocr_pdf": ocr.ocr_pdf,
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), mock.patch("invoices.pdfium_sandbox.run", never("PDFium")):
+                with self.assertRaises(ocr.DocumentTooBig) as refused:
+                    reader(self.path)
+                self.assertEqual(str(refused.exception), said)
+
+    def test_annotations_sharing_one_appearance_are_weighed_each(self):
+        self.write(pdf_with_annotations(3, 4_000))
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000):
+            self.assert_refused_before_pdfium(DRAWN_TOO_LONG)
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
+            ocr.check_page_count(self.path)
+
+    def test_a_form_drawn_again_is_weighed_again(self):
+        from returnables.tests.test_reading import pdf_drawing_a_form
+
+        self.write(pdf_drawing_a_form(3, 4_000))
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000):
+            self.assert_refused_before_pdfium(DRAWN_TOO_LONG)
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
+            ocr.check_page_count(self.path)
+
+    def test_drawings_past_the_cap_are_refused_before_pdfium(self):
+        """An image drawn 1 500 times by Do or inline, or 1 500 annotations:
+        PDFium keeps an object for each."""
+        from returnables.tests.test_reading import drawing_images
+
+        for content in (drawing_images(1_500), drawing_images(1_500, inline=True), pdf_with_annotations(1_500, 0)):
+            self.write(content)
+            with self.subTest(size=len(content)), mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+                self.assert_refused_before_pdfium(TOO_DENSE)
+        self.write(drawing_images(900))
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            ocr.check_page_count(self.path)
+
+    def test_what_draws_an_xobject_is_read_as_pdfium_reads_it(self):
+        drawn = ocr._drawn(b"/Fm1 Do q /Fm1%comment\nDo Q /Im#201 Do (Fm2) Do <466D33> Do BI /W 1 ID x EI /Do Do")
+        self.assertEqual(drawn, ({"Fm1": 2, "Im 1": 1, "Fm2": 1, "Fm3": 1, "Do": 1}, 1))
+        # « Do » or « BI » inside a longer word draws nothing.
+        self.assertEqual(ocr._drawn(b"/Fm1 Done /BIG (Dodo) Tj"), ({}, 0))
+
+    def test_a_form_drawing_itself_is_weighed_once(self):
+        """pdfminer and PDFium draw no form inside itself: 24 bytes of
+        page, 54 of form, weighed once each."""
+        from returnables.tests.test_reading import DRAWN, pdf_of_objects
+
+        page, form = b"/Fm1 Do 1 0 0 1 0 -20 cm", b"/Fm1 Do\n" + DRAWN
+        self.write(
+            pdf_of_objects(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R >>",
+                    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    (
+                        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                        b"/Resources << /Font << /F1 6 0 R >> /XObject << /Fm1 5 0 R >> >> >>"
+                    ),
+                    b"<< /Length " + str(len(page)).encode() + b" >>\nstream\n" + page + b"\nendstream",
+                    (
+                        b"<< /Type /XObject /Subtype /Form /BBox [0 0 595 842] /Resources << /XObject << /Fm1 5 0 R >> "
+                        b"/Font << /F1 6 0 R >> >> /Length "
+                        + str(len(form)).encode()
+                        + b" >>\nstream\n"
+                        + form
+                        + b"\nendstream"
+                    ),
+                    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+                ]
+            )
+        )
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 100):
+            ocr.check_page_count(self.path)
+        self.assertEqual(ocr.document_text(self.path).count("REPRISE VIDE"), 1)
+
+    def test_a_file_pdfminer_cannot_weigh_is_never_drawn(self):
+        """PDFium rebuilds a PDF cut before its xref, which pdfminer cannot
+        open: the weighing let it through, and the 30 MB-stroke page it
+        refuses reached PDFium (702 MB). page_images now refuses what it
+        could not weigh, « PDF illisible » - the text layer and the count
+        still let it pass, as before, for what reads it next to say."""
+        from common import UNREADABLE_PDF, UnreadablePdf, error_for_page
+        from returnables.tests.test_reading import pdf_drawing_a_form
+
+        content = pdf_drawing_a_form(3, 4_000)
+        self.write(content[: content.rindex(b"xref")])
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.text_layer_pages(self.path), [])
+            for name, reader in {
+                "page_images": lambda path: list(ocr.page_images(path)),
+                "ocr_pdf": ocr.ocr_pdf,
+            }.items():
+                with self.subTest(reader=name), mock.patch("invoices.pdfium_sandbox.run", never("PDFium")):
+                    with self.assertRaises(UnreadablePdf) as refused:
+                        reader(self.path)
+                    self.assertEqual(error_for_page(refused.exception), UNREADABLE_PDF)
+
+    def test_a_stream_pdfminer_cannot_decode_is_never_drawn(self):
+        """A stream pdfminer cannot decode weighed nothing, and went on to
+        PDFium all the same."""
+        from common import UnreadablePdf
+        from returnables.tests.test_reading import pdf_with_streams
+
+        self.write(pdf_with_streams([(["Inconnu"], b"0 0 m 1 1 l S\n" * 10)]))
+        ocr.check_page_count(self.path)
+        with mock.patch("invoices.pdfium_sandbox.run", never("PDFium")), self.assertRaises(UnreadablePdf):
+            list(ocr.page_images(self.path))
+
+
+class TooManyCodesTests(TestCase):
+    """pdfminer expands a font's ToUnicode ranges code by code: an 872-byte
+    file took 360 MB in the text layer. Every Achats reader stops a
+    document's fonts at `returnables.reading.MAX_CMAP_CODES` codes and says
+    it on the file's line. Machine safety: the cap is patched down to
+    1 000, the font maps 5 000."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import bfrange, mapping_codes
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "polices.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(mapping_codes(bfrange(0, 5_000)))
+        patch = mock.patch.object(reading, "MAX_CMAP_CODES", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        readers = {
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses polices déclarent plus de 1\N{NO-BREAK SPACE}000 caractères.",
+            )
+
+    def test_the_one_import_files_nothing(self):
+        with mock.patch("invoices.receipts.page_images", never("page_images")):
+            with self.assertRaises(ocr.DocumentTooBig):
+                import_document(self.path, display_filename="polices.pdf")
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_within_the_cap_the_document_reads(self):
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 6_000):
+            self.assertEqual(ocr.text_layer_pages(self.path), [None])
+
+
+class TooBigObjectsTests(TestCase):
+    """pdfminer builds every object it parses whole, and parses a whole
+    object stream for one of its objects: an ink annotation of 4 million
+    points beside the page, in a 55 KB file, took 24 s and 1,1 GB in
+    check_page_count alone. Every Achats reader stops at
+    `returnables.reading.MAX_PARSED_TOKENS` tokens and says it on the file's
+    line. Machine safety: the cap is patched down to 1 000, the annotation
+    holds 5 000 numbers - but for the review's own file, refused at the real
+    caps before its object stream is parsed."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "encre.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(5_000))
+        patch = mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture.",
+            )
+
+    def test_an_annotation_s_object_stream_is_refused_by_the_weighing(self):
+        """The page outside it: only weighing what PDFium will draw resolves
+        the annotation - refused there, in the page count and before PDFium,
+        and not as « trop lourd une fois décompressé »."""
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(5_000, page_inside=False))
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture.",
+            )
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            ocr.check_page_count(self.path)
+
+    def test_the_e_invoice_reader_finds_none_and_the_count_says_it(self):
+        from invoices import einvoice
+
+        self.assertIsNone(einvoice.embedded_xml(self.path))
+        with mock.patch("invoices.receipts.page_images", never("page_images")):
+            with self.assertRaises(ocr.DocumentTooBig):
+                import_document(self.path, display_filename="encre.pdf")
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_the_review_s_file_is_refused_at_once(self):
+        """4 million points, at the real caps: its object stream decodes to
+        16 MB, past MAX_OBJECT_STREAM_BYTES - refused before it is parsed."""
+        import time
+
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(4_000_000))
+        started = time.process_time()
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 100_000), self.assertRaises(ocr.DocumentTooBig):
+            ocr.check_page_count(self.path)
+        self.assertLess(time.process_time() - started, 5)
+
+    def test_within_the_cap_the_document_reads(self):
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.document_text(self.path), "")

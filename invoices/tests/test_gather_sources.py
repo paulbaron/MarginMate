@@ -6,12 +6,15 @@ tested is the task around them. Data invented.
 """
 
 import os
+import shutil
+import tempfile
 from datetime import date
 from unittest import mock
 
 from django.test import TestCase
 
-from invoices.models import EmailInvoiceSource, InvoiceType, ScrapeJob
+from invoices.models import EmailInvoiceSource, Invoice, InvoiceType, ScrapeJob, Supplier
+from invoices.receipts import file_sha256
 from invoices.tasks import gather_invoices_task
 from tests.factories import make_invoice, make_supplier
 
@@ -22,6 +25,16 @@ def email_type(supplier, name, parser_key=""):
     )
     EmailInvoiceSource.objects.create(invoice_type=invoice_type, sender_pattern="factures@")
     return invoice_type
+
+
+def fetched_file(test, name: str, content: bytes = b"%PDF-1.4 facture exemple") -> str:
+    """A file as the mailbox or Metro leaves it on disk."""
+    folder = tempfile.mkdtemp()
+    test.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+    path = os.path.join(folder, name)
+    with open(path, "wb") as handle:
+        handle.write(content)
+    return path
 
 
 class MetroInTheGatherTests(TestCase):
@@ -62,11 +75,13 @@ class MetroInTheGatherTests(TestCase):
     def test_what_landed_before_a_stop_is_imported(self):
         from invoices.scrapers.metro import MetroError
 
+        landed = fetched_file(self, "134_52_1_x.pdf")
+
         def stopped(*args, **kwargs):
-            raise MetroError("Metro : la page n'a pas répondu comme prévu.", files=["/tmp/134_52_1_x.pdf"])
+            raise MetroError("Metro : la page n'a pas répondu comme prévu.", files=[landed])
 
         job, _scrape_metro, _scrape_email, parse_and_import = self.gather(stopped)
-        self.assertEqual(parse_and_import.call_args.args[0], "/tmp/134_52_1_x.pdf")
+        self.assertEqual(parse_and_import.call_args.args[0], landed)
         self.assertEqual(job.progress["METRO"]["imported"], 1)
         self.assertIn("pas répondu", job.progress["METRO"]["error"])
 
@@ -275,7 +290,9 @@ class EmailImportTests(TestCase):
     def test_a_type_naming_its_reader_keeps_it(self):
         wholesaler = make_supplier(code="GROS_X", name="Grossiste Exemple", parser_key="")
         invoice_type = email_type(wholesaler, "Grossiste - Factures", parser_key="UBA")
-        _job, import_document, parse_and_import = self.gather(invoice_type, [("/tmp/f.pdf", date(2026, 5, 2))])
+        _job, import_document, parse_and_import = self.gather(
+            invoice_type, [(fetched_file(self, "f.pdf"), date(2026, 5, 2))]
+        )
         import_document.assert_not_called()
         self.assertEqual(parse_and_import.call_args.kwargs["parser_key_override"], "UBA")
 
@@ -325,3 +342,71 @@ class EmailImportTests(TestCase):
         with mock.patch("invoices.tasks.scrape_email_invoices", return_value=[]) as scrape:
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{invoice_type.id}"})
         self.assertTrue(scrape.call_args.args[0].endswith(os.path.join("", f"type-{invoice_type.id}")))
+
+
+class OwnReaderSourceTests(TestCase):
+    """A mailbox source naming its reader, and Metro: read by that reader,
+    but an e-invoice from its XML first, and a file already in refused by its
+    digest - as every other way in does (receipts.import_document)."""
+
+    def setUp(self):
+        self.wholesaler = make_supplier(code="GROS_X", name="Grossiste Exemple", parser_key="UBA")
+        self.invoice_type = email_type(self.wholesaler, "Grossiste - Factures", parser_key="UBA")
+
+    def gather(self, files, filed=None):
+        job = ScrapeJob.objects.create()
+        with (
+            mock.patch("invoices.tasks.scrape_email_invoices", return_value=files),
+            mock.patch("invoices.tasks.parse_and_import", side_effect=filed) as parse_and_import,
+        ):
+            gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{self.invoice_type.id}"})
+        job.refresh_from_db()
+        return job, parse_and_import
+
+    def test_a_factur_x_is_read_from_its_xml_not_by_the_reader(self):
+        """The reader guessed from the page, its stated figures thrown away."""
+        from invoices.tests.einvoice_files import CII_TWO_RATES
+        from invoices.tests.pdf_files import write_pdf_with_attachments
+
+        path = write_pdf_with_attachments(
+            fetched_file(self, "facture-x.pdf"),
+            ["GROSSISTE EXEMPLE", "FACTURE N FA-2026-0042"],
+            [("factur-x.xml", CII_TWO_RATES.encode("utf-8"), "Data")],
+        )
+        job, parse_and_import = self.gather([(path, date(2026, 9, 4))])
+        parse_and_import.assert_not_called()
+        invoice = Invoice.objects.get(supplier=self.wholesaler)
+        self.assertEqual((invoice.einvoice_format, invoice.invoice_number), ("Factur-X", "FA-2026-0042"))
+        self.assertEqual(invoice.source_sha256, file_sha256(path))
+        self.assertEqual(job.progress[f"type-{self.invoice_type.id}"]["imported"], 1)
+
+    def test_a_file_gathered_again_is_skipped_by_its_digest_even_without_a_number(self):
+        """A credit note the reader finds no number on was filed again at
+        every gather: the duplicate check was on the number alone."""
+        path = fetched_file(self, "avoir.pdf")
+
+        def filed(pdf_path, supplier, **kwargs):
+            return Invoice.objects.create(supplier=supplier, invoice_number="", invoice_date=date(2026, 9, 4))
+
+        self.gather([(path, date(2026, 9, 4))], filed)
+        job, parse_and_import = self.gather([(path, date(2026, 9, 4))], filed)
+        parse_and_import.assert_not_called()
+        self.assertEqual(Invoice.objects.filter(supplier=self.wholesaler).count(), 1)
+        self.assertEqual(Invoice.objects.get(supplier=self.wholesaler).source_sha256, file_sha256(path))
+        self.assertIn("already imported", job.log)
+
+    def test_metro_s_files_keep_their_digest(self):
+        metro = Supplier.objects.filter(code="METRO").first() or make_supplier(code="METRO", name="Metro")
+        Supplier.objects.filter(pk=metro.pk).update(is_scrapable=True)
+        path = fetched_file(self, "134_52_1_x.pdf")
+
+        def filed(pdf_path, supplier, **kwargs):
+            return Invoice.objects.create(supplier=supplier, invoice_number="52-1", invoice_date=date(2026, 9, 4))
+
+        job = ScrapeJob.objects.create()
+        with (
+            mock.patch("invoices.tasks.scrape_metro_invoices", return_value=[path]),
+            mock.patch("invoices.tasks.parse_and_import", side_effect=filed),
+        ):
+            gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {"METRO"})
+        self.assertEqual(Invoice.objects.get(supplier=metro).source_sha256, file_sha256(path))

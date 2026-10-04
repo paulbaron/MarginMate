@@ -190,3 +190,46 @@ class BadDataStillRendersTests(TestCase):
 
         self.assertEqual(self.client.get(reverse("recipes:recipe_list")).status_code, 200)
         self.assertEqual(self.client.get(reverse("recipes:recipe_detail", kwargs={"pk": recipe.pk})).status_code, 200)
+
+
+class IngredientGroupBoundsTests(TestCase):
+    """`group` is a hidden input nobody types, but a tampered or stale form
+    posts what it likes: past the database's bounds it must come back as the
+    form with a message, not a 500 from the save (a CHECK constraint below
+    0, an OverflowError past 2**63)."""
+
+    def setUp(self):
+        self.recipe = make_recipe(name="Mule", selling_price_ttc="9")
+        self.vodka = make_stock_type(name="Vodka")
+        self.ingredient = RecipeIngredient.objects.create(
+            recipe=self.recipe, stock_type=self.vodka, quantity=Decimal("0.04"), group=0
+        )
+
+    def post(self, group):
+        data = {
+            **form_data(name="Mule", selling_price_ttc="9"),
+            "ingredients-TOTAL_FORMS": "1",
+            "ingredients-INITIAL_FORMS": "1",
+            "ingredients-MIN_NUM_FORMS": "0",
+            "ingredients-MAX_NUM_FORMS": "1000",
+            "ingredients-0-id": str(self.ingredient.pk),
+            "ingredients-0-source": f"stock:{self.vodka.pk}",
+            "ingredients-0-quantity": "0.04",
+            "ingredients-0-group": str(group),
+        }
+        return self.client.post(reverse("recipes:recipe_update", kwargs={"pk": self.recipe.pk}), data)
+
+    def test_a_group_out_of_bounds_is_a_message(self):
+        for group in (-1, 10**25):
+            with self.subTest(group=group):
+                response = self.post(group)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Cette ligne n&#x27;a pas pu être lue")
+                self.ingredient.refresh_from_db()
+                self.assertEqual(self.ingredient.group, 0)
+
+    def test_a_group_in_bounds_still_saves(self):
+        response = self.post(7)
+        self.assertRedirects(response, reverse("recipes:recipe_detail", kwargs={"pk": self.recipe.pk}))
+        self.ingredient.refresh_from_db()
+        self.assertEqual(self.ingredient.group, 7)

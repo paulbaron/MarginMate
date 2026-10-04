@@ -22,7 +22,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.urls import reverse
 
-from inventory.forms import product_display_name, stock_take_entry_lookup, stock_type_entry_name
+from inventory.forms import DUPLICATE_ROW, product_display_name, stock_take_entry_lookup, stock_type_entry_name
 from inventory.models import StockTake, StockTakeLine, UnitChoices
 from tests.factories import (
     make_invoice,
@@ -311,3 +311,107 @@ class StockTakePayloadTests(TestCase):
         self.assertEqual(take.lines.count(), 3)
         self.assertTrue(take.lines.filter(product=self.bottles[4], counted_quantity=7).exists())
         self.assertFalse(StockTakeLine.objects.filter(pk=lines[0].pk).exists())
+
+    # -- one line per product or article ------------------------------
+
+    def test_the_same_product_on_two_rows_is_said_on_the_second(self):
+        """Counted behind the bar and again in the cellar: two rows. The
+        database holds one line per product, and the save was a 500 with the
+        evening's count lost."""
+        rows = {0: self.row(self.bottles[0], quantity="3"), 1: self.row(self.bottles[0], quantity="2")}
+        response = self.post(self.payload(rows))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(StockTake.objects.count(), 0)
+        self.assertEqual(response.context["formset"].forms[1].errors["entry_search"], [DUPLICATE_ROW])
+        self.assertFalse(response.context["formset"].forms[0].errors)
+        self.assertContains(response, product_display_name(self.bottles[0]), count=2)
+
+    def test_the_same_article_on_two_rows_too(self):
+        article = {"entry_search": stock_type_entry_name(self.vodka), "counted_quantity": "1", "unit": "L"}
+        response = self.post(self.payload({0: article, 1: dict(article)}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(StockTake.objects.count(), 0)
+        self.assertEqual(response.context["formset"].forms[1].errors["entry_search"], [DUPLICATE_ROW])
+
+    def test_a_row_taken_out_and_typed_again_in_one_save(self):
+        take, lines = self.existing_take()
+        rows = {index: self.row(self.bottles[index], id=line.pk) for index, line in enumerate(lines)}
+        rows[1]["DELETE"] = "on"
+        rows[3] = self.row(self.bottles[1], quantity="5")
+
+        response = self.post(self.payload(rows, initial_forms=3), self.edit_url(take))
+        self.assertEqual(response.status_code, 302)
+        (line,) = take.lines.filter(product=self.bottles[1])
+        self.assertNotEqual(line.pk, lines[1].pk)
+        self.assertEqual(line.counted_quantity, 5)
+
+    def test_saved_rows_moved_onto_each_others_product_in_one_save(self):
+        """Two misread rows put right at once: the first onto the product the
+        second held (a shift), or the two exchanged (a swap). No row on the
+        page repeats a product, but the lines were saved one at a time, and
+        the first met the second still holding it: a 500, the edit lost."""
+        for name, moved in (("shift", {0: 1, 1: 3}), ("swap", {0: 1, 1: 0})):
+            with self.subTest(name):
+                take, lines = self.existing_take()
+                rows = {index: self.row(self.bottles[index], id=line.pk) for index, line in enumerate(lines)}
+                for index, bottle in moved.items():
+                    rows[index] = self.row(self.bottles[bottle], quantity=str(index + 5), id=lines[index].pk)
+
+                response = self.post(self.payload(rows, initial_forms=3), self.edit_url(take))
+                self.assertEqual(response.status_code, 302)
+                saved = {line.pk: (line.product, line.counted_quantity) for line in take.lines.all()}
+                expected = {line.pk: (self.bottles[index], 2) for index, line in enumerate(lines)}
+                expected.update({lines[index].pk: (self.bottles[bottle], index + 5) for index, bottle in moved.items()})
+                self.assertEqual(saved, expected)
+                take.delete()
+
+    def test_saved_article_rows_swapped_in_one_save(self):
+        take = make_stock_take(taken_at=datetime(2026, 3, 31, 12, 0))
+        articles = (self.vodka, self.gin)
+        lines = [
+            make_stock_take_line(stock_take=take, stock_type=article, counted_quantity="2", unit=UnitChoices.LITRE)
+            for article in articles
+        ]
+        rows = {
+            index: {
+                "id": line.pk,
+                "entry_search": stock_type_entry_name(articles[1 - index]),
+                "counted_quantity": str(index + 5),
+                "unit": UnitChoices.LITRE,
+            }
+            for index, line in enumerate(lines)
+        }
+        response = self.post(self.payload(rows, initial_forms=2), self.edit_url(take))
+        self.assertEqual(response.status_code, 302)
+        saved = {line.pk: (line.stock_type, line.counted_quantity) for line in take.lines.all()}
+        self.assertEqual(saved, {lines[0].pk: (self.gin, 5), lines[1].pk: (self.vodka, 6)})
+
+    def test_a_negative_count_is_refused(self):
+        rows = {0: self.row(self.bottles[0], quantity="-3")}
+        response = self.post(self.payload(rows))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(StockTake.objects.count(), 0)
+        self.assertContains(response, "La quantité comptée ne peut pas être négative.")
+
+    def test_a_negative_count_saved_before_does_not_trap_the_inventory(self):
+        """Refused when typed, not when an old line comes back untouched."""
+        take, lines = self.existing_take()
+        StockTakeLine.objects.filter(pk=lines[0].pk).update(counted_quantity=-2)
+        rows = {index: self.row(self.bottles[index], id=line.pk) for index, line in enumerate(lines)}
+        rows[0]["counted_quantity"] = "-2"
+        rows[2]["counted_quantity"] = "4"
+        response = self.post(self.payload(rows, initial_forms=3), self.edit_url(take))
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(take.lines.filter(product=self.bottles[2], counted_quantity=4).exists())
+
+    # -- the date ---------------------------------------------------------
+
+    def test_a_date_off_the_calendar_is_refused(self):
+        """9999-12-31 was saved, and « Combler les écarts » then read the day
+        after it: a 500 at every visit until the date was edited."""
+        for taken_at in ("9999-12-31 23:00:00", "1999-12-31 12:00:00"):
+            with self.subTest(taken_at=taken_at):
+                response = self.post(self.payload({0: self.row(self.bottles[0])}, taken_at=taken_at))
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Date hors limites")
+                self.assertEqual(StockTake.objects.count(), 0)

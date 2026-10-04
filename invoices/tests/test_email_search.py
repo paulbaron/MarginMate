@@ -14,9 +14,9 @@ import tempfile
 from datetime import date
 from unittest import mock
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
-from invoices.scrapers.generic_email import find_matching_emails
+from invoices.scrapers.generic_email import IncompleteSearch, find_matching_emails
 
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
@@ -78,9 +78,10 @@ def slip_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
 class CompiledPatternsTests(SimpleTestCase):
-    """`compile=`: how the patterns become matchers. Left out, `re.compile`,
-    as for every invoice source and « Tester »; the returnables gather passes
-    returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
+    """`compile=`: how the patterns become matchers. Left out,
+    returnables.patterns.invoice_mail_matcher - `re`'s meaning, checked and
+    timed - for every invoice source and « Tester »; the returnables gather
+    passes returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
 
     def search(self, message_bytes, **kwargs):
         with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
@@ -117,6 +118,66 @@ class CompiledPatternsTests(SimpleTestCase):
         self.assertEqual(
             len(self.search(message, sender_pattern=r"mphone@uba\.paris", compile=patterns.mail_matcher)), 1
         )
+
+    def test_left_out_a_pattern_the_guard_refuses_stops_before_signing_in(self):
+        """A bare re.compile took any pattern; a counted repetition that
+        large is refused before anything signs in (audit 04/10/2026)."""
+        from returnables.patterns import PatternError
+
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            with self.assertRaises(PatternError):
+                find_matching_emails(
+                    date(2026, 2, 1), date(2026, 2, 28), sender_pattern="(?:x{500}){500}", log=lambda message: None
+                )
+        client.assert_not_called()
+
+    def test_left_out_a_body_that_makes_the_pattern_backtrack_is_no_match(self):
+        """A body anybody can write must not hang the gather: the match
+        times out, the mail is left out, and the log says why."""
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["From"] = "factures@exemple.fr"
+        message["Subject"] = "Facture"
+        message["Date"] = "Tue, 10 Feb 2026 08:15:02 +0100"
+        message.set_content("a" * 60 + "b")
+        logged = []
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            fake_mailbox(client, message.as_bytes())
+            with self.assertRaises(IncompleteSearch) as caught:
+                find_matching_emails(
+                    date(2026, 2, 1),
+                    date(2026, 2, 28),
+                    sender_pattern="exemple",
+                    body_pattern="(a|aa)+$",
+                    log=logged.append,
+                )
+        self.assertEqual(caught.exception.matches, [])
+        self.assertTrue(any("trop lent" in line for line in logged))
+        # Not taken for nothing: the gather records no coverage past it
+        # (merge review).
+        self.assertEqual(caught.exception.slow, 1)
+        self.assertEqual(str(caught.exception), "Recherche incomplète : motif trop lent sur 1 e-mail(s).")
+
+    def test_left_out_a_refused_pattern_names_its_field(self):
+        """A stored source's pattern the guard refuses says which of the four
+        it is - « Motif de mail » named none (merge review)."""
+        from returnables.patterns import PatternError
+
+        fields = {
+            "sender_pattern": "Motif d'expéditeur",
+            "subject_pattern": "Motif d'objet",
+            "body_pattern": "Motif de contenu",
+            "attachment_pattern": "Motif de pièce jointe",
+        }
+        for field, label in fields.items():
+            with self.subTest(field=field):
+                given = {"sender_pattern": "exemple", field: "Votre {document"}
+                with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+                    with self.assertRaises(PatternError) as caught:
+                        find_matching_emails(date(2026, 2, 1), date(2026, 2, 28), log=lambda message: None, **given)
+                client.assert_not_called()
+                self.assertTrue(str(caught.exception).startswith(f"{label} : accolade"), str(caught.exception))
 
     def test_every_pattern_goes_through_it(self):
         compiled = []
@@ -200,6 +261,24 @@ class FakeMailbox:
 
 #: Every way a server answers part of a search and not the rest.
 INCOMPLETE = ("header-no", "body-no", "header-timeout", "body-timeout")
+
+
+class SlowOn:
+    """A compiled pattern whose match times out on any text holding `word` -
+    what a backtracking pattern does on one mail's text - and matches as the
+    real one elsewhere."""
+
+    def __init__(self, compiled, word: str):
+        self.compiled = compiled
+        self.word = word
+
+    def search(self, text, *args, **kwargs):
+        if self.word in (text or ""):
+            raise TimeoutError("regex timed out")
+        return self.compiled.search(text, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.compiled, name)
 
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
@@ -306,3 +385,87 @@ class AttachmentFileTests(SimpleTestCase):
         for path, _day in files:
             self.assertEqual(os.path.dirname(path), folder)
             self.assertTrue(os.path.basename(path).endswith(".pdf"))
+
+    def test_a_name_too_long_for_the_disk_is_cut_and_keeps_its_extension(self):
+        _folder, files = self.download(("F" * 300 + ".pdf", b"%PDF-A"))
+        name = os.path.basename(files[0][0])
+        self.assertLessEqual(len(name), 120)
+        self.assertTrue(name.endswith(".pdf"))
+
+    def test_a_windows_device_name_is_written_under_another(self):
+        _folder, files = self.download(("NUL.pdf", b"%PDF-A"), ("com1.pdf", b"%PDF-B"))
+        self.assertEqual([os.path.basename(path) for path, _day in files], ["_NUL.pdf", "_com1.pdf"])
+
+    def test_an_attachment_the_disk_refuses_does_not_stop_the_others(self):
+        real_open = open
+
+        def refusing_open(path, *args, **kwargs):
+            if os.path.basename(str(path)) == "refuse.pdf":
+                raise OSError(22, "Invalid argument")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", refusing_open), self.assertRaises(IncompleteSearch) as caught:
+            self.download(("refuse.pdf", b"%PDF-A"), ("facture.pdf", b"%PDF-B"))
+        self.assertEqual([os.path.basename(path) for path, _day in caught.exception.downloaded], ["facture.pdf"])
+        # Not taken for nothing either: the gather records no coverage past
+        # the mail it came with (merge review).
+        self.assertEqual(caught.exception.unwritten, 1)
+        self.assertEqual(
+            str(caught.exception), "Recherche incomplète : 1 pièce(s) jointe(s) non enregistrée(s) sur le disque."
+        )
+
+    def test_a_refused_attachment_adds_to_a_search_the_server_answered_in_part(self):
+        from invoices.scrapers.generic_email import EmailAttachment, EmailMatch, scrape_email_invoices
+
+        match = EmailMatch(b"2", "f@exemple.fr", "Facture", date(2026, 5, 2), [EmailAttachment("refuse.pdf", b"%PDF")])
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        with (
+            mock.patch(
+                "invoices.scrapers.generic_email.find_matching_emails", side_effect=IncompleteSearch(1, [match])
+            ),
+            mock.patch("invoices.scrapers.generic_email.open", side_effect=OSError(28, "No space"), create=True),
+            self.assertRaises(IncompleteSearch) as caught,
+        ):
+            scrape_email_invoices(folder, date(2026, 5, 1), date(2026, 5, 31), sender_pattern=".", log=lambda m: None)
+        self.assertEqual(caught.exception.downloaded, [])
+        self.assertEqual(
+            str(caught.exception),
+            "Recherche incomplète : 1 e-mail(s) non lu(s) par le serveur mail, "
+            "1 pièce(s) jointe(s) non enregistrée(s) sur le disque.",
+        )
+
+
+@override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
+class TesterTests(TestCase):
+    """« Tester » lists what the search read; a mail a pattern was too slow
+    on is said beside the results, not only in the log (merge review)."""
+
+    def test_a_pattern_too_slow_on_a_mail_is_said_and_the_rest_listed(self):
+        from invoices.models import ScrapeJob
+        from invoices.tasks import test_email_pattern_task
+        from returnables import patterns
+
+        real = patterns.check_invoice_mail_pattern
+
+        def check(text, **kwargs):
+            compiled = real(text, **kwargs)
+            return SlowOn(compiled, "ancienne") if text == r"\.pdf$" else compiled
+
+        mails = {b"1": dated_mail(date(2026, 3, 2), "ancienne"), b"2": dated_mail(date(2026, 3, 20), "recente")}
+        job = ScrapeJob.objects.create(kind="TEST")
+        with (
+            mock.patch("invoices.scrapers.generic_email.BATCH_SIZE", 1),
+            mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+            mock.patch("returnables.patterns.check_invoice_mail_pattern", check),
+        ):
+            FakeMailbox(mails, "").install(client)
+            test_email_pattern_task(job.pk, date(2026, 3, 1), date(2026, 3, 31), r"cave\.exemple", "", "", r"\.pdf$")
+        job.refresh_from_db()
+        self.assertEqual(job.status, ScrapeJob.Status.SUCCESS)
+        self.assertEqual(
+            [(match["subject"], match["attachments"]) for match in job.test_matches],
+            [("Facture ancienne", []), ("Facture recente", ["recente.pdf"])],
+        )
+        said = "Recherche incomplète : motif trop lent sur 1 e-mail(s)."
+        self.assertEqual(job.progress["test"]["note"], said)
+        self.assertIn(said, job.log)

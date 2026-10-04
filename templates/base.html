@@ -106,12 +106,15 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
             An employee sees the links of the pages his employer opened to him
             (`can`, accounts/access.py) - « Factures » leads him to « Ajouter des
             factures » when that is all he may do there, « Inventaires » to
-            « Combler les écarts » likewise; « Données » is the owner's. An owner's
-            bar is drawn exactly as before.
+            « Combler les écarts » likewise, and « Courses » in « Produits &
+            charges »' place to the shopping lists for one given « Liste de
+            courses » without « Produits & charges » (an `elif`: never one link
+            more than with every box ticked); « Données » is the owner's. An
+            owner's bar is drawn exactly as before.
             {% endcomment %}
             <div class="topbar-menu" id="topbar-menu">
             <nav aria-label="Navigation principale">
-                {% if can.products %}<a href="{% url 'inventory:stock_list' %}"{% if nav_section == "products" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-products">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>{% endif %}
+                {% if can.products %}<a href="{% url 'inventory:stock_list' %}"{% if nav_section == "products" %} class="active"{% endif %}>Produits &amp; charges<span id="nav-count-products">{% if review_count_nav %} <span class="badge">{{ review_count_nav }}</span>{% endif %}</span></a>{% elif can.shopping %}<a href="{% url 'inventory:shopping_lists' %}"{% if nav_section == "shopping" %} class="active"{% endif %}>Courses</a>{% endif %}
                 {% if can.invoices %}<a href="{% url 'invoices:invoice_list' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Factures<span id="nav-count-purchases">{% if receipt_review_count_nav %} <span class="badge">{{ receipt_review_count_nav }}</span>{% endif %}</span></a>{% elif can.invoices_add %}<a href="{% url 'invoices:invoice_add' %}"{% if nav_section == "purchases" %} class="active"{% endif %}>Factures</a>{% endif %}
                 {% if can.bank %}<a href="{% url 'bank:bank_home' %}"{% if nav_section == "bank" %} class="active"{% endif %}>Banque</a>{% endif %}
                 {% if can.recipes %}<a href="{% url 'recipes:recipe_list' %}"{% if nav_section == "recipes" %} class="active"{% endif %}>Recettes &amp; ventes<span id="nav-count-recipes">{% if pos_pending_count_nav %} <span class="badge">{{ pos_pending_count_nav }}</span>{% endif %}</span></a>{% endif %}

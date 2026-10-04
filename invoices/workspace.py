@@ -29,7 +29,7 @@ from accounts.tenancy import integrations_allowed, server_accounts_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
 from . import coverage, integrations
-from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
+from .forms import CHANNELS, EARLIEST_DOCUMENT_DATE, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceLine, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .tasks import default_gather_start, slips_code, slips_label
 
@@ -412,6 +412,11 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     offered = [day for code, day in pending.items() if _searches_it(period_job, code)]
     if offered:
         gather_start = min(gather_start, *offered)
+    # Never below the date boxes' min (gather_range_problem): a period typed
+    # « 26 » before it was checked, or an e-invoice dated 0001 as the newest
+    # in, was offered, refused by the box and had to be typed again.
+    gather_start = max(gather_start, EARLIEST_DOCUMENT_DATE)
+    gather_end = max(gather_end, EARLIEST_DOCUMENT_DATE)
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
     senders_shown = _name_senders(request, recent_batches)
@@ -572,9 +577,13 @@ def _a_date(term: str) -> dict | None:
     month_of = _A_MONTH.fullmatch(term)
     if month_of:
         month, year = (int(part) for part in month_of.groups())
-        if 1 <= month <= 12:
-            return {"invoice_date__month": month, "invoice_date__year": year}
-        return None
+        # The day's rule: a month of the year 0 (« 05/0000 ») became a year
+        # lookup the database turns into date(0, 1, 1), and raised.
+        try:
+            date(year, month, 1)
+        except ValueError:
+            return None
+        return {"invoice_date__month": month, "invoice_date__year": year}
     if _A_YEAR.fullmatch(term):
         return {"invoice_date__year": int(term)}
     return None

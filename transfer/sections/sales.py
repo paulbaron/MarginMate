@@ -416,6 +416,7 @@ class SalesSection(Section):
                 self.daily_keys.add((product.pk, sold_on))
             try:
                 quantity = codec.load(PosProductDailyQuantity, "quantity", quantity)
+                codec.check_count("quantity", quantity)
                 if product is None:
                     codec.load(PosProduct, "name", name)
             except codec.FieldValueError as exc:
@@ -465,6 +466,7 @@ class SalesSection(Section):
             try:
                 sold_on = codec.load(RecipeSale, "sold_on", record.get("sold_on"))
                 quantity = codec.load(RecipeSale, "quantity", record.get("quantity"))
+                codec.check_count("quantity", quantity)
                 stamp = (
                     codec.load(RecipeSale, "recorded_at", record["recorded_at"])
                     if record.get("recorded_at") is not None

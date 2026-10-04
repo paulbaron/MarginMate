@@ -13,6 +13,9 @@ Beside them, links of their own: Banque, Marges, Personnel, Inventaires and
 `returnables`, URL namespace "returnables"). A page lights the link of its
 URL namespace - `match.app_name`, the `app_name` of its app's urls.py - so a
 new app lights nothing until it is in SECTION_BY_APP.
+
+An employee given « Liste de courses » without « Produits & charges » reads
+the shopping pages under a link of his own, « Courses » (`SHOPPING_SECTION`).
 """
 
 # Views of the inventory app that belong to "Inventaires"; the rest are
@@ -58,6 +61,12 @@ SECTION_BY_VIEW = {
     "accounts:no_access": "",
 }
 
+#: What an employee given « Liste de courses » without « Produits & charges »
+#: reads the shopping pages under: his link « Courses » (base.html). The
+#: owner's bar has no such link - for him those pages are « Produits &
+#: charges »'.
+SHOPPING_SECTION = "shopping"
+
 #: What the folded topbar says under 860 px (base.html's .topbar-section):
 #: the words of the link a page lights. The links keep their own words in
 #: base.html; tests/test_navigation.py checks each page shows its lit link's.
@@ -71,6 +80,7 @@ SECTION_LABELS = {
     "stock_takes": "Inventaires",
     "returnables": "Consignes",
     "data": "Données",
+    SHOPPING_SECTION: "Courses",
 }
 
 
@@ -83,6 +93,30 @@ def section_of(match) -> str:
     if match.app_name == "inventory":
         return "stock_takes" if match.url_name in STOCK_TAKE_VIEWS else "products"
     return SECTION_BY_APP.get(match.app_name, "")
+
+
+def counted_when_drawn(count):
+    """A badge's number, `count()` run only when a template reads it: base.html
+    draws the badges, but every template rendered with the request runs the
+    processors - the job cards polled every second among them, which threw
+    away a scan of the invoice table (5-20 ms of a 7 ms poll). `{% if %}`,
+    `{{ }}` and == take it for the int - not int() nor arithmetic. Read
+    under another binding than the processor's - another bar's queue, or
+    none - it refuses (TenancyError), as it does made with none bound
+    (NoTenantBound). Lives no longer than the request's context."""
+    from django.utils.functional import SimpleLazyObject
+
+    from accounts.tenancy import TenancyError, current_tenant, require_tenant
+
+    tenant = require_tenant()
+
+    def bound_count():
+        current = current_tenant()
+        if current is None or current.pk != tenant.pk:
+            raise TenancyError(f"A badge of espace {tenant.pk} read outside its request's binding.")
+        return count()
+
+    return SimpleLazyObject(bound_count)
 
 
 def navigation(request):
@@ -100,9 +134,18 @@ def navigation(request):
         # An employee's « Notifications » (his own devices): « Données » is
         # no link of his, there is none to light nor to name.
         section = ""
+    if section == "products" and not access.allows("products"):
+        # The gate opens him the shopping pages only: his link is
+        # « Courses ». Without « Liste de courses » either, no link of his
+        # names the page (a JSON answer of the app, read by a stock take).
+        section = SHOPPING_SECTION if access.allows("shopping") else ""
     # The till products to link: counted for whoever has the link
     # (accounts/access.py).
-    pending = PosProduct.objects.filter(recipe__isnull=True, ignored=False).count() if access.allows("recipes") else 0
+    pending = (
+        counted_when_drawn(PosProduct.objects.filter(recipe__isnull=True, ignored=False).count)
+        if access.allows("recipes")
+        else 0
+    )
     return {
         "nav_section": section,
         "nav_section_label": SECTION_LABELS.get(section, ""),

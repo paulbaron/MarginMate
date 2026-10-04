@@ -261,6 +261,17 @@ class SameFileTwiceTests(TestCase):
                 import_receipt(second, display_filename="ticket-bis.pdf")
         self.assertEqual(reader.call_count, 2)
 
+    def test_the_refusal_names_the_day_of_the_ticket_already_in(self):
+        """A count of the day filed bare matches another day's ticket: with
+        that ticket's date, the refusal shows it is not this one."""
+        make_invoice(
+            supplier=Supplier.objects.get(code="WINGSENG"), invoice_number="000999", invoice_date=date(2025, 3, 23)
+        )
+        with mock.patch("invoices.receipts.read_receipt", return_value=self._read()):
+            with self.assertRaises(DuplicateInvoiceError) as caught:
+                import_receipt(self._file(), display_filename="ticket.pdf")
+        self.assertEqual(str(caught.exception), "Déjà dans MarginMate : Wing Seng n° 000999 du 23/03/2025.")
+
 
 class UploadViewTests(TestCase):
     def test_an_upload_starts_a_batch_and_goes_to_its_page(self):

@@ -19,11 +19,13 @@ Data invented throughout.
 from decimal import Decimal
 
 from django.db import connection
+from django.db.models.signals import post_init
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
+from inventory.models import StockMovement
 from recipes.models import Recipe, RecipeIngredient, variation_scope
-from tests.factories import make_priced_stock_type, make_recipe
+from tests.factories import make_movement, make_priced_stock_type, make_recipe, make_stock_type
 
 
 def ingredient(recipe, group=0, quantity="1", stock_cost=None, sub_recipe=None):
@@ -175,6 +177,53 @@ class SameFiguresTests(Graph, TestCase):
         # Boucle A: its article (1) and Boucle B - its article (3) and Boucle
         # A once more, whose own Boucle B is on the stack by then, so 0: 1.
         self.assertEqual(alone, (Decimal("5"), Decimal("5")))
+
+
+class TheCostsNotTheMovementsTests(Graph, TestCase):
+    """An article's cost is all a recipe reads of its movements: inside a
+    scope they are summed as they are read, not built into a model instance
+    each - thousands of them on every page costing the recipes, for one
+    average per article."""
+
+    def test_no_movement_is_built(self):
+        built = []
+
+        def count(sender, instance, **kwargs):
+            built.append(instance)
+
+        post_init.connect(count, sender=StockMovement)
+        try:
+            with variation_scope():
+                Recipe.load_choice_groups(Recipe.objects.filter(pk__in=[recipe.pk for recipe in self.everything]))
+                for recipe in self.everything:
+                    recipe.summary()
+        finally:
+            post_init.disconnect(count, sender=StockMovement)
+        self.assertEqual(built, [])
+
+    def test_costing_what_was_read_reads_nothing_more(self):
+        with variation_scope():
+            Recipe.load_choice_groups([self.cocktail])
+            with self.assertNumQueries(0):
+                self.cocktail.summary()
+                self.cocktail.unit_cost_bounds()
+
+    def test_an_article_with_nothing_on_hand_costs_nothing(self):
+        """No movement at all, or as much gone as came in: the average has
+        no quantity to divide by, and is 0 as `current_unit_cost_ht` says."""
+        never_bought = make_stock_type(name="Jamais acheté")
+        all_gone = make_stock_type(name="Tout perdu")
+        make_movement(stock_type=all_gone, quantity="2", unit_cost_ht="7")
+        make_movement(stock_type=all_gone, quantity="-2", unit_cost_ht="7", kind="LOSS")
+        recipe = make_recipe(name="Rien en stock")
+        RecipeIngredient.objects.create(recipe=recipe, group=0, quantity=Decimal("1"), stock_type=never_bought)
+        RecipeIngredient.objects.create(recipe=recipe, group=1, quantity=Decimal("1"), stock_type=all_gone)
+        self.assertEqual(never_bought.current_unit_cost_ht, Decimal("0"))
+        self.assertEqual(all_gone.current_unit_cost_ht, Decimal("0"))
+        with variation_scope() as scope:
+            Recipe.load_choice_groups([recipe])
+            costs = [line.unit_cost_ht() for group in scope["groups"][recipe.pk] for line in group]
+        self.assertEqual(costs, [Decimal("0"), Decimal("0")])
 
 
 class LevelsNotRecipesTests(TestCase):

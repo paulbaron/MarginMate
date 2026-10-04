@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Listes de courses - MarginMate{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+    {% comment %}
+    « Listes de courses » (views.shopping_lists): the lists in progress, one
+    per store (an open list holding an item), the menu opening a store's
+    list (a GET: a list is made by its first item), and the last lists
+    finished, read-only, « Par » never an address.
+    {% endcomment %}
+    <div class="page-header">
+        <div>
+            <h1>Listes de courses</h1>
+            <p class="page-subtitle">Une liste par enseigne, la même pour toute l'équipe.</p>
+        </div>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'inventory:shopping_list' %}">Prévoir les courses</a>
+        </div>
+    </div>
+
+    {% if not open_lists and not finished_lists and not stores %}
+        <div class="empty-state">
+            <p>Aucune enseigne : les listes partent de vos factures d'achat.</p>
+            {% if can.invoices or can.invoices_add %}<a class="btn" href="{% url 'invoices:invoice_add' %}">Ajouter des factures</a>{% endif %}
+        </div>
+    {% else %}
+        <h2>En cours</h2>
+        {% if open_lists %}
+        <div class="table-wrap">
+        <table data-table data-table-label="listes en cours" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Enseigne</th>
+                    <th>Pris</th>
+                    <th>Commencée le</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in open_lists %}
+                <tr>
+                    <td><a href="{{ row.url }}">{{ row.list.supplier.name }}</a></td>
+                    <td data-label="Pris" data-sort="{{ row.list.ticked }}">{{ row.list.ticked }} / {{ row.list.total }}</td>
+                    <td data-label="Commencée le" data-sort="{{ row.list.created_at|date:'Y-m-d' }}">{{ row.list.created_at|date:"d/m/Y" }}</td>
+                    <td class="row-actions"><a class="btn btn-small" href="{{ row.run_url }}">Faire les courses</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p class="muted">Aucune liste en cours.</p>
+        {% endif %}
+
+        {% if stores %}
+        <form method="get" action="{% url 'inventory:shopping_list_page' %}" class="inline-form">
+            <label class="inline-label">Ouvrir la liste de
+                <select name="{{ store_param }}">
+                    {% for store in stores %}<option value="{{ store.pk }}">{{ store.name }}</option>{% endfor %}
+                </select>
+            </label>
+            <button class="btn btn-secondary" type="submit">Ouvrir</button>
+        </form>
+        {% endif %}
+
+        {% if finished_lists %}
+        <h2>Terminées</h2>
+        <div class="table-wrap">
+        <table data-table data-table-label="listes terminées" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Enseigne</th>
+                    <th>Terminée le</th>
+                    <th>Pris</th>
+                    <th>Par</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in finished_lists %}
+                <tr>
+                    <td><a href="{% url 'inventory:shopping_list_page' %}?{{ list_param }}={{ row.list.pk }}">{{ row.list.supplier.name }}</a></td>
+                    <td data-label="Terminée le" data-sort="{{ row.list.finished_at|date:'Y-m-d H:i:s' }}">{{ row.list.finished_at|date:"d/m/Y" }}</td>
+                    <td data-label="Pris" data-sort="{{ row.list.ticked }}">{{ row.list.ticked }} / {{ row.list.total }}</td>
+                    <td data-label="Par">{{ row.by|capfirst }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    {% endif %}
+{% endblock %}

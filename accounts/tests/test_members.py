@@ -26,7 +26,7 @@ from django.utils import timezone
 from django.utils.html import escape
 
 from accounts import invitations, limiter, members, signup, sudo
-from accounts.access import AREAS
+from accounts.access import AREAS, DEFAULT_AREAS
 from accounts.forms import EMAIL_INVALID, PASSWORDS_DIFFER, REQUIRED
 from accounts.models import MemberInvitation, Membership, Tenant, hash_secret
 from accounts.router import ACCOUNTS_ALIAS
@@ -244,6 +244,30 @@ class InviteTests(MembersTestCase):
         self.assertContains(page, "Léa Martin")
         self.assertContains(page, "Invitation en attente")
         self.assertContains(page, "Nouveau lien d'invitation")
+
+    def test_a_new_employee_s_boxes_are_the_defaults_the_lists_included(self):
+        """The invitation's boxes are every area's, in the page's order; the
+        ones ticked DEFAULT_AREAS - « Liste de courses » among them since
+        04/10/2026 -, each with what it shows."""
+        page = self.client.get(MEMBERS)
+        boxes = re.findall(
+            r'<input type="checkbox" name="pages" value="([^"]+)" id="pages-nouveau-[^"]+"([^>]*)>',
+            page.content.decode(),
+        )
+        self.assertEqual([key for key, _rest in boxes], [area.key for area in AREAS])
+        self.assertEqual([key for key, rest in boxes if "checked" in rest], list(DEFAULT_AREAS))
+        self.assertIn("shopping", DEFAULT_AREAS)
+        (lists,) = [area for area in AREAS if area.key == "shopping"]
+        self.assertContains(page, f'<span class="area-choice-label">{lists.label}</span>', html=True)
+        self.assertContains(page, escape(lists.help))
+
+    def test_an_invitation_with_the_defaults_stores_them_in_the_page_s_order(self):
+        self.invite(pages=list(reversed(DEFAULT_AREAS)))
+        membership = Membership.objects.get(user__username="lea@example.invalid")
+        self.assertEqual(membership.pages, ["invoices_add", "stock_takes", "returnables", "shopping"])
+        self.assertContains(
+            self.client.get(MEMBERS), "Ajouter des factures, Faire un inventaire, Consignes, Liste de courses"
+        )
 
 
 class LinkAddressTests(MembersTestCase):

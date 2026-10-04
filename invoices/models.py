@@ -232,40 +232,33 @@ class EmailInvoiceSource(models.Model):
     }
 
     def clean(self):
-        """Each pattern compiles - and outside the platform owner's espace
-        passes the pattern guard too (returnables.patterns, `flags=0`: the
-        case-sensitive `re` they are matched with), each refusal in French on
-        its field: the gather runs them on headers and bodies anybody can
-        write, in the one process every bar runs in. The owner's are matched
-        by `re` as always, and checked as always. The form and « Données »'s
-        import both run this."""
+        """Each pattern through the motif guard, as the gather compiles them
+        (returnables.patterns.check_invoice_mail_pattern, `re`'s meaning:
+        case-sensitive unless it says (?i)), each refusal in French on its
+        field: a bare re.compile accepted a pattern whose matching hangs on
+        one e-mail anybody can send (security audit 04/10/2026), in the one
+        process every bar runs in. Outside the platform owner's espace a
+        refusal names its field (PATTERN_LABELS) and a pattern finding
+        something in an empty text is refused too (EMPTY_MATCH_REASONS); the
+        owner's say « Expression régulière invalide » and take « .* ». The
+        form and « Données »'s import both run this."""
         from accounts.tenancy import server_accounts_allowed
+        from returnables.patterns import PatternError, check_invoice_mail_pattern
 
-        guarded = not server_accounts_allowed()
+        hosted = not server_accounts_allowed()
         errors = {}
         for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
             value = getattr(self, field_name)
             if not value:
                 continue
             try:
-                re.compile(value)
-            except re.error as exc:
-                errors[field_name] = f"Expression régulière invalide : {exc}"
-                continue
-            if guarded:
-                from returnables import patterns
-
-                try:
-                    patterns.compile_pattern(
-                        value,
-                        field_label=self.PATTERN_LABELS[field_name],
-                        max_length=self._meta.get_field(field_name).max_length,
-                        flags=0,
-                        strip=False,
-                        empty_reason=self.EMPTY_MATCH_REASONS[field_name],
-                    )
-                except patterns.PatternError as exc:
-                    errors[field_name] = str(exc)
+                check_invoice_mail_pattern(
+                    value,
+                    field_label=self.PATTERN_LABELS[field_name] if hosted else "Expression régulière invalide",
+                    empty_reason=self.EMPTY_MATCH_REASONS[field_name] if hosted else None,
+                )
+            except PatternError as exc:
+                errors[field_name] = exc.message
         if errors:
             raise ValidationError(errors)
 

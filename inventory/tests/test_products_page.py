@@ -18,6 +18,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from inventory.models import Product, StockMovement, StockType, UnitChoices
+from inventory.services import create_stock_movement_for_line, link_product_to_stock_type
 from inventory.views import REVIEW_PANEL_SIZE, UNDO_SALT
 from invoices.models import Invoice
 from tests.factories import (
@@ -124,7 +125,7 @@ class ProductsPageTests(TestCase):
             {"stock_type_name": "Rhum", "stock_equivalent": "-1"},
             **HTMX,
         )
-        self.assertContains(response, "« 1 produit = » doit être un nombre positif.")
+        self.assertContains(response, "« 1 produit = » doit être un nombre positif d&#x27;au plus 4 décimales.")
         self.assertNotIn("HX-Trigger", response)
         self.pending.refresh_from_db()
         self.assertIsNone(self.pending.stock_type)
@@ -216,3 +217,62 @@ class ProductsPageTests(TestCase):
         response = self.client.post(reverse("inventory:approve_all_suggestions"))
         self.assertRedirects(response, self.url, fetch_redirect_response=False)
         self.assertFalse(Product.objects.filter(stock_type__isnull=True).exists())
+
+
+class ReclassifyingTests(TestCase):
+    """A product already filed under an article: the panel never offers it,
+    but a panel drawn before another tab classified it still posts. Re-filed
+    there, its purchases stayed on the old article with the old factor while
+    the product said the new one - two articles each wrong, nothing said."""
+
+    def setUp(self):
+        self.rum = make_stock_type(name="Rhum", unit=UnitChoices.LITRE)
+        self.gin = make_stock_type(name="Gin", unit=UnitChoices.LITRE)
+        self.product = make_product(raw_name="RHUM AMBRE 70CL", stock_type=self.rum, stock_equivalent="0.7")
+        self.line = make_invoice_line(product=self.product, quantity=6, total_ht="60.00")
+        create_stock_movement_for_line(self.line)
+
+    def movements(self):
+        return list(
+            StockMovement.objects.order_by("pk").values_list("stock_type__name", "kind", "quantity", "invoice_line")
+        )
+
+    def test_a_stale_panel_does_not_refile_it(self):
+        before = self.movements()
+        for extra in ({}, HTMX):
+            with self.subTest(htmx=bool(extra)):
+                response = self.client.post(
+                    reverse("inventory:assign_product", args=[self.product.pk]),
+                    {"stock_type_name": "Gin", "stock_equivalent": "2"},
+                    **extra,
+                )
+                if extra:
+                    self.assertContains(response, "est déjà rangé dans « Rhum »")
+                    self.assertNotIn("HX-Trigger", response)
+                else:
+                    self.assertRedirects(response, reverse("inventory:stock_list"), fetch_redirect_response=False)
+                self.product.refresh_from_db()
+                self.assertEqual((self.product.stock_type, self.product.stock_equivalent), (self.rum, Decimal("0.7")))
+                self.assertEqual(self.movements(), before)
+
+    def test_relinking_books_the_purchases_again_under_the_new_article(self):
+        """The service itself, for any caller: the purchase movements follow
+        the product; a loss somebody tied to one of its lines is kept."""
+        lost_line = make_invoice_line(product=self.product, quantity=1, total_ht="10.00")
+        StockMovement.objects.create(
+            stock_type=self.rum, kind="LOSS", quantity=Decimal("-0.7"), unit_cost_ht=10, invoice_line=lost_line
+        )
+        link_product_to_stock_type(self.product, self.gin, unit=UnitChoices.LITRE, stock_equivalent=Decimal("2"))
+        self.assertEqual(
+            self.movements(),
+            [("Rhum", "LOSS", Decimal("-0.7"), lost_line.pk), ("Gin", "PURCHASE", Decimal("12"), self.line.pk)],
+        )
+
+    def test_relinking_from_a_copy_read_before_it_was_filed(self):
+        """Two « Ranger » of one product at once: both passed the view's check
+        while it was unfiled, and the second, holding that stale copy, left
+        the first's purchases on the first article."""
+        stale = Product.objects.get(pk=self.product.pk)
+        stale.stock_type = None
+        link_product_to_stock_type(stale, self.gin, unit=UnitChoices.LITRE, stock_equivalent=Decimal("2"))
+        self.assertEqual(self.movements(), [("Gin", "PURCHASE", Decimal("12"), self.line.pk)])

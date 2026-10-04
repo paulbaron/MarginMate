@@ -14,9 +14,9 @@ from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
-from django.db.models import Min, Q
+from django.db.models import Min, Prefetch, Q
 
-from invoices.models import Invoice, Supplier
+from invoices.models import Invoice, InvoiceLine, Supplier
 
 from . import matching, recognition
 from .models import BankTransaction, CounterpartyAlias, IgnoreRule, InvoicePayment, StatementFormat
@@ -151,6 +151,13 @@ def statements_start():
 UNREAD_INVOICE_FIELDS = ("ocr_text", "source_text", "parse_checks", "vat_breakdown")
 
 
+def total_lines():
+    """An invoice's lines as `Invoice.total_ttc_of` reads them, and nothing
+    more: prefetched with these, any other column read on one is a query per
+    line (bank/tests/test_page_cost.py)."""
+    return InvoiceLine.objects.only("invoice", "total_ht", "vat_rate", "taxes", "printed_ttc", "discount_ttc")
+
+
 def unpaid_invoices(start=None, end=None):
     """Invoices NO line pays at all, dated from `start` to `end` - and those
     with no date at all, which matching only ever suggests (OCR misses a
@@ -169,11 +176,18 @@ def unpaid_invoices(start=None, end=None):
     if end is not None:
         dated &= Q(invoice_date__lte=end)
     invoices = Invoice.objects.filter(dated | Q(invoice_date__isnull=True), payments__isnull=True)
-    return invoices.select_related("supplier").defer(*UNREAD_INVOICE_FIELDS).prefetch_related("lines")
+    # Into a list (`to_attr`): through the manager, Django clones a filtered
+    # queryset for every invoice, which was most of the prefetch's time.
+    lines = Prefetch("lines", queryset=total_lines(), to_attr="line_list")
+    return invoices.select_related("supplier").defer(*UNREAD_INVOICE_FIELDS).prefetch_related(lines)
 
 
 def rounded_total(invoice: Invoice) -> Decimal:
-    return invoice.total_ttc.quantize(CENTS, rounding=ROUND_HALF_UP)
+    """The invoice's `total_ttc` to the cent - from its `line_list` when it
+    was loaded with one (`unpaid_invoices`, `views._fill`)."""
+    lines = getattr(invoice, "line_list", None)
+    total = invoice.total_ttc if lines is None else invoice.total_ttc_of(lines)
+    return total.quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
 def candidates_from(invoices) -> list[matching.InvoiceCandidate]:

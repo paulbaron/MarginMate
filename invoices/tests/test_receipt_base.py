@@ -10,6 +10,7 @@ is real - are found by the numbers and never by the words, so their tests
 use the words as a real recogniser read them.
 """
 
+from datetime import date
 from decimal import Decimal
 
 from django.test import SimpleTestCase
@@ -403,13 +404,36 @@ class ReadDateTests(SimpleTestCase):
         receipt dateless."""
         self.assertEqual(read_date("Heure:14-07-202614:49:26").isoformat(), "2026-07-14")
 
-    def test_a_two_digit_year_is_not_a_date(self):
-        """ "21/04/26-16:17" is a real Monoprix header. Reading "26" as a year
-        would date the invoice to the year 26."""
-        self.assertIsNone(read_date("21/04/26-16:17730738908"))
+    def test_a_two_digit_year_is_this_century_s(self):
+        """ "21/04/26-16:17" is a real Monoprix header, "26" the year 2026 -
+        not 26. Unread, every such ticket waited for its date to be typed and
+        its count of the day (« TICKET : 5027 ») was filed bare."""
+        self.assertEqual(read_date("21/04/26-16:17730738908"), date(2026, 4, 21))
+        self.assertEqual(read_date("Tel: 01 43 00 00 00\n07/05/26 - 10:52 714 71 5027"), date(2026, 5, 7))
+        self.assertEqual(read_date("CB\nle 09/06/26 a 11:37:08\nDARTY"), date(2026, 6, 9))
+
+    def test_the_first_date_printed_wins_whatever_its_year(self):
+        """An appliance shop prints its sale « du 15/03/25 » and the warranty's
+        end below it: the warranty's 4-digit year dated the purchase 2027."""
+        text = "F0000000001/001 du 15/03/25 a 10h05\nAspirateur  89,99\nGarantie jusqu'au 14.03.2027"
+        self.assertEqual(read_date(text), date(2025, 3, 15))
+
+    def test_a_phone_number_or_amounts_are_no_short_date(self):
+        """Pairs of digits in a row are a phone number, « 1-2.79 » a count and
+        a price: none is a date in 2008 or 2059."""
+        hint = date(2026, 2, 1)
+        for text in ("Tel 01.99.00.42.17", "14.07.03.52", "01.99.00.58.26", "1-2.79", "06/04/41", "2.80.11.20"):
+            with self.subTest(text=text):
+                self.assertEqual(read_date(text, date_hint=hint), hint)
 
     def test_an_impossible_date_is_skipped_not_raised(self):
         self.assertIsNone(read_date("45/45/2026"))
+
+    def test_an_impossible_figure_does_not_hide_a_written_date(self):
+        """A code shaped like a date (« 45.67.12 ») printed above « Facture du
+        19 mai 2026 » is no date: the written one is the document's."""
+        self.assertEqual(read_date("Code 45.67.12\nFacture du 19 mai 2026"), date(2026, 5, 19))
+        self.assertEqual(read_date("Code 45.67.2012\nFacture du 19 mai 2026"), date(2026, 5, 19))
 
     def test_falls_back_to_the_hint(self):
         hint = read_date("01/02/2026")

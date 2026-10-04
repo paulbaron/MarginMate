@@ -159,6 +159,60 @@ class WithoutTheConfirmationTests(AdminCase):
         self.assertRedirects(response, "/admin/", fetch_redirect_response=False)
         self.assertEqual(self.client.get("/admin/").status_code, 200)
 
+    def test_a_logged_in_session_posting_to_the_admin_login_is_not_confirmed(self):
+        """Django's admin login re-renders its form on a refused POST with
+        request.user still the session's login: a wrong password, an empty
+        form or one the limiter refused confirmed nothing, yet the session
+        was stamped - « Identifiants », « Accès des employés » and the whole
+        admin opened to a session left open or copied, no password asked."""
+        from accounts import limiter
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        protected = (reverse("admin:index"), reverse("accounts:credentials"), reverse("accounts:members"))
+        refused = {
+            "wrong password": {"username": self.owner.username, "password": "Pas-Le-Bon-2026"},
+            "unknown address": {"username": "personne@example.invalid", "password": "Pas-Le-Bon-2026"},
+            "empty form": {},
+        }
+        for case, data in refused.items():
+            with self.subTest(case=case):
+                self.assertEqual(self.client.post(reverse("admin:login"), data).status_code, 200)
+                self.assertNotIn(sudo.SESSION_KEY, self.client.session)
+                for path in protected:
+                    self.assertAsked(self.client.get(path), path)
+        with self.subTest(case="limiter refused"), mock.patch.object(limiter, "reserve", return_value=False):
+            self.owner.set_password(OLD_PASSWORD)
+            self.owner.save()
+            self.client.force_login(self.owner)
+            data = {"username": self.owner.username, "password": OLD_PASSWORD}
+            self.assertEqual(self.client.post(reverse("admin:login"), data).status_code, 200)
+            self.assertNotIn(sudo.SESSION_KEY, self.client.session)
+            for path in protected:
+                self.assertAsked(self.client.get(path), path)
+
+    def test_an_owner_who_is_not_superuser_is_not_confirmed_by_the_admin_login(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        get_user_model().objects.filter(pk=self.owner.pk).update(is_staff=False, is_superuser=False)
+        data = {"username": self.owner.username, "password": "Pas-Le-Bon-2026"}
+        self.assertEqual(self.client.post(reverse("admin:login"), data).status_code, 200)
+        self.assertNotIn(sudo.SESSION_KEY, self.client.session)
+        for path in (reverse("accounts:credentials"), reverse("accounts:members")):
+            self.assertAsked(self.client.get(path), path)
+
+    def test_a_right_password_posted_from_a_logged_in_session_confirms(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.owner.set_password(OLD_PASSWORD)
+        self.owner.save()
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("admin:login"), {"username": self.owner.username, "password": OLD_PASSWORD, "next": "/admin/"}
+        )
+        self.assertRedirects(response, "/admin/", fetch_redirect_response=False)
+        self.assertEqual(self.client.get("/admin/").status_code, 200)
+
 
 class WithTheConfirmationTests(AdminCase):
     def setUp(self):

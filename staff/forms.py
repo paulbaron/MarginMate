@@ -121,6 +121,20 @@ class EmployeeForm(forms.ModelForm):
             EMAIL_FIELD: forms.EmailInput(attrs={"autocomplete": "off", "spellcheck": "false"}),
         }
 
+    def __init__(self, *args, owner=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not owner:
+            # The signing link and its code go to this address: an employee
+            # given « Personnel » who put his own on a colleague's form
+            # received both, and signed in her place. Disabled, what is
+            # posted is ignored and the saved address kept (none for an
+            # employee he adds).
+            field = self.fields[EMAIL_FIELD]
+            field.disabled = True
+            field.help_text = (
+                "Seul votre employeur modifie l'adresse : le lien de signature et son code y sont envoyés."
+            )
+
     @property
     def name_fields(self):
         return [self[name] for name in NAME_FIELDS]

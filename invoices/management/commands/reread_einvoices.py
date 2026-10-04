@@ -25,7 +25,7 @@ from django.db import transaction
 
 from common import group_thousands
 from invoices import einvoice
-from invoices.importing import InvoiceLinesInUseError
+from invoices.importing import InvoiceLinesInUseError, LineTooWideError
 from invoices.models import Invoice
 from invoices.receipts import RereadError, reread_document
 
@@ -61,7 +61,7 @@ class Command(BaseCommand):
                     continue
                 try:
                     reread_document(invoice)
-                except (RereadError, InvoiceLinesInUseError) as exc:
+                except (RereadError, InvoiceLinesInUseError, LineTooWideError) as exc:
                     self.stdout.write(f"Laissé : {described} - {exc}")
                     continue
                 self.stdout.write(f"{described} : {group_thousands(stored)} € -> {group_thousands(stated)} €")

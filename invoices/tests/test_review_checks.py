@@ -14,11 +14,13 @@ Structurally faithful, data invented.
 from datetime import date
 from decimal import Decimal
 from io import StringIO
+from unittest import mock
 
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
+from invoices.importing import LineTooWideError
 from invoices.models import Invoice, Supplier
 from invoices.receipts import reread_receipt
 from invoices.tests.page_posts import page_post
@@ -217,6 +219,16 @@ class RereadTests(TestCase):
         invoice.ocr_text = SUFFIXED_MULTIPLIER.replace("PAIN COMPLET  T1 2 X 0.49Eur 0.98Eur" + chr(10), "")
         invoice.save(update_fields=["ocr_text"])
         self.assertFalse(reread_receipt(invoice))
+        self.assertEqual(invoice.parse_checks, IMPORTED_CHECKS)
+
+    def test_a_reading_no_column_holds_stays_as_it_was(self):
+        """Refused under replace_invoice_lines (importing._fitting): the
+        ticket is left as it was, and the command goes on to the next."""
+        invoice = self.stored()
+        refused = LineTooWideError("« PAIN COMPLET » : le prix unitaire (1 500 000) dépasse ce que MarginMate peut")
+        with mock.patch("invoices.importing.replace_invoice_lines", side_effect=refused):
+            self.assertFalse(reread_receipt(invoice))
+        invoice.refresh_from_db()
         self.assertEqual(invoice.parse_checks, IMPORTED_CHECKS)
 
     def test_the_command_changes_nothing_on_a_dry_run(self):

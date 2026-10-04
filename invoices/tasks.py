@@ -20,6 +20,7 @@ from . import coverage, integrations
 from .coverage import CATCH_UP_TO_DO, DEFAULT_LOOKBACK_DAYS, OVERLAP_DAYS  # noqa: F401 - their home for callers
 from .importing import DuplicateInvoiceError, RoutedToReturnablesError, parse_and_import
 from .models import EMAIL_SEARCH_FIELDS, AutoGather, EmailInvoiceSource, Invoice, InvoiceType, ScrapeJob, Supplier
+from .ocr import PdfiumBusy
 from .scrapers.generic_email import IncompleteSearch, failure_said, find_matching_emails, scrape_email_invoices
 from .scrapers.metro import MetroError, MetroPaused, scrape_metro_invoices
 from .scrapers.website import WebsiteError, WebsiteRecipe, fetch_website_invoices, list_website_invoices
@@ -208,17 +209,46 @@ def _import_downloaded_file(
     pdf_path: str,
     date_hint: date | None = None,
     parser_key_override: str | None = None,
+    chosen_because: str | None = None,
+    by_type: str | None = None,
 ) -> bool | None:
-    """True imported, False refused for what it is (a duplicate, a file its
+    """A file Metro or a mailbox source naming its reader fetched, read by
+    that reader - but refused when this very file is in already (its digest)
+    and, an e-invoice, read from its XML, as receipts.import_document does
+    every other way in: through the reader alone, a Factur-X's stated
+    figures were thrown away, and a document the reader finds no number on
+    was filed again at every gather.
+
+    True imported, False refused for what it is (a duplicate, a file its
     reader cannot read), None not imported NOW - the database locked past its
-    timeout: fetched again next time (_gather_email records no coverage)."""
+    timeout, PDFium busy drawing another document (ocr.PdfiumBusy): fetched
+    again next time (_gather_email records no coverage)."""
+    from . import einvoice
+    from .receipts import file_sha256, import_einvoice
+
     try:
-        parse_and_import(pdf_path, supplier, date_hint=date_hint, parser_key_override=parser_key_override)
+        digest = file_sha256(pdf_path)
+        if Invoice.objects.filter(source_sha256=digest).exists():
+            raise DuplicateInvoiceError(pdf_path)
+        xml = einvoice.document_xml(pdf_path)
+        if xml is not None:
+            import_einvoice(
+                pdf_path,
+                xml,
+                supplier=supplier,
+                date_hint=date_hint,
+                chosen_because=chosen_because,
+                by_type=by_type,
+            )
+            return True
+        invoice = parse_and_import(pdf_path, supplier, date_hint=date_hint, parser_key_override=parser_key_override)
+        invoice.source_sha256 = digest
+        invoice.save(update_fields=["source_sha256"])
         return True
     except DuplicateInvoiceError:
         job.append_log(f"Ignoré : {pdf_path} (déjà importé)")
         return False
-    except OperationalError as exc:
+    except (OperationalError, PdfiumBusy) as exc:
         job.append_log(f"Non importé pour l'instant, repris à la prochaine récupération : {pdf_path} : {exc}")
         return None
     except Exception as exc:  # noqa: BLE001 - one bad PDF shouldn't fail the whole batch
@@ -582,12 +612,17 @@ def _gather_email(
     types and the portals run all the same - it failed the whole gather.
     Once every mail found went through its import, the search is recorded
     (_searched; `own`: its own start, `bounded`: an automatic run cut at the
-    90-day bound) - unless the server left mails of the range unread
-    (IncompleteSearch: what it read is imported all the same) or a document
-    was not imported for want of the OCR or the database: the line is then
+    90-day bound) - unless the search was not a whole one (IncompleteSearch:
+    mails the server left unread, a pattern too slow on, an attachment the
+    disk refused - what it read is imported all the same) or a document was
+    not imported for want of the OCR, PDFium or the database: the line is then
     in error - a failed source, said by the alert - and the next run
     searches the range again (its documents already in are refused by their
-    digest). Returns (found, imported)."""
+    digest). A stored pattern the motif guard refuses (one saved before it
+    existed) is the source's to correct, not the mailbox's: said so, naming
+    the pattern. Returns (found, imported)."""
+    from returnables.patterns import PatternError
+
     incomplete = None
     try:
         results = scrape_email_invoices(
@@ -606,17 +641,16 @@ def _gather_email(
         raise
     except IncompleteSearch as exc:
         results, incomplete = exc.downloaded, exc
+    except PatternError as exc:
+        job.append_log(f"{invoice_type.name} : motif refusé - {exc}")
+        job.update_progress(code, error=f"Motif de la source à corriger : {exc}"[:300])
+        return 0, 0
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
-        from returnables.patterns import PatternError
-
         # Another bar reads a fixed sentence, never the library's words
         # (generic_email.failure_said); the owner the exception as always.
         detail = failure_said(exc)
         job.append_log(f"{invoice_type.name} : échec de la boîte mail - {detail}\n{traceback.format_exc()}")
-        # A pattern the guard refuses, or a server refused, is the source's
-        # or the « Identifiants »'s to correct, said as it is.
-        said = detail if isinstance(exc, PatternError) else f"Boîte mail : {detail}"
-        job.update_progress(code, error=said[:300])
+        job.update_progress(code, error=f"Boîte mail : {detail}"[:300])
         return 0, 0
     job.update_progress(code, found=len(results))
     imported = again = 0
@@ -631,6 +665,8 @@ def _gather_email(
                 pdf_path,
                 date_hint=email_date,
                 parser_key_override=invoice_type.parser_key,
+                chosen_because=f"Reçue par e-mail (« {invoice_type.name} »).",
+                by_type=invoice_type.name,
             )
         else:
             brought_in = _import_document_file(
@@ -721,7 +757,8 @@ def _gather_slips(
     searched. Once every attachment is stored, the search is recorded
     (_searched, with the mailbox's floor: a slips search never starts before
     returnables.mail.lookback_floor) - unless the server left mails unread
-    (IncompleteSearch: what it read is stored, the line in error). `widen`, for a gather of slips alone only: the job's range
+    or a pattern was too slow on one (IncompleteSearch: what it read is
+    stored, the line in error). `widen`, for a gather of slips alone only: the job's range
     widened to it, the period its card shows. Beside invoices it is said in the log
     and the range left alone - the range is the period Achats offers again
     after a failure, and 90 days back (no slip mailed yet) went to every
@@ -852,7 +889,7 @@ def _gather_metro(job: ScrapeJob, supplier: Supplier, start: date, end: date, me
     job.update_progress("METRO", found=len(files))
     imported = 0
     for pdf_path in files:
-        if _import_downloaded_file(job, supplier, pdf_path):
+        if _import_downloaded_file(job, supplier, pdf_path, chosen_because=f"Téléchargée par « {supplier.name} »."):
             imported += 1
             job.update_progress("METRO", imported=imported)
     if error:
@@ -931,8 +968,9 @@ def _import_document_file(
 
     True imported, False refused for what it is (a duplicate, a slip, a file
     nothing can read), None not imported NOW - the OCR held too long by
-    another document, the database locked past its timeout: fetched again
-    next time (_gather_email records no coverage)."""
+    another document, PDFium busy drawing one (ocr.PdfiumBusy), the database
+    locked past its timeout: fetched again next time (_gather_email records
+    no coverage)."""
     from . import supplier_changes
     from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
@@ -965,7 +1003,7 @@ def _import_document_file(
     except DuplicateInvoiceError:
         job.append_log(f"Ignoré : {path} (déjà importé)")
         return False
-    except OperationalError as exc:
+    except (OperationalError, PdfiumBusy) as exc:
         job.append_log(f"Non importé pour l'instant, repris à la prochaine récupération : {path} : {exc}")
         return None
     except Exception as exc:  # noqa: BLE001 - one bad file shouldn't fail the whole gather
@@ -1045,6 +1083,7 @@ def test_email_pattern_task(
     job.save(update_fields=["status", "range_start", "range_end"])
 
     try:
+        incomplete = None
         try:
             matches = find_matching_emails(
                 start_date,
@@ -1058,8 +1097,10 @@ def test_email_pattern_task(
                 should_cancel=lambda: _is_cancelled(job),
             )
         except IncompleteSearch as exc:
-            # What the server handed over is listed; the rest is said.
-            matches = exc.matches
+            # What the server handed over is listed; the rest is said - beside
+            # the results too: a pattern too slow on a mail is the very thing
+            # a test is for.
+            matches, incomplete = exc.matches, exc
             job.append_log(str(exc))
         job.test_matches = [
             {
@@ -1070,7 +1111,12 @@ def test_email_pattern_task(
             }
             for match in matches
         ]
-        job.update_progress("test", label="Résultats du test", found=len(matches))
+        job.update_progress(
+            "test",
+            label="Résultats du test",
+            found=len(matches),
+            **({"note": str(incomplete)[:300]} if incomplete is not None else {}),
+        )
         job.status = ScrapeJob.Status.CANCELLED if _is_cancelled(job) else ScrapeJob.Status.SUCCESS
         if job.status == ScrapeJob.Status.CANCELLED:
             job.append_log("Annulé par l'utilisateur.")

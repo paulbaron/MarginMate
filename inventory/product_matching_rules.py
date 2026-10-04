@@ -61,7 +61,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 from rapidfuzz.distance import Levenshtein
@@ -213,11 +213,28 @@ def _resolve_stock_type_match(suggestion: dict) -> None:
     # Pre-format so the review form's editable input doesn't show something
     # like "0.7000000000000001", and so a Decimal never ends up in a dict
     # that's about to be saved into a JSONField (json.dumps doesn't know how
-    # to serialize one).
+    # to serialize one). Four decimals at most, what stock_equivalent holds:
+    # « SAFRAN 0,25G » is 0.00025 kg, which « Approuver » refuses, and the
+    # suggestion made again was the same.
+    exact = suggestion.get("stock_equivalent", 1)
     try:
-        suggestion["stock_equivalent"] = f"{float(suggestion.get('stock_equivalent', 1)):g}"
-    except (TypeError, ValueError):
-        suggestion["stock_equivalent"] = "1"
+        factor = round(float(exact), 4)
+        exact_dec = Decimal(str(exact))
+    except (TypeError, ValueError, InvalidOperation):
+        factor, exact_dec = 1, Decimal(1)
+    suggestion["stock_equivalent"] = f"{factor:g}"
+    if factor == 0 or abs(Decimal(str(factor)) - exact_dec) > abs(exact_dec) * Decimal("0.005"):
+        # 0.04 g is 0.00004 kg, which four decimals make 0: no factor at all,
+        # left to a person - « Approuver » refused the 0, and the suggestion
+        # made again was the same, at every click. 0.25 g made 0.0003, still
+        # sure, and « Approuver les sûres » booked every purchase 20 % over:
+        # a factor the rounding moves by more than 0.5 % (1/3, 0.3333, is not)
+        # is no factor either.
+        suggestion["stock_equivalent"] = ""
+        suggestion["confidence"] = "low"
+        suggestion["reasoning"] += (
+            f" 1 produit = {_quantity_display(exact_dec)} : plus fin que les 4 décimales d'un facteur, à saisir."
+        )
 
 
 # --- Confidence -------------------------------------------------------------

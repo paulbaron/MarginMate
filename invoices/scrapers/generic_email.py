@@ -195,17 +195,31 @@ class SearchRefused(RuntimeError):
 
 
 class IncompleteSearch(RuntimeError):
-    """The server left `unread` mails of the range unread (a FETCH answered
-    NO, or timed out): the search read the rest - `matches` - and is not a
-    whole one. The gather imports what it read and records no coverage
+    """The search is not a whole one: the server left `unread` mails of the
+    range unread (a FETCH answered NO, or timed out), a pattern was too slow
+    on `slow` mails (a timeout is no « no match »), or the disk refused
+    `unwritten` attachments (scrape_email_invoices). What was read -
+    `matches` - stands. The gather imports it and records no coverage
     (invoices/coverage.py): the range is searched again next time.
     `downloaded`: scrape_email_invoices' files for `matches`."""
 
-    def __init__(self, unread: int, matches: list):
-        super().__init__(f"Recherche incomplète : {unread} e-mail(s) non lu(s) par le serveur mail.")
+    def __init__(self, unread: int, matches: list, *, slow: int = 0, unwritten: int = 0):
+        super().__init__()
         self.unread = unread
+        self.slow = slow
+        self.unwritten = unwritten
         self.matches = matches
         self.downloaded: list[tuple[str, date | None]] = []
+
+    def __str__(self) -> str:
+        reasons = []
+        if self.unread:
+            reasons.append(f"{self.unread} e-mail(s) non lu(s) par le serveur mail")
+        if self.slow:
+            reasons.append(f"motif trop lent sur {self.slow} e-mail(s)")
+        if self.unwritten:
+            reasons.append(f"{self.unwritten} pièce(s) jointe(s) non enregistrée(s) sur le disque")
+        return f"Recherche incomplète : {', '.join(reasons)}."
 
 
 @dataclass
@@ -431,28 +445,26 @@ def _extract_attachments(msg, attachment_regex: re.Pattern) -> list[EmailAttachm
     return attachments
 
 
-#: The patterns find_matching_emails is given, in its arguments' order.
-PATTERN_FIELDS = ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern")
-
-
-def _guarded_compilers(log) -> dict:
-    """Outside the platform owner's espace: each pattern through
-    returnables.patterns.invoice_mail_matcher, named in a refusal as its
-    field is named on the source's form (EmailInvoiceSource.PATTERN_LABELS)
-    - « Motif de la source » left the bar guessing which of four failed."""
-    from returnables.patterns import invoice_mail_matcher
+def _invoice_matcher(pattern: str, field: str, log, *, hosted: bool):
+    """One of an invoice source's patterns through
+    returnables.patterns.invoice_mail_matcher, in every espace (security
+    audit 04/10/2026), named in a refusal as its field is named on the
+    source's form (EmailInvoiceSource.PATTERN_LABELS) - « Motif de mail »
+    left the bar guessing which of four failed. In an espace that is not the
+    platform owner's (`hosted`), a pattern finding something in an empty
+    text is refused with its field's own sentence (EMPTY_MATCH_REASONS), and
+    one too slow on MAX_MAIL_TIMEOUTS mails of the search stops it."""
+    from returnables.patterns import MAX_MAIL_TIMEOUTS, invoice_mail_matcher
 
     from ..models import EmailInvoiceSource
 
-    return {
-        field: functools.partial(
-            invoice_mail_matcher,
-            log=log,
-            field_label=EmailInvoiceSource.PATTERN_LABELS[field],
-            empty_reason=EmailInvoiceSource.EMPTY_MATCH_REASONS[field],
-        )
-        for field in PATTERN_FIELDS
-    }
+    return invoice_mail_matcher(
+        pattern,
+        field_label=EmailInvoiceSource.PATTERN_LABELS[field],
+        log=log,
+        empty_reason=EmailInvoiceSource.EMPTY_MATCH_REASONS[field] if hosted else None,
+        max_timeouts=MAX_MAIL_TIMEOUTS if hosted else None,
+    )
 
 
 def find_matching_emails(
@@ -488,6 +500,10 @@ def find_matching_emails(
     is answered NO or times out is skipped, the rest read, and the search
     then raises IncompleteSearch carrying what it read - a gather recorded
     such a search as whole, and the skipped mails were never searched again.
+    So is a mail a pattern was too slow on (a matcher counting its
+    timeouts, `timed_out`): left out of this search, it is not a mail that
+    does not match - an attachment name too slow drops that attachment, the
+    mail's others still come.
 
     The mailbox is the bound espace's own (its « Identifiants »): refused
     unbound, before the settings are read or anything signs in
@@ -496,14 +512,19 @@ def find_matching_emails(
     (scrapers.egress.check_mail_host), checked before anything connects.
 
     `compile` turns each pattern (sender, subject, body, attachment) into
-    something with `.search(text)`. None: an invoice source's patterns, and
-    « Tester » - `re.compile` in the platform owner's espace, exactly as
-    before; anywhere else returnables.patterns.invoice_mail_matcher (checked
-    before anything compiles them, case-sensitive as `re` matched them, with
-    a timeout): a header anybody on the internet can write must not hang the
-    process every bar runs in. The returnables gather passes
-    returnables.patterns.mail_matcher. A pattern refused raises here, before
-    anything signs in.
+    something with `.search(text)`. By default (an invoice source's patterns,
+    and « Tester ») returnables.patterns.invoice_mail_matcher, in every
+    espace: `re`'s meaning as before, but checked by the motif guard and
+    matched with a timeout - a bare `re.compile` let one email's body hang
+    the whole server on a backtracking pattern (security audit 04/10/2026);
+    outside the platform owner's espace also refused when it finds something
+    in an empty text, and stopping its source after MAX_MAIL_TIMEOUTS
+    timeouts (_invoice_matcher). The returnables gather passes
+    returnables.patterns.mail_matcher: a format's patterns are checked before
+    anything compiles them, matched case-insensitively and with a timeout -
+    a header anybody on the internet can write must not hang the gather. A
+    pattern it refuses raises here, before anything signs in - by default
+    naming its field (EmailInvoiceSource.PATTERN_LABELS).
     """
     from accounts.tenancy import integrations_allowed, server_accounts_allowed
     from invoices import integrations
@@ -513,18 +534,24 @@ def find_matching_emails(
     server = server_accounts_allowed()
     address, app_password, host = mailbox_credentials()
 
-    if compile is not None:
-        compilers = dict.fromkeys(PATTERN_FIELDS, compile)
-    elif server:
-        compilers = dict.fromkeys(PATTERN_FIELDS, re.compile)
-    else:
-        compilers = _guarded_compilers(log)
-    sender_regex = compilers["sender_pattern"](sender_pattern)
-    subject_regex = compilers["subject_pattern"](subject_pattern) if subject_pattern else None
-    body_regex = compilers["body_pattern"](body_pattern) if body_pattern else None
-    attachment_regex = compilers["attachment_pattern"](attachment_pattern or INVOICE_ATTACHMENT_PATTERN)
+    def compiled(pattern: str, field: str):
+        if compile is not None:
+            return compile(pattern)
+        return _invoice_matcher(pattern, field, log, hosted=not server)
+
+    sender_regex = compiled(sender_pattern, "sender_pattern")
+    subject_regex = compiled(subject_pattern, "subject_pattern") if subject_pattern else None
+    body_regex = compiled(body_pattern, "body_pattern") if body_pattern else None
+    attachment_regex = compiled(attachment_pattern or INVOICE_ATTACHMENT_PATTERN, "attachment_pattern")
+    matchers = [regex for regex in (sender_regex, subject_regex, body_regex, attachment_regex) if regex is not None]
+
+    def timeouts() -> int:
+        # A bare compiled pattern (a test's `re.compile`) never times out.
+        return sum(getattr(regex, "timed_out", 0) for regex in matchers)
 
     matches: list[EmailMatch] = []
+    # The mails a pattern was too slow on, in either phase - once each.
+    slow: set[bytes] = set()
 
     if not server:
         from . import egress
@@ -595,9 +622,12 @@ def find_matching_emails(
                 header_msg = email.message_from_bytes(header_bytes)
                 sender = _decode_header_value(header_msg.get("From"))
                 subject = _decode_header_value(header_msg.get("Subject"))
-                if not sender_regex.search(sender):
+                timed_out_before = timeouts()
+                matched = sender_regex.search(sender) and (not subject_regex or subject_regex.search(subject))
+                if timeouts() > timed_out_before:
+                    slow.add(mail_id)
                     continue
-                if subject_regex and not subject_regex.search(subject):
+                if not matched:
                     continue
                 if sizes.get(mail_id, 0) > MAX_LITERAL_BYTES:
                     # Announced past the cap: passed over on its own line,
@@ -639,13 +669,18 @@ def find_matching_emails(
                     continue
                 msg = email.message_from_bytes(full_bytes)
 
+                timed_out_before = timeouts()
                 if body_regex and not body_regex.search(_extract_text_body(msg)):
+                    if timeouts() > timed_out_before:
+                        slow.add(mail_id)
                     continue
 
                 sender = _decode_header_value(msg.get("From"))
                 subject = _decode_header_value(msg.get("Subject"))
                 email_date = _parse_email_date(msg.get("Date"))
                 attachments = _extract_attachments(msg, attachment_regex)
+                if timeouts() > timed_out_before:
+                    slow.add(mail_id)
                 matches.append(
                     EmailMatch(
                         message_id=mail_id,
@@ -658,8 +693,8 @@ def find_matching_emails(
                 log(f"Retenu : « {subject} » de {sender} ({len(attachments)} pièce(s) jointe(s)).")
                 if on_progress:
                     on_progress(len(matches), total)
-        if unread:
-            raise IncompleteSearch(unread, matches)
+        if unread or slow:
+            raise IncompleteSearch(unread, matches, slow=len(slow))
     finally:
         imap.logout()
 
@@ -667,6 +702,13 @@ def find_matching_emails(
 
 
 UNSAFE_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+#: Windows' device names: « NUL.pdf » or « COM1.pdf » is no file there.
+RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"} | {f"{kind}{n}" for kind in ("com", "lpt") for n in range(1, 10)}
+)
+#: A name's length on disk, its extension included: a sender's 300-character
+#: name passed Windows' limit and failed the whole source (audit 04/10/2026).
+MAX_NAME_LENGTH = 120
 
 
 def attachment_file_name(name: str, taken: set[str]) -> str:
@@ -679,6 +721,11 @@ def attachment_file_name(name: str, taken: set[str]) -> str:
     stem, dot, extension = cleaned.rpartition(".")
     if not dot:
         stem, extension = cleaned, ""
+    extension = extension[:10]
+    stem = stem[: MAX_NAME_LENGTH - len(extension) - 1].rstrip(". ") or "piece-jointe"
+    if stem.split(".")[0].strip().lower() in RESERVED_NAMES:
+        stem = f"_{stem}"
+    cleaned = f"{stem}.{extension}" if extension else stem
     candidate, number = cleaned, 1
     while candidate.lower() in taken:
         number += 1
@@ -705,7 +752,10 @@ def scrape_email_invoices(
     straight into the existing gather-and-import loop in tasks.py.
 
     An IncompleteSearch comes through with what WAS read written all the
-    same, on its `downloaded`: the gather imports it and records nothing."""
+    same, on its `downloaded`: the gather imports it and records nothing.
+    An attachment the disk refuses (full, a file locked, a path too long)
+    makes the search an incomplete one too (`unwritten`): the others are
+    written and imported, and its mail is fetched again next time."""
     os.makedirs(download_dir, exist_ok=True)
     try:
         matches = find_matching_emails(
@@ -720,19 +770,35 @@ def scrape_email_invoices(
             should_cancel,
         )
     except IncompleteSearch as incomplete:
-        incomplete.downloaded = _write_attachments(download_dir, incomplete.matches, log)
+        incomplete.downloaded, incomplete.unwritten = _write_attachments(download_dir, incomplete.matches, log)
         raise
-    return _write_attachments(download_dir, matches, log)
+    downloaded, unwritten = _write_attachments(download_dir, matches, log)
+    if unwritten:
+        incomplete = IncompleteSearch(0, matches, unwritten=unwritten)
+        incomplete.downloaded = downloaded
+        raise incomplete
+    return downloaded
 
 
-def _write_attachments(download_dir: str, matches, log) -> list[tuple[str, date | None]]:
+def _write_attachments(download_dir: str, matches, log) -> tuple[list[tuple[str, date | None]], int]:
+    """(the files written, with their mail's date; how many attachments the
+    disk refused)."""
     downloaded: list[tuple[str, date | None]] = []
+    unwritten = 0
     taken: set[str] = set()
     for match in matches:
         for attachment in match.attachments:
             filepath = os.path.join(download_dir, attachment_file_name(attachment.filename, taken))
-            with open(filepath, "wb") as f:
-                f.write(attachment.content)
+            try:
+                with open(filepath, "wb") as f:
+                    f.write(attachment.content)
+            except OSError as exc:
+                # One attachment the disk refuses is skipped, said, and the
+                # source's other invoices still come in - counted: its mail
+                # is not taken for nothing.
+                log(f"Pièce jointe non enregistrée : {attachment.filename!r} ({exc.strerror or exc})")
+                unwritten += 1
+                continue
             log(f"Téléchargé : {attachment.filename}")
             downloaded.append((filepath, match.email_date))
-    return downloaded
+    return downloaded, unwritten

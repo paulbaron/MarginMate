@@ -1,5 +1,8 @@
+from datetime import date
+
 from django import forms
 from django.forms import BaseInlineFormSet, inlineformset_factory
+from django.utils import timezone
 
 from .models import Product, StockTake, StockTakeLine, StockType, UnitChoices
 from .services import first_purchase_dates, product_counting_ratios
@@ -205,12 +208,38 @@ def stock_take_entry_lookup() -> dict[str, dict]:
     return entries
 
 
+#: The oldest date a count may carry: the invoices' own (2000).
+EARLIEST_STOCK_TAKE_DATE = date(2000, 1, 1)
+
+
 class StockTakeForm(forms.ModelForm):
     class Meta:
         model = StockTake
         fields = ["taken_at", "note"]
         labels = {"taken_at": "Date", "note": "Note"}
         widgets = {"taken_at": forms.DateTimeInput(attrs={"type": "datetime-local"})}
+
+    def clean_taken_at(self):
+        """Between 2000 and the end of next year. 9999-12-31 was saved, and
+        « Combler les écarts » then read the day after it."""
+        taken_at = self.cleaned_data.get("taken_at")
+        if taken_at is None:
+            return taken_at
+        last = date(timezone.localdate().year + 1, 12, 31)
+        try:
+            day = timezone.localtime(taken_at).date()
+        except (OverflowError, ValueError):
+            day = None
+        if day is None or not EARLIEST_STOCK_TAKE_DATE <= day <= last:
+            raise forms.ValidationError(
+                f"Date hors limites : entre le {EARLIEST_STOCK_TAKE_DATE:%d/%m/%Y} et le {last:%d/%m/%Y}."
+            )
+        return taken_at
+
+
+#: A second row naming what a row above already counts. Not added up for the
+#: user: the two may be counted in different units (bottles, litres).
+DUPLICATE_ROW = "Déjà compté plus haut : additionnez les quantités sur une seule ligne."
 
 
 class StockTakeLineForm(forms.ModelForm):
@@ -252,6 +281,12 @@ class StockTakeLineForm(forms.ModelForm):
         cleaned = super().clean()
         if self.cleaned_data.get("DELETE"):
             return cleaned
+        quantity = cleaned.get("counted_quantity")
+        # Saved valued 0 EUR, it lowered the closing count of the variance and
+        # the gaps. Refused when typed only: a saved line coming back
+        # untouched must not trap the inventory it is in.
+        if quantity is not None and quantity < 0 and "counted_quantity" in self.changed_data:
+            self.add_error(None, "La quantité comptée ne peut pas être négative.")
         name = (cleaned.get("entry_search") or "").strip()
         if not name:
             self.add_error("entry_search", "Choisissez un produit ou un article.")
@@ -305,6 +340,24 @@ class BaseStockTakeLineFormSet(BaseInlineFormSet):
         if queryset is None:
             queryset = StockTakeLine.objects.select_related("product__supplier", "stock_type")
         super().__init__(*args, queryset=queryset, **kwargs)
+
+    def clean(self):
+        """One line per product or article (the model's two unique
+        constraints), said on the repeated row. Django checks neither: both
+        fields are set by StockTakeLineForm.clean, not posted, so the save
+        ended on an IntegrityError. A row being deleted is not counted."""
+        super().clean()
+        seen = set()
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data") or form.errors or self._should_delete_form(form):
+                continue
+            line = form.instance
+            key = ("product", line.product_id) if line.product_id else ("stock_type", line.stock_type_id)
+            if key[1] is None:
+                continue
+            if key in seen:
+                form.add_error("entry_search", DUPLICATE_ROW)
+            seen.add(key)
 
 
 StockTakeLineFormSet = inlineformset_factory(

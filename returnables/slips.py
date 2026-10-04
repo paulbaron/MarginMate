@@ -46,6 +46,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from time import monotonic
 
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
@@ -75,8 +76,15 @@ MAX_ERROR_CHARS = 300
 SLUG_CHARS = 20
 #: How many refused files an upload's summary names before « … et N autres ».
 LISTED_REFUSALS = 10
+#: The documents one « Ajouter des bons » may send: each is read in the
+#: request, seconds on a bad file (reading.MAX_INFLATE_TOTAL), and a bulk
+#: history comes through the mailbox's gather.
+MAX_SLIP_UPLOAD_FILES = 20
+#: ...and a minute in all: the files left after it are « pas lu », never read.
+UPLOAD_SECONDS = 60
 
 UNEXPECTED = "erreur inattendue : le fichier n'a pas été enregistré, réessayez."
+NOT_READ = "pas lu : l'envoi a duré plus d'une minute, renvoyez-le."
 
 
 @dataclass
@@ -385,13 +393,18 @@ def store_uploads(files, fmt=None) -> UploadSummary:
     """Every PDF of one upload, through `store_slip` (origin « Déposé à la
     main »), one after the other - one file's failure is that file's
     refusal, never the others'. A file over 5 MB is refused before it is
-    read. `fmt` None: each document's format is recognised. The slips
+    read, and so is every file left once the upload has run UPLOAD_SECONDS
+    (NOT_READ). `fmt` None: each document's format is recognised. The slips
     created are handed to `notify.notify_slips` once, after the last file
     (it never raises: the summary is the files' whatever the alert does)."""
     summary = UploadSummary()
     created = []
+    deadline = monotonic() + UPLOAD_SECONDS
     for uploaded in files:
         name = clean_text(getattr(uploaded, "name", "") or "", MAX_NAME_CHARS) or "document"
+        if monotonic() > deadline:
+            summary.results.append((name, _refused(NOT_READ)))
+            continue
         size = getattr(uploaded, "size", None)
         if isinstance(size, int) and size > reading.MAX_PDF_BYTES:
             summary.results.append((name, _refused(reading.TOO_HEAVY)))

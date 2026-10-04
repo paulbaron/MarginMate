@@ -589,6 +589,107 @@ class ApproveSureSuggestionsTests(TestCase):
         response = self.client.post(self.url, {"confiance": "haute"})
         self.assertIn("Aucune suggestion sûre", self.message(response))
 
+    def test_a_factor_whose_movement_no_column_holds_is_left_to_classify(self):
+        """0.0001 is a factor; a bottle bought 183.50 EUR is then 1 835 000
+        EUR a unit, which a stock movement cannot store."""
+        product = make_product(
+            supplier=self.supplier,
+            raw_name="RHUM X 70CL",
+            ai_suggestion=suggestion(self.rum, "high", stock_equivalent="0.0001"),
+        )
+        make_invoice_line(product=product, quantity=1, total_ht="183.50")
+        response = self.client.post(self.url, {"confiance": "haute"})
+        product.refresh_from_db()
+        self.assertIsNone(product.stock_type)
+        self.assertIn("facteur de conversion hors limites", self.message(response))
+        self.assertEqual(self.client.get(reverse("inventory:stock_list")).status_code, 200)
+
+    def test_a_refused_suggestion_leaves_no_new_empty_article_behind(self):
+        """The new article a suggestion describes is made once its factor is
+        taken: refused, it was left in the Stock page with nothing in it."""
+        for factor in ("0.0001", "abc"):
+            with self.subTest(factor=factor):
+                new = suggestion(self.rum, "high", stock_equivalent=factor)
+                new.update(stock_type_name="Rhum vieux", matched_stock_type_id=None, is_new_stock_type=True)
+                product = make_product(supplier=self.supplier, raw_name=f"RHUM VIEUX {factor}", ai_suggestion=new)
+                make_invoice_line(product=product, quantity=1, total_ht="183.50")
+                self.client.post(self.url, {"confiance": "haute"})
+                product.refresh_from_db()
+                self.assertIsNone(product.stock_type)
+                self.assertFalse(StockType.objects.filter(name__iexact="Rhum vieux").exists())
+
+    def test_a_taken_suggestion_still_makes_its_new_article(self):
+        new = suggestion(self.rum, "high", stock_equivalent="0.7")
+        new.update(stock_type_name="Rhum vieux", matched_stock_type_id=None, is_new_stock_type=True)
+        new.update(new_stock_type_category="Spiritueux")
+        product = make_product(supplier=self.supplier, raw_name="RHUM VIEUX 70CL", ai_suggestion=new)
+        bought(product)
+        self.client.post(self.url, {"confiance": "haute"})
+        product.refresh_from_db()
+        made = StockType.objects.get(name="Rhum vieux")
+        self.assertEqual((made.unit, made.category), (UnitChoices.LITRE, "Spiritueux"))
+        self.assertEqual((product.stock_type, product.stock_equivalent), (made, Decimal("0.7")))
+
+    def test_a_suggested_factor_finer_than_its_column_is_left_to_a_person(self):
+        """0.25 g of a spice is 0.00025 kg: wider than stock_equivalent's four
+        decimals, which « Approuver » refuses. Rounded to 0.0003, it stayed
+        sure, and « Approuver les sûres » booked every purchase 20 % over (0.05 g
+        made 0.0001, twice the quantity). A factor four decimals hold, or
+        nearly (0.0015), keeps its confidence."""
+        spice = make_stock_type(name="Safran", unit=UnitChoices.KILOGRAM, category="Epicerie")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SAFRAN 1G", stock_type=spice, stock_equivalent="0.001"
+        )
+        bought(neighbour)
+        exact = make_product(supplier=self.supplier, raw_name="SAFRAN 1,5G")
+        bought(exact)
+        made = suggest_for_product(exact)
+        self.assertEqual((made["stock_equivalent"], made["confidence"]), ("0.0015", "high"))
+
+        for raw_name, shown in (("SAFRAN 0,25G", "0.00025"), ("SAFRAN 0,05G", "0.00005")):
+            with self.subTest(raw_name=raw_name):
+                product = make_product(supplier=self.supplier, raw_name=raw_name)
+                bought(product)
+                made = suggest_for_product(product)
+                self.assertEqual((made["stock_type_name"], made["stock_equivalent"]), ("Safran", ""))
+                self.assertEqual(made["confidence"], "low")
+                self.assertIn(f"1 produit = {shown} : plus fin que les 4 décimales d'un facteur", made["reasoning"])
+                product.ai_suggestion = made
+                product.save(update_fields=["ai_suggestion"])
+                self.client.post(self.url, {"confiance": "haute"})
+                product.refresh_from_db()
+                self.assertIsNone(product.stock_type)
+
+    def test_a_suggested_factor_that_rounds_to_nothing_is_left_to_a_person(self):
+        """0.04 g is 0.00004 kg, which four decimals make 0: refused by
+        « Approuver », cleared, made again the same, at every click. It is
+        now suggested without a factor, never sure, and left as it is."""
+        spice = make_stock_type(name="Safran", unit=UnitChoices.KILOGRAM, category="Epicerie")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SAFRAN 1G", stock_type=spice, stock_equivalent="0.001"
+        )
+        bought(neighbour)
+        product = make_product(supplier=self.supplier, raw_name="SAFRAN 0,04G")
+        bought(product)
+        made = suggest_for_product(product)
+        self.assertEqual((made["stock_type_name"], made["stock_equivalent"]), ("Safran", ""))
+        self.assertEqual(made["confidence"], "low")
+        self.assertIn("1 produit = 0.00004 : plus fin que les 4 décimales d'un facteur, à saisir", made["reasoning"])
+
+        # The panel asks for the factor rather than taking a blank one as 1.
+        page = self.client.get(reverse("inventory:review_queue"), **HTMX).content.decode()
+        self.assertRegex(page, r'name="stock_equivalent" inputmode="decimal"\s+value="" required>')
+        product.refresh_from_db()
+        stored = product.ai_suggestion
+        self.assertEqual(stored["stock_equivalent"], "")
+
+        for _click in range(2):
+            response = self.client.post(self.url)
+            self.assertIn("1 laissé(s) à classer, leur facteur étant à saisir.", self.message(response))
+            product.refresh_from_db()
+            self.assertIsNone(product.stock_type)
+            self.assertEqual(product.ai_suggestion, stored)
+
     def test_approving_everything_still_takes_every_confidence(self):
         products = [
             self.pending("RHUM A 70CL", self.rum, "high"),

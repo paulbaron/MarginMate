@@ -392,7 +392,7 @@ class BankSection(Section):
         for payment in payments:
             key = invoice_keys[payment.invoice_id]
             by_line[payment.transaction_id].append(
-                [[key[name] for name in keys.KEY_FIELDS], *codec.record(payment, PAYMENT_FIELDS).values()]
+                [[key.get(name) for name in keys.KEY_FIELDS], *codec.record(payment, PAYMENT_FIELDS).values()]
             )
         return {
             "transactions": [

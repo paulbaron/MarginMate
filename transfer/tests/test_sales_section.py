@@ -345,6 +345,37 @@ class SalesRefusalTests(LaneSectionsMixin, TestCase):
 
         self.assertEqual(PosProductDailyQuantity.objects.get(product__name="CAFÉ", sold_on=day(1)).quantity, -3)
 
+    def test_a_quantity_past_what_the_sums_hold_is_skipped(self):
+        """codec.load reads any int: from 2**63 SQLite refused to store the
+        day, and days just under it overflowed the rebuild's sums - the
+        preview was a 500 (audit 04/10/2026)."""
+
+        def daily(rows):
+            rows[0][2] = 2**63
+            rows[1][2] = 4 * 10**18
+            rows[2][2] = -(2**31 - 1)
+
+        def manual(sales):
+            sales[0]["quantity"] = 10**20
+
+        run = import_archive(self.edited(daily=daily, manual_sales=manual), MERGE)
+        bound = "2 147 483 647 au plus, en plus ou en moins"
+        self.assertEqual(
+            run.section("ventes").skipped,
+            [
+                f"Produit caisse « CAFÉ » le 01/09/2026 : « quantity » : nombre hors limites (« {2**63} ») : {bound}",
+                (
+                    f"Produit caisse « MOJITO CLASSIQUE » le 01/09/2026 : « quantity » : nombre hors limites "
+                    f"(« {4 * 10**18} ») : {bound}"
+                ),
+                f"Vente saisie de « Alcool + Soda » : « quantity » : nombre hors limites (« {10**20} ») : {bound}",
+            ],
+        )
+        self.assertEqual(
+            PosProductDailyQuantity.objects.get(product__name="MOJITO CLASSIQUE", sold_on=day(2)).quantity,
+            -(2**31 - 1),
+        )
+
     def test_a_sale_typed_in_for_a_recipe_unknown_here_is_skipped(self):
         def change(sales):
             sales[0]["recipe"] = "Mojito fraise"

@@ -1,8 +1,11 @@
+from copy import copy
 from datetime import date
 from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import F, Min, Q
+
+from common import format_money
 
 from .models import (
     MovementKind,
@@ -146,6 +149,68 @@ def compute_movement_amounts(invoice_line) -> tuple[Decimal, Decimal]:
     quantity = product_base_amount(invoice_line) * product.stock_equivalent
     unit_cost_ht = (invoice_line.cost_ht / quantity) if quantity else Decimal("0")
     return quantity, unit_cost_ht
+
+
+#: The widest figures StockMovement's columns hold once rounded to their
+#: places: quantity (12,3), unit_cost_ht (10,4). SQLite stores a wider one
+#: without a word and every later read of it raises - the Stock, « Liste »
+#: and Marges pages with it (CLAUDE.md, « A figure wider than the column
+#: behind it is refused, at the door »).
+MOVEMENT_QUANTITY_LIMIT = Decimal("999999999.9995")
+MOVEMENT_UNIT_COST_LIMIT = Decimal("999999.99995")
+
+
+def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal, refused: str = "") -> str:
+    """Why `product` cannot be booked with this unit and factor - a French
+    sentence naming the purchase whose movement would not fit its columns -
+    or "" when every one fits. A factor that fits its own column can still
+    divide a line's cost into a unit cost no column holds (0.0001 on a 183 EUR
+    line is 1 835 000 EUR a unit), so this is asked before anything is
+    written, with compute_movement_amounts' own arithmetic. `refused` names
+    what the sentence refuses when it is not the factor (an article's unit)."""
+    probe = copy(product)
+    probe.unit = unit
+    probe.stock_equivalent = stock_equivalent
+    for line in product.invoice_lines.filter(is_spread_charge=False):
+        line.product = probe
+        figure = _movement_overflow(line)
+        if not figure:
+            continue
+        refused = refused or f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé"
+        return f"{refused} : un achat de « {product.raw_name} » {figure}, plus que MarginMate ne peut enregistrer."
+    return ""
+
+
+def movement_refusal(invoice_line) -> str:
+    """Why the movement `invoice_line` books (create_stock_movement_for_line)
+    would not fit its columns - a French sentence naming the line and its
+    product's factor - or "". conversion_refusal's question asked from the
+    other side: a line that fits its own columns still overflows the
+    movement's once divided by a small factor (25 000 EUR for one tray of
+    0.02 kg is 1 250 000 EUR a kilo), so every path writing lines asks it
+    before the movement is booked."""
+    if invoice_line.is_spread_charge or invoice_line.product.stock_type_id is None:
+        return ""
+    figure = _movement_overflow(invoice_line)
+    if not figure:
+        return ""
+    factor = format(invoice_line.product.stock_equivalent.normalize(), "f")
+    return (
+        f"« {invoice_line.raw_name} » (facteur {factor}) {figure}, plus que MarginMate ne peut enregistrer - "
+        "vérifiez la quantité et le montant de la ligne."
+    )
+
+
+def _movement_overflow(invoice_line) -> str:
+    """The figure of the line's movement no column holds, said in French, or
+    "". Only the figure that overflows is named: a tiny factor's quantity
+    printed « 0.000 unités » next to a unit cost of millions."""
+    quantity, unit_cost_ht = compute_movement_amounts(invoice_line)
+    if abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
+        return f"mettrait l'unité de stock à {format_money(unit_cost_ht)} €"
+    if abs(quantity) >= MOVEMENT_QUANTITY_LIMIT:
+        return f"ferait {format_money(quantity, '.3f')} unités de stock"
+    return ""
 
 
 def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
@@ -350,6 +415,7 @@ def refresh_invoice_statuses_for_product(product: Product) -> None:
             invoice.save(update_fields=["status"])
 
 
+@transaction.atomic
 def link_product_to_stock_type(
     product: Product,
     stock_type: StockType,
@@ -357,7 +423,17 @@ def link_product_to_stock_type(
     stock_equivalent: Decimal,
 ) -> None:
     """Link a reviewed product to a stock type and backfill stock movements
-    for every invoice line already recorded against that product."""
+    for every invoice line already recorded against that product.
+
+    A product already classified otherwise has its purchase movements made
+    again, rebuild_purchase_movements' rule: create_stock_movement_for_line
+    keeps a line's existing movement, so they stayed on the old article with
+    the old factor while the product named the new one."""
+    # Read from the row, inside the (IMMEDIATE) transaction: the caller's
+    # copy may predate another request that filed it a moment ago.
+    was = Product.objects.values_list("stock_type_id", "unit", "stock_equivalent").get(pk=product.pk)
+    if was[0] is not None and was != (stock_type.pk, unit, stock_equivalent):
+        StockMovement.objects.filter(invoice_line__product=product, kind=MovementKind.PURCHASE).delete()
     product.stock_type = stock_type
     product.unit = unit
     product.stock_equivalent = stock_equivalent
@@ -368,6 +444,7 @@ def link_product_to_stock_type(
     refresh_invoice_statuses_for_product(product)
 
 
+@transaction.atomic
 def update_product_conversion(product: Product, unit: str, stock_equivalent: Decimal) -> None:
     """Fixes a product's unit/factor in place, without touching which stock
     type it's linked to - for correcting a wrong conversion directly from
@@ -376,6 +453,9 @@ def update_product_conversion(product: Product, unit: str, stock_equivalent: Dec
     values, so they're dropped and recreated from scratch rather than
     patched - there's no way to "adjust" a past movement's quantity/cost
     without just recomputing it from the underlying invoice line.
+
+    In one transaction: a failure after the delete left the product's
+    purchases out of the stock ledger, silently.
     """
     StockMovement.objects.filter(invoice_line__product=product).delete()
     product.unit = unit
@@ -404,8 +484,20 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
     already moved, leaving the merge half done. A count that measured both
     items directly becomes one line holding both: same unit, so the amounts
     and their frozen values simply add up.
+
+    The shopping lists' items of `source` move over list by list, finished
+    lists included (shopping_lists.carry_on_merge): one item where both count
+    the same thing, a free text holding the source's name where they count
+    something else - never a line lost.
     """
     from recipes.models import RecipeIngredient, SaleDocumentLine
+
+    from .shopping_lists import carry_on_merge
+
+    if source.pk == target.pk:
+        # Each count line would be its own twin, doubled then deleted, and
+        # the item deleted after them with its losses.
+        raise ValueError("cannot merge a stock type into itself")
 
     StockMovement.objects.filter(stock_type=source).update(stock_type=target)
     Product.objects.filter(stock_type=source).update(stock_type=target)
@@ -424,6 +516,7 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
         twin.save(update_fields=["counted_quantity", "value_ht", "shortfall_quantity", "has_shortfall"])
         line.sources.update(stock_take_line=twin)
         line.delete()
+    carry_on_merge(source, target)
     source.delete()
 
 

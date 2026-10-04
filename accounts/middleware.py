@@ -108,15 +108,19 @@ def htmx_to_login(request, login_url, redirect_field_name="next"):
 class LoginRequiredMiddleware(DjangoLoginRequiredMiddleware):
     """Django's LoginRequiredMiddleware, with one change: an htmx request (a
     job's status polled every second, a boosted tab) gets `htmx_to_login`'s
-    401 instead of the 302."""
+    401 instead of the 302. Either is never kept: a cache keying on the
+    address alone (Cloudflare's, for a /fichiers/….pdf or .jpg) handed a
+    cookieless visitor's 302 to the logged-in, whom the login page sends
+    straight back - a redirect loop until the copy expired."""
 
     def handle_no_permission(self, request, view_func):
         response = super().handle_no_permission(request, view_func)
-        if request.headers.get("HX-Request") != "true":
-            return response
-        return htmx_to_login(
-            request, resolve_url(self.get_login_url(view_func)), self.get_redirect_field_name(view_func)
-        )
+        if request.headers.get("HX-Request") == "true":
+            response = htmx_to_login(
+                request, resolve_url(self.get_login_url(view_func)), self.get_redirect_field_name(view_func)
+            )
+        add_never_cache_headers(response)
+        return response
 
 
 def membership_of(user):

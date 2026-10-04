@@ -92,6 +92,15 @@ AREAS = (
         "des factures comparées.",
         "returnables:home",
     ),
+    # Ticked by default, so with the defaults (the owner, 04/10/2026: every
+    # employee gets it). Its routes: `_SHOPPING`, below. Beside any other
+    # area it is never the start page (`Access.home_url`).
+    Area(
+        "shopping",
+        "Liste de courses",
+        "Les listes de courses par enseigne et la prévision des achats : articles, quantités et rythme, sans les prix.",
+        "inventory:shopping_lists",
+    ),
     Area(
         "invoices",
         "Factures : tout consulter et corriger",
@@ -133,7 +142,7 @@ AREAS = (
 )
 AREA_KEYS = frozenset(area.key for area in AREAS)
 #: Ticked for a new employee.
-DEFAULT_AREAS = ("invoices_add", "stock_takes", "returnables")
+DEFAULT_AREAS = ("invoices_add", "stock_takes", "returnables", "shopping")
 #: The areas already showing what articles cost: with one of them, an
 #: inventory shows its values too (`Access.sees_costs`).
 COST_AREAS = frozenset({"products", "invoices", "recipes", "margins", "stock_gaps"})
@@ -177,6 +186,7 @@ _ADDING = frozenset({"invoices", "invoices_add"})
 _STOCK_TAKES = frozenset({"stock_takes"})
 _STOCK_GAPS = frozenset({"stock_gaps"})
 _GATHER = frozenset({"invoices", "returnables"})
+_SHOPPING = frozenset({"products", "shopping"})
 
 #: Routes whose areas are not their app's.
 VIEW_AREAS = {
@@ -225,6 +235,21 @@ VIEW_AREAS = {
     "inventory:stock_gap_filler_exclude": _STOCK_GAPS,
     "inventory:stock_gap_filler_include": _STOCK_GAPS,
     "inventory:stock_gap_filler_recent": _STOCK_GAPS,
+    # « Prévoir les courses », « Rythme d'achat » and the shopping lists open
+    # with « Liste de courses » or « Produits & charges ». The forecast's
+    # settings and exclusions change it for everybody: they stay its app's
+    # (« Produits & charges »), and the pages draw their forms only for a
+    # login that may post them (inventory.views.shopping_list's `may_tune`).
+    "inventory:shopping_list": _SHOPPING,
+    "inventory:shopping_rhythm": _SHOPPING,
+    "inventory:shopping_lists": _SHOPPING,
+    "inventory:shopping_list_page": _SHOPPING,
+    "inventory:shopping_list_add": _SHOPPING,
+    "inventory:shopping_list_add_all": _SHOPPING,
+    "inventory:shopping_list_item_edit": _SHOPPING,
+    "inventory:shopping_list_item_delete": _SHOPPING,
+    "inventory:shopping_list_item_tick": _SHOPPING,
+    "inventory:shopping_list_finish": _SHOPPING,
     # Old addresses of « Données »'s associations: they only redirect there.
     "inventory:export_associations": OWNER_ONLY,
     "inventory:import_associations": OWNER_ONLY,
@@ -371,10 +396,13 @@ class Access:
     def home_url(self) -> str:
         """Where this login starts: « / » for an owner, and for anyone given
         « Produits & charges » (the area « / » opens); else the entry of his
-        first area in AREAS order; « Aucune page ouverte » when he has none."""
+        first area in AREAS order, « Liste de courses » passed over beside
+        any other - accounts 0005 gave it to every employee, and none of them
+        was to start somewhere new (one given the lists alone starts there);
+        « Aucune page ouverte » when he has none."""
         if self.owner or "products" in self.areas:
             return reverse(HOME)
-        opened = self.opened
+        opened = [area for area in self.opened if area.key != "shopping"] or list(self.opened)
         return reverse(opened[0].entry) if opened else reverse("accounts:no_access")
 
 

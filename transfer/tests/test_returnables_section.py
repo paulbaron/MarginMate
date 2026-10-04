@@ -924,6 +924,22 @@ class RefusalTests(ReturnablesData, TestCase):
                 )
                 self.assertFalse(Pickup.objects.filter(reference=self.pickup.reference).exists())
 
+    def test_a_photo_size_past_2_31_skips_the_pickup_not_the_preview(self):
+        """From 2**63 SQLite cannot store it: an OverflowError failed the
+        whole preview (audit 04/10/2026)."""
+        for name in ("width", "height"):
+            with self.subTest(name=name):
+                report = self._import(
+                    edit("pickups", first_pickup, lambda record, n=name: record["photos"][0].update({n: 2**63}))
+                )
+                self.assertIn(
+                    f"Reprise du 10/02/2026 : « {name} » : nombre hors limites (« {2**63} ») : "
+                    "2 147 483 647 au plus, en plus ou en moins",
+                    report.skipped,
+                )
+                self.assertFalse(Pickup.objects.filter(reference=self.pickup.reference).exists())
+                self.assertEqual(Pickup.objects.count(), 1)
+
     def test_a_count_of_an_unknown_type_or_of_one_type_twice_skips_the_pickup(self):
         report = self._import(edit("pickups", first_pickup, lambda record: record["counts"][0].update(type="Tonneaux")))
         self.assertIn("Reprise du 10/02/2026 : type de consigne inconnu « Tonneaux »", report.skipped)

@@ -329,3 +329,288 @@ class EditInvoiceLinesRoundTripTests(TestCase):
     def test_the_rate_keeps_its_value_through_the_round_trip(self):
         response = self.client.get(reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]))
         self.assertEqual(response.context["formset"].forms[0].initial["vat_rate"], Decimal("20.00"))
+
+
+class FiguresWiderThanTheirColumnTests(TestCase):
+    """A figure wider than the column behind it is refused, at the door - on
+    the hand-typed pages too, not only on the e-invoice import.
+
+    SQLite stored 1500 / 0.001 = 1 500 000 in `unit_cost_ht` (10,4) without a
+    word, and every read of that line then raised: the document's own pages,
+    « Produits & charges » and « Banque » answered 500 for every login of the
+    bar, and nothing short of raw SQL got the line out."""
+
+    def setUp(self):
+        self.supplier = make_supplier(code="NOPARSER", name="Sans parseur", parser_key="")
+
+    def create(self, **row):
+        # The page's own prefix, « form » - not the formset tests' « lines ».
+        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line(**row)}).items()}
+        data.update({"supplier": self.supplier.pk, "invoice_number": "", "invoice_date": "2026-09-01"})
+        return self.client.post(reverse("invoices:invoice_create_manual"), data)
+
+    def test_a_count_of_a_thousandth_is_refused_on_the_hand_typed_invoice(self):
+        before = Invoice.objects.count()
+        response = self.create(quantity="0.001", total_ht="1500")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get(reverse("bank:bank_home")).status_code, 200)
+
+    def test_a_forgotten_decimal_comma_is_refused(self):
+        before = Invoice.objects.count()
+        response = self.create(quantity="1", total_ht="1250000")
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(Invoice.objects.count(), before)
+
+    def test_the_cliff_is_the_column_exactly(self):
+        response = self.create(quantity="1", total_ht="999999.99")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Invoice.objects.get(supplier=self.supplier).lines.get().unit_cost_ht, Decimal("999999.99"))
+
+    def test_a_rate_above_a_hundred_percent_is_refused(self):
+        formset = ManualInvoiceLineFormSet(payload({0: line(vat_rate="150")}), prefix="lines")
+        self.assertFalse(formset.is_valid())
+        self.assertEqual(formset.errors[0]["vat_rate"], ["Un taux ne dépasse pas 100 %."])
+
+    def test_the_correction_page_refuses_it_too(self):
+        invoice = make_invoice(supplier=self.supplier)
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
+            "form-0-product_name": "VODKA 70CL",
+            "form-0-quantity": "0.001",
+            "form-0-total_ht": "1500",
+            "form-0-vat_rate": "20",
+        }
+        response = self.client.post(reverse("invoices:invoice_edit_lines", args=[invoice.pk]), data)
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(invoice.lines.count(), 0)
+
+    def test_a_ticket_whose_amount_with_its_vat_is_too_wide_is_refused(self):
+        from invoices.forms import DOCUMENT_RECEIPT, LineCorrectionForm
+
+        form = LineCorrectionForm(
+            data={
+                "product_name": "PAIN",
+                "quantity": "1000000",
+                "total_ht": "9999999999.99",
+                "amount_source": "ht",
+                "vat_rate": "20",
+            },
+            document=DOCUMENT_RECEIPT,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("total_ht", form.errors)
+        form = LineCorrectionForm(
+            data={"product_name": "PAIN", "quantity": "1", "total_ttc": "10", "vat_rate": "999"},
+            document=DOCUMENT_RECEIPT,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("vat_rate", form.errors)
+
+    def test_nothing_stores_a_line_its_column_cannot_hold(self):
+        """The last guard, under every path that writes lines - an OCR
+        reading, a move, a re-read: refused before anything is written."""
+        from invoices.importing import LineTooWideError, import_parsed_invoice, replace_invoice_lines
+        from invoices.parsers.base import ParsedInvoice, ParsedLine
+
+        def wide():
+            return ParsedLine(
+                raw_name="VODKA 70CL",
+                quantity=Decimal("0.001"),
+                total_volume=Decimal("0"),
+                unit_cost_ht=Decimal("1500000.0000"),
+                total_ht=Decimal("1500.00"),
+                vat_rate=Decimal("0.2"),
+            )
+
+        before = Invoice.objects.count()
+        parsed = ParsedInvoice(
+            supplier_code=self.supplier.code, invoice_number="", invoice_date=date(2026, 9, 1), lines=[wide()]
+        )
+        with self.assertRaisesMessage(LineTooWideError, "« VODKA 70CL » : le prix unitaire (1 500 000.0000)"):
+            import_parsed_invoice(self.supplier, parsed)
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertIsInstance(LineTooWideError("x"), ValueError)
+
+        invoice = make_invoice(supplier=self.supplier)
+        with self.assertRaises(LineTooWideError):
+            replace_invoice_lines(invoice, [wide()])
+        self.assertEqual(invoice.lines.count(), 0)
+
+    def test_a_charge_too_wide_leaves_no_file_behind(self):
+        """A supplier of charges is filed as its own reading (expense_lines),
+        not as the lines read: those are the lines checked before the source
+        file is copied. Checked only as they were written, the refusal came
+        after the copy, and the rolled-back invoice left its file in media."""
+        import shutil
+        import tempfile
+
+        from accounts import paths
+        from invoices.importing import LineTooWideError, import_parsed_invoice
+        from invoices.parsers.base import ParsedInvoice
+
+        rent = make_supplier(code="LOYER", name="Loyer", parser_key="", expenses_only=True)
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        source = os.path.join(folder, "loyer-trop-large.pdf")
+        with open(source, "wb") as handle:
+            handle.write(b"%PDF-1.4 loyer")
+        parsed = ParsedInvoice(
+            supplier_code=rent.code,
+            invoice_number="",
+            invoice_date=date(2026, 9, 1),
+            printed_total_ttc=Decimal("6000000.00"),
+        )
+        with self.assertRaisesMessage(LineTooWideError, "le prix unitaire"):
+            import_parsed_invoice(rent, parsed, source)
+        stored = [name for _root, _dirs, names in os.walk(paths.media_root()) for name in names]
+        self.assertNotIn("loyer-trop-large.pdf", stored)
+
+    def herb(self):
+        """A classified product bought by the gram: 1 per kg is 0.02 kg, so a
+        line's cost is divided by 0.02 into its movement's unit cost."""
+        from inventory.models import UnitChoices
+        from tests.factories import make_product, make_stock_type
+
+        return make_product(
+            supplier=self.supplier,
+            raw_name="HERBES EXEMPLE 20G",
+            stock_type=make_stock_type(unit=UnitChoices.KILOGRAM),
+            unit=UnitChoices.KILOGRAM,
+            stock_equivalent="0.02",
+        )
+
+    def test_a_movement_no_column_holds_is_refused_on_the_hand_typed_invoice(self):
+        """25 000 EUR for one unit fits the line's own columns, but 25 000 over
+        0.02 kg is 1 250 000 EUR a kilo in StockMovement.unit_cost_ht (10,4):
+        stored, the home page and Marges answered 500 for the whole bar."""
+        from inventory.models import StockMovement
+
+        self.herb()
+        before = Invoice.objects.count()
+        response = self.create(name="HERBES EXEMPLE 20G", quantity="1", total_ht="25000", vat_rate="5.5")
+        self.assertEqual(response.status_code, 200)
+        said = " ".join(str(message) for message in response.context["messages"])
+        self.assertIn("« HERBES EXEMPLE 20G » (facteur 0.02) mettrait l'unité de stock à", said)
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertFalse(StockMovement.objects.exists())
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get(reverse("margins:margins_home")).status_code, 200)
+
+    def test_the_correction_page_refuses_a_movement_too_wide(self):
+        from inventory.models import StockMovement
+
+        self.herb()
+        invoice = make_invoice(supplier=self.supplier)
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
+            "form-0-product_name": "HERBES EXEMPLE 20G",
+            "form-0-quantity": "1",
+            "form-0-total_ht": "25000",
+            "form-0-vat_rate": "5.5",
+        }
+        response = self.client.post(reverse("invoices:invoice_edit_lines", args=[invoice.pk]), data, follow=True)
+        said = " ".join(str(message) for message in response.context["messages"])
+        self.assertIn("mettrait l'unité de stock à", said)
+        self.assertEqual(invoice.lines.count(), 0)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_a_movement_too_wide_leaves_no_file_behind(self):
+        """Refused before the source file is copied, as a line too wide is."""
+        import shutil
+        import tempfile
+
+        from accounts import paths
+        from common import group_thousands
+        from inventory.models import StockMovement
+        from invoices.importing import LineTooWideError, import_parsed_invoice
+        from invoices.parsers.base import ParsedInvoice, ParsedLine
+
+        self.herb()
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        source = os.path.join(folder, "aneth-trop-cher.pdf")
+        with open(source, "wb") as handle:
+            handle.write(b"%PDF-1.4 aneth")
+        parsed = ParsedInvoice(
+            supplier_code=self.supplier.code,
+            invoice_number="",
+            invoice_date=date(2026, 9, 1),
+            lines=[
+                ParsedLine(
+                    raw_name="HERBES EXEMPLE 20G",
+                    quantity=Decimal("1"),
+                    total_volume=Decimal("0"),
+                    unit_cost_ht=Decimal("25000"),
+                    total_ht=Decimal("25000.00"),
+                    vat_rate=Decimal("0.055"),
+                )
+            ],
+        )
+        figure = f"mettrait l'unité de stock à {group_thousands('1250000.00')} €"
+        with self.assertRaisesMessage(LineTooWideError, figure):
+            import_parsed_invoice(self.supplier, parsed, source)
+        stored = [name for _root, _dirs, names in os.walk(paths.media_root()) for name in names]
+        self.assertNotIn("aneth-trop-cher.pdf", stored)
+        self.assertFalse(Invoice.objects.filter(supplier=self.supplier).exists())
+        self.assertFalse(StockMovement.objects.exists())
+
+
+class ManualInvoicePostedTwiceTests(TestCase):
+    """Most paper invoices typed in have no number, and the number was the
+    only thing refusing a second copy: two taps on « Créer la facture » on a
+    phone filed the purchase twice - its stock, its « Facturé » in Marges,
+    and two documents for one bank debit."""
+
+    def setUp(self):
+        self.supplier = make_supplier(code="NOPARSER", name="Sans parseur", parser_key="")
+        self.url = reverse("invoices:invoice_create_manual")
+
+    def post(self, token, **row):
+        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line(**row)}).items()}
+        data.update({"supplier": self.supplier.pk, "invoice_number": "", "invoice_date": "2026-09-01", "jeton": token})
+        return self.client.post(self.url, data)
+
+    def test_the_same_form_posted_twice_makes_one_invoice(self):
+        token = "Xq3vB0b1hJ8yQm2dKzP7cA"
+        first = self.post(token)
+        invoice = Invoice.objects.get(supplier=self.supplier)
+        self.assertRedirects(first, reverse("invoices:invoice_detail", args=[invoice.pk]))
+        second = self.post(token)
+        self.assertRedirects(second, reverse("invoices:invoice_detail", args=[invoice.pk]))
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 1)
+
+    def test_two_forms_make_two_invoices(self):
+        """Two identical tickets bought the same day are two purchases."""
+        self.post("Xq3vB0b1hJ8yQm2dKzP7cA")
+        self.post("Lr5tN9wE2uY6iO1pS4dF8g")
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 2)
+
+    def test_another_invoice_typed_on_a_page_already_sent_is_made(self):
+        """Back to the page after creating: the browser can give it back with
+        its old value, and what is typed on it then is another invoice - sent
+        to the first with « déjà créée », it was lost."""
+        token = "Xq3vB0b1hJ8yQm2dKzP7cA"
+        self.post(token)
+        response = self.post(token, name="Gin 70cl", total_ht="45.00")
+        gin = Invoice.objects.get(supplier=self.supplier, lines__raw_name="Gin 70cl")
+        self.assertRedirects(response, reverse("invoices:invoice_detail", args=[gin.pk]))
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 2)
+        self.assertRedirects(self.post(token, name="Gin 70cl", total_ht="45.00"), response.url)
+
+    def test_each_page_carries_its_own_value_and_a_busy_button(self):
+        first, second = self.client.get(self.url), self.client.get(self.url)
+        self.assertContains(first, 'data-busy-label="Création…"')
+        token = first.context["jeton"]
+        self.assertContains(first, f'<input type="hidden" name="jeton" value="{token}">', html=True)
+        self.assertNotEqual(token, second.context["jeton"])

@@ -443,9 +443,10 @@ def _own_reader(supplier) -> bool:
 def supplier_delete(request, pk):
     """A supplier nothing rests on - no document, no type fetching for it -
     deleted after saying what goes with it: its unused products, the prices
-    and payee names it was known by, its history."""
+    and payee names it was known by, its shopping lists (« Listes de
+    courses », the CASCADE deletes them), its history."""
     from bank.models import CounterpartyAlias
-    from inventory.models import Product
+    from inventory.models import Product, ShoppingList
 
     from .models import ShopItemPrice
 
@@ -476,6 +477,7 @@ def supplier_delete(request, pk):
             "supplier_page": supplier_page,
             "refused": refused,
             "prices": ShopItemPrice.objects.filter(supplier=supplier).count(),
+            "shopping_lists": ShoppingList.objects.filter(supplier=supplier).count(),
             "aliases": CounterpartyAlias.objects.filter(supplier=supplier).count(),
             "products": Product.objects.filter(supplier=supplier).count(),
             "history": supplier.changes.count(),

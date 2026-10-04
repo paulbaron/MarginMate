@@ -81,6 +81,44 @@ class RefreshDocumentNumbersTests(TestCase):
         self.assertEqual(ticket.invoice_number, "000172-20251119")
         self.assertIn("Épicerie Exemple : 1", said)
 
+    def test_a_till_s_count_filed_bare_takes_its_date(self):
+        """Franprix's « R1 007418-02 317 »: store, till and the till's count of
+        the day, filed bare - a later day's 317 on that till was refused for
+        it. One the dated number already names is said, not taken."""
+        shop = make_supplier(code="FRANPRIX_X", name="Supérette Exemple", parser_key="FRANPRIX")
+        text = "SUPERETTE EXEMPLE\nTOTAL A PAYER  7.28\n23-03-2025 DIMANCHE  11:47\nLORIAN  R1 007418-02 317"
+        ticket = make_invoice(
+            supplier=shop, invoice_number="007418-02-317", invoice_date=date(2025, 3, 23), ocr_text=text
+        )
+        text = "SUPERETTE EXEMPLE\nTOTAL A PAYER  8.46\n14-08-2026 VENDREDI  09:36\nLORIAN  R1 007418-01 452"
+        held = make_invoice(
+            supplier=shop, invoice_number="007418-01-452", invoice_date=date(2026, 8, 14), ocr_text=text
+        )
+        make_invoice(supplier=shop, invoice_number="007418-01-452-20260814", invoice_date=date(2026, 8, 14))
+        said = self.run_command()
+        ticket.refresh_from_db()
+        held.refresh_from_db()
+        self.assertEqual(ticket.invoice_number, "007418-02-317-20250323")
+        self.assertEqual(held.invoice_number, "007418-01-452")
+        self.assertIn("Supérette Exemple : 1", said)
+        self.assertIn("déjà", said)
+
+    def test_a_number_cut_at_its_dot_is_read_whole(self):
+        """« 20250314.38604 » was filed as « 20250314 », its date: the whole
+        number takes its place. A number that is no date is the document's."""
+        text = "GLACES EXEMPLE\nNuméro de facture : 20250314.38604\nTotal 48,00"
+        cut = make_invoice(
+            supplier=self.water, invoice_number="20250314", invoice_date=date(2025, 3, 14), ocr_text=text
+        )
+        other = make_invoice(
+            supplier=self.water, invoice_number="20250313", invoice_date=date(2025, 3, 14), ocr_text=text
+        )
+        said = self.run_command()
+        cut.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual((cut.invoice_number, other.invoice_number), ("20250314.38604", "20250313"))
+        self.assertIn("Eau Exemple : 1", said)
+
     def test_a_short_number_read_some_other_way_is_the_document_s_own(self):
         """« Facture n° 0042 » is that document's number, not a count."""
         invoice = self.bill("0042", text="EXEMPLE\nFacture n° 0042\nTotal 12,00")

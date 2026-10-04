@@ -17,8 +17,10 @@ them explain.
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import copy
+import heapq
 import math
 import re
 import tempfile
@@ -720,6 +722,52 @@ def bank_reconcile(request):
     return redirect(_back(request))
 
 
+#: A stale « Pas de facture » or « Rapprocher automatiquement », refused.
+LINKED_MEANWHILE = (
+    "Cette opération a été rattachée entre-temps à une facture : rien n'a changé. Déliez-la d'abord si besoin."
+)
+
+
+@transaction.atomic
+def _unless_linked(line: BankTransaction, change) -> bool:
+    """`change(line)` unless the line pays an invoice now; False then.
+
+    Neither button is drawn on a row that pays one, so a link means the page
+    was drawn before another tab, an import's automatic pass or
+    « Propositions » made it - and both changes start by deleting every
+    link: the stale click took it off in silence, and « pas de facture »
+    kept the pass from ever putting it back. Checked in the change's own
+    (IMMEDIATE) transaction, so no link is committed between the two.
+    """
+    if line.payments.exists():
+        return False
+    change(line)
+    return True
+
+
+#: A stale « Délier » / « Tout délier », refused.
+UNLINK_CHANGED_MEANWHILE = "Cette opération a changé entre-temps : rien n'a été délié."
+
+
+@transaction.atomic
+def _unlink_as_shown(line: BankTransaction, shown: set) -> bool:
+    """Every invoice off `line` if it pays exactly `shown`, the invoices its
+    row was drawn with; False, and nothing written, otherwise.
+
+    The page may be older than a link another tab or « Propositions » made:
+    the stale click then took off an invoice the reader never saw on that
+    row. Checked in the unlink's own (IMMEDIATE) transaction, like
+    `_unless_linked`. A row is only drawn with « Délier » when it pays
+    something, so nothing shown is a page from before the rows said what they
+    showed (or a crafted POST): refused too, even on a line paying nothing,
+    which `reconcile.unlink` would otherwise turn « settled by hand ».
+    """
+    if not shown or set(line.payments.values_list("invoice_id", flat=True)) != shown:
+        return False
+    reconcile.unlink(line)
+    return True
+
+
 def bank_line_action(request, pk):
     line = get_object_or_404(BankTransaction, pk=pk)
     back = _back(request)
@@ -760,11 +808,16 @@ def bank_line_action(request, pk):
             left = "" if line.payments.exists() else " Cette ligne ne sera plus rapprochée automatiquement."
             messages.success(request, f"{reconcile.invoice_label(invoice)} détachée de cette opération.{left}")
     elif action == "unlink":
-        reconcile.unlink(line)
-        messages.success(request, "Rattachement retiré : cette ligne ne sera plus rapprochée automatiquement.")
+        shown = {int(value) for value in request.POST.getlist("shown") if is_id(value)}
+        if _unlink_as_shown(line, shown):
+            messages.success(request, "Rattachement retiré : cette ligne ne sera plus rapprochée automatiquement.")
+        else:
+            messages.error(request, UNLINK_CHANGED_MEANWHILE)
     elif action == "no_invoice":
-        reconcile.mark_no_invoice(line)
-        messages.success(request, "Ligne marquée « pas de facture attendue ».")
+        if _unless_linked(line, reconcile.mark_no_invoice):
+            messages.success(request, "Ligne marquée « pas de facture attendue ».")
+        else:
+            messages.error(request, LINKED_MEANWHILE)
     elif action == "category":
         # What the money was for, which says NOTHING about whether the
         # invoice is still to be found: a category must not set
@@ -788,7 +841,9 @@ def bank_line_action(request, pk):
                 request, f"Catégorie retirée : cette dépense compte comme « {spending.NO_CATEGORY} ».{moved}"
             )
     elif action == "reopen":
-        reconcile.reopen(line)
+        if not _unless_linked(line, reconcile.reopen):
+            messages.error(request, LINKED_MEANWHILE)
+            return redirect(back)
         reconcile.reconcile()
         if line.payments.exists():
             messages.success(request, "Ligne rendue au rapprochement automatique, et rattachée à sa facture.")
@@ -1077,8 +1132,14 @@ def rule_action(request, pk):
                 f"Catégorie retirée : les dépenses de « {rule} » comptent en "
                 f"« {spending.NO_CATEGORY} », sauf celles classées à la main.",
             )
-    elif action == "toggle":
-        rule.is_active = not rule.is_active
+    elif action in (SUSPEND, REACTIVATE):
+        # The state the page asked for, never « toggle »: a double click or a
+        # second tab drawn before the first click flipped the rule back.
+        wanted = action == REACTIVATE
+        if rule.is_active == wanted:
+            messages.info(request, f"Règle « {rule} » déjà {'active' if wanted else 'suspendue'}.")
+            return redirect("bank:rule_list")
+        rule.is_active = wanted
         rule.save(update_fields=["is_active"])
         linked = 0 if rule.is_active else reconcile.reconcile()
         state = "réactivée" if rule.is_active else "suspendue"
@@ -2624,23 +2685,28 @@ def _fill(rows, with_choices: bool = True) -> None:
     wants the suggestions alone (`with_choices=False`): it offers what the
     matching found, and the pick-list is the bank page's."""
     # What the links read - each invoice's supplier, its lines for its
-    # total, and the other lines paying it (`invoice__payments__transaction`)
-    # - in four queries for the whole page rather than per invoice (see
-    # « N+1s hide in per-object properties »), and for these rows only: the
-    # page reads every line's payments for its counts, and draws a tab of
-    # them.
+    # total, and the other lines paying it (`paid_with`, with their bank
+    # line) - in three queries for the whole page rather than per invoice
+    # (see « N+1s hide in per-object properties »), and for these rows only:
+    # the page reads every line's payments for its counts, and draws a tab of
+    # them. Lists (`to_attr`), not the managers: those clone a queryset per
+    # invoice.
     prefetch_related_objects(
         [payment for row in rows for payment in row.payments],
         "invoice__supplier",
-        "invoice__lines",
-        "invoice__payments__transaction",
+        Prefetch("invoice__lines", queryset=reconcile.total_lines(), to_attr="line_list"),
+        Prefetch(
+            "invoice__payments",
+            queryset=InvoicePayment.objects.select_related("transaction"),
+            to_attr="paid_with",
+        ),
     )
     for row in rows:
         row.links = [
             Link(
                 payment,
                 reconcile.rounded_total(payment.invoice),
-                [other.transaction for other in payment.invoice.payments.all() if other.transaction_id != row.line.pk],
+                [other.transaction for other in payment.invoice.paid_with if other.transaction_id != row.line.pk],
             )
             for payment in row.payments
         ]
@@ -2680,6 +2746,20 @@ def _fill(rows, with_choices: bool = True) -> None:
     naming = reconcile.supplier_naming() if open_rows else {}
     # Each invoice's option, worded once for the page (`_choice_label`).
     worded: dict[int, tuple[str, str]] = {}
+    if with_choices:
+        # The invoices by date, for each row to slice its window out of
+        # rather than test every one: years of invoices paid in cash, never
+        # on the bank, made that rows x invoices. `position` is the order of
+        # `unpaid_invoices`, which the sort kept between equals - it still
+        # decides between them, so the same fifteen come out in the same
+        # order.
+        position = {invoice.pk: index for index, invoice in enumerate(invoices)}
+        undated = [invoice for invoice in invoices if invoice.invoice_date is None]
+        dated = sorted(
+            (invoice for invoice in invoices if invoice.invoice_date is not None),
+            key=lambda invoice: invoice.invoice_date,
+        )
+        days = [invoice.invoice_date for invoice in dated]
 
     for row in pick_rows:
         due = row.line.amount_due
@@ -2694,16 +2774,18 @@ def _fill(rows, with_choices: bool = True) -> None:
         if not with_choices:
             continue
         first, last = reconcile.choices_window(row.line)
-        near = [
-            invoice for invoice in invoices if invoice.invoice_date is None or first <= invoice.invoice_date <= last
-        ]
-        near.sort(
+        near = undated + dated[bisect.bisect_left(days, first) : bisect.bisect_right(days, last)]
+        paid_on = row.line.paid_on
+        best = heapq.nsmallest(
+            MAX_CHOICES,
+            near,
             key=lambda invoice: (
                 abs(totals[invoice.pk] - due),
-                abs((invoice.invoice_date - row.line.paid_on).days) if invoice.invoice_date else UNDATED_LAST,
-            )
+                abs((invoice.invoice_date - paid_on).days) if invoice.invoice_date else UNDATED_LAST,
+                position[invoice.pk],
+            ),
         )
-        for invoice in near[:MAX_CHOICES]:
+        for invoice in best:
             if invoice.pk not in worded:
                 worded[invoice.pk] = (localize(invoice.pk), _choice_label(invoice, totals[invoice.pk]))
             row.choices.append(worded[invoice.pk])

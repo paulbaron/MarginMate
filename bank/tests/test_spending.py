@@ -716,3 +716,62 @@ class QueryCountTests(SpendingFixtures, TestCase):
         self.build(4)
         with self.assertNumQueries(len(small.captured_queries)):
             spending.spending_for(WINDOW)
+
+
+class TheLinesReadTests(SpendingFixtures, TestCase):
+    """The invoices' lines come with what `where_it_went` reads of them and
+    nothing more (`lines_prefetch`, the columns « Marges » loads them with):
+    every invoice line the window's debits paid was built whole - its
+    printed name, its quantities, its product's and its article's every
+    column - to be read by nothing. A column read and left out is a query
+    per line, so every shape the split reads is read here with none."""
+
+    def test_every_shape_is_read_with_no_query_and_no_line_whole(self):
+        goods = self.invoice(self.goods, date(2026, 6, 10), (self.beer, "60.00"), (self.wine, "15.00"), (None, "4.00"))
+        goods.reconciliation_adjustment = euros("2.10")
+        goods.save(update_fields=["reconciliation_adjustment"])
+        delivered = self.invoice(self.goods, date(2026, 6, 11))
+        for article, total_ht, spread in ((self.beer, "75.00", "7.50"), (self.wine, "25.00", "2.50")):
+            make_invoice_line(
+                invoice=delivered,
+                product=make_product(supplier=self.goods, stock_type=article),
+                total_ht=euros(total_ht),
+                vat_rate=TWENTY,
+                spread_ht=euros(spread),
+            )
+        make_invoice_line(
+            invoice=delivered,
+            product=make_product(supplier=self.goods),
+            total_ht=euros("10.00"),
+            vat_rate=TWENTY,
+            is_spread_charge=True,
+        )
+        receipt = self.invoice(self.goods, date(2026, 6, 12), printed_total_ttc=euros("18.25"))
+        make_invoice_line(
+            invoice=receipt,
+            product=make_product(supplier=self.goods, stock_type=self.beer),
+            total_ht=euros("10.00"),
+            vat_rate=TWENTY,
+            printed_ttc=euros("12.00"),
+        )
+        make_invoice_line(
+            invoice=receipt,
+            product=make_product(supplier=self.goods, stock_type=self.wine),
+            total_ht=euros("6.00"),
+            vat_rate=Decimal("0.055"),
+            printed_ttc=euros("6.33"),
+            discount_ttc=euros("0.10"),
+        )
+        rent = self.invoice(self.landlord, date(2026, 6, 1), (None, "500.00"))
+        self.pay(self.debit(date(2026, 6, 15), "GROSSISTE EXEMPLE", "300.00"), goods, delivered, receipt)
+        self.pay(self.debit(date(2026, 6, 2), "BAILLEUR EXEMPLE", "600.00"), rent)
+
+        debits = list(spending._lines(WINDOW))
+        invoices = [payment.invoice for debit in debits for payment in debit.paid_by]
+        self.assertEqual(len(invoices), 4)
+        with self.assertNumQueries(0):
+            for invoice in invoices:
+                computation.where_it_went(invoice)
+        for invoice in invoices:
+            for line in invoice.lines.all():
+                self.assertIn("raw_name", line.get_deferred_fields(), "la ligne a été chargée entière")

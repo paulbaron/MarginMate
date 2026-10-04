@@ -136,7 +136,7 @@
                             <td>
                                 <form method="post" action="{% url 'bank:rule_action' rule.pk %}" class="inline-form">
                                     {% csrf_token %}
-                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="toggle">
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="{% if rule.is_active %}suspendre{% else %}reactiver{% endif %}">
                                         {% if rule.is_active %}Suspendre{% else %}Réactiver{% endif %}
                                     </button>
                                     <button class="btn btn-small btn-danger" type="submit" name="action" value="delete">Supprimer</button>

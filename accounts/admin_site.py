@@ -66,12 +66,15 @@ class MarginMateAdminSite(admin.AdminSite):
         form's `limiter.succeeded` marks the request of a login that
         succeeded, and only that one gets the cookie (review of the
         LIMITER-LOCKOUT fix: this door honoured the cookie and never issued
-        it). Public and never cached, as Django's own is."""
+        it) and the password confirmation. Public and never cached, as
+        Django's own is."""
         from . import limiter, sudo
 
         response = limiter.remember_device(request, super().login(request, extra_context))
-        if request.method == "POST" and request.user.is_authenticated:
+        if request.method == "POST" and limiter.logged_in_now(request) and request.user.is_authenticated:
             # The password was just checked: not asked again at the next page.
+            # Not on any POST of a session already logged in: Django re-renders
+            # a refused form with request.user still that session's login.
             sudo.stamp(request)
         return response
 

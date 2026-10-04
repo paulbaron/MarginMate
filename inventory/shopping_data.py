@@ -29,6 +29,10 @@ signs: a negative movement (a return, a deposit refunded) is the pure
 module's to set apart. At every supplier: a purchase at a supplier the page
 does not offer is still a purchase, and a visit.
 
+**One article at one store** (`usual_purchase_at`, the shopping lists'): the
+same scan narrowed to them, read into a Prepared of its own - the forecast
+line's usual purchase, in two queries at most.
+
 **Which stores are offered** (`offered_stores`): every supplier with a
 purchase, but the suppliers of charges (`expenses_only`) and the removed AI
 reading's supplier, which invoices/0038 kept where something named it (its
@@ -117,34 +121,40 @@ def prepare(today: date, settings, now: datetime) -> shopping.Prepared:
 
 
 # --------------------------------------------------------------------- the purchases
-def purchase_rows(today: date) -> list[shopping.PurchaseRow]:
+def purchase_rows(
+    today: date, *, store_id: int | None = None, article_id: int | None = None
+) -> list[shopping.PurchaseRow]:
     """Every PURCHASE movement of an invoice line dated on or before
     `today`, both signs, in one streamed query. The day is the movement's
     own `occurred_on`, else its invoice's date: an undated document never
-    falls back to `created_at`, and one dated after today waits."""
-    movements = (
-        StockMovement.objects.filter(kind=MovementKind.PURCHASE, invoice_line__isnull=False)
-        .filter(
-            Q(occurred_on__isnull=False, occurred_on__lte=today)
-            | Q(
-                occurred_on__isnull=True,
-                invoice_line__invoice__invoice_date__isnull=False,
-                invoice_line__invoice__invoice_date__lte=today,
-            )
+    falls back to `created_at`, and one dated after today waits.
+
+    `store_id` and `article_id` narrow the same scan to one supplier's
+    invoices and one article (`usual_purchase_at`); with neither, the query
+    is the page's, unchanged."""
+    movements = StockMovement.objects.filter(kind=MovementKind.PURCHASE, invoice_line__isnull=False).filter(
+        Q(occurred_on__isnull=False, occurred_on__lte=today)
+        | Q(
+            occurred_on__isnull=True,
+            invoice_line__invoice__invoice_date__isnull=False,
+            invoice_line__invoice__invoice_date__lte=today,
         )
-        .order_by()
-        .values_list(
-            "stock_type_id",
-            "invoice_line__invoice__supplier_id",
-            "occurred_on",
-            "invoice_line__invoice__invoice_date",
-            "quantity",
-            "invoice_line__product_id",
-            "invoice_line__quantity",
-            "invoice_line__colisage",
-            "invoice_line__total_ht",
-            "invoice_line__spread_ht",
-        )
+    )
+    if store_id is not None:
+        movements = movements.filter(invoice_line__invoice__supplier_id=store_id)
+    if article_id is not None:
+        movements = movements.filter(stock_type_id=article_id)
+    movements = movements.order_by().values_list(
+        "stock_type_id",
+        "invoice_line__invoice__supplier_id",
+        "occurred_on",
+        "invoice_line__invoice__invoice_date",
+        "quantity",
+        "invoice_line__product_id",
+        "invoice_line__quantity",
+        "invoice_line__colisage",
+        "invoice_line__total_ht",
+        "invoice_line__spread_ht",
     )
     return [
         shopping.PurchaseRow(
@@ -171,6 +181,38 @@ def purchase_rows(today: date) -> list[shopping.PurchaseRow]:
             spread_ht,
         ) in movements.iterator(chunk_size=SCAN_CHUNK)
     ]
+
+
+def usual_purchase_at(today: date, store_id: int, article) -> shopping.UsualPurchase | None:
+    """`article`'s (a StockType) usual purchase at the store `store_id` as
+    of `today` - what a shopping list counts an article added without a
+    quantity as. None when it was never bought there up to today.
+
+    It is the forecast line's own figure: the same rows (the scan narrowed
+    to that article at that store - the other articles and stores never
+    enter an article's `buys_at`), the same product names (those of the
+    products an article claims, as `product_names`) and the same rule
+    (`shopping.usual_purchase`). Two queries at most: the scan, then the
+    names of the products bought - none when nothing was."""
+    rows = purchase_rows(today, store_id=store_id, article_id=article.pk)
+    if not rows:
+        return None
+    bought_as = {row.product_id for row in rows if row.product_id is not None}
+    names = (
+        dict(
+            Product.objects.filter(pk__in=bought_as, stock_type__isnull=False).order_by().values_list("id", "raw_name")
+        )
+        if bought_as
+        else {}
+    )
+    prepared = shopping.Prepared.build(
+        today=today,
+        purchases=rows,
+        articles=[shopping.ArticleInfo(article.pk, article.name, article.unit, article.category or "")],
+        stores=[shopping.StoreInfo(store_id, "")],
+        product_names=names,
+    )
+    return shopping.usual_purchase(prepared, store_id, article.pk)
 
 
 def offered_stores(purchases: Iterable[shopping.PurchaseRow]) -> list[shopping.StoreInfo]:

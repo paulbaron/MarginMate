@@ -23,12 +23,13 @@ from django.urls import reverse
 from django.utils.html import escape
 
 from accounts import access
-from staff.models import SignatureEvent, SignatureRequest
+from staff.models import Employee, Establishment, SignatureEvent, SignatureRequest
 from staff.signature_views import DRAWING, HAND_OVER, REASON
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.signing_support import data_url, employer_signature
 from staff.tests.test_signature_pages import OwnerCase
 from staff.tests.test_views import stored
+from staff.views import ACTION_FIELD, ADD_EMPLOYEE, SAVE_ESTABLISHMENT
 from tests.runner import employee_of_the_test_tenant
 
 Status = SignatureRequest.Status
@@ -167,6 +168,55 @@ class AMemberTests(MemberCase):
                 self.assertRefused(self.client.post(self.route(route, 1), {"csrfmiddlewaretoken": token}), posted=True)
         self.assertRefused(self.client.get(self.route("staff:signature_file", 1, "original")))
         self.assertEqual(self.snapshot(), before)
+
+    # Where the link and the code go, and the header: the employer's too.
+    # A colleague's address changed to his own, the link « Envoyer pour
+    # signature » mails and the code the signing page sends went to him, and
+    # he signed for that colleague (audit, 04/10/2026).
+
+    def test_he_reads_an_employee_s_address_and_cannot_change_it(self):
+        self.person.email = "jeanne.dupont@example.invalid"
+        self.person.save()
+        url = reverse("staff:employee", args=[self.person.pk])
+        form = form_posting_to(self.html(self.get(url)), url)
+        email = form.control("email")
+        self.assertTrue(email.disabled)
+        self.assertEqual(email.value, "jeanne.dupont@example.invalid")
+        self.assertIn("Seul votre employeur modifie l'adresse", self.text(self.get(url)))
+        # Crafted: the address posted anyway, with a change of name.
+        data = as_post(form.submission(values={"first_name": "Jeanne-Marie"}))
+        data["email"] = ["adjoint-personnel@example.invalid"]
+        response = self.client.post(url, data)
+        self.assertRedirects(response, url, fetch_redirect_response=False)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.first_name, "Jeanne-Marie")
+        self.assertEqual(self.person.email, "jeanne.dupont@example.invalid")
+
+    def test_an_employee_he_adds_has_no_address(self):
+        home = reverse("staff:home")
+        form = form_posting_to(self.html(self.get(home)), home, holding=(ACTION_FIELD, ADD_EMPLOYEE))
+        self.assertTrue(form.control("email").disabled)
+        data = as_post(form.submission(values={"last_name": "Durand", "first_name": "Paul"}))
+        data["email"] = ["adjoint-personnel@example.invalid"]
+        self.assertRedirects(self.client.post(home, data), home, fetch_redirect_response=False)
+        self.assertEqual(Employee.objects.get(last_name="Durand").email, "")
+
+    def test_the_header_of_the_sheets_is_drawn_and_not_his_to_change(self):
+        home = reverse("staff:home")
+        response = self.get(home)
+        self.assertContains(response, "BAR EXEMPLE")
+        self.assertNotContains(response, f'value="{SAVE_ESTABLISHMENT}"')
+        self.assertIn("Seul votre employeur modifie l'en-tête.", self.text(response))
+        answer = self.client.post(
+            home,
+            {"csrfmiddlewaretoken": self.token(), ACTION_FIELD: SAVE_ESTABLISHMENT, "name": "AUTRE BAR", "address": ""},
+            follow=True,
+        )
+        self.assertEqual(
+            [str(message) for message in answer.context["messages"]],
+            ["Seul votre employeur modifie l'en-tête des fiches : rien n'a été modifié."],
+        )
+        self.assertEqual(Establishment.current().name, "BAR EXEMPLE")
 
 
 class TheOwnerTests(OwnerCase):

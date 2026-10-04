@@ -8,8 +8,9 @@ import re
 
 from django.urls import reverse
 
+from accounts.models import Membership
 from accounts.tests.support import TwoTenantsTestCase
-from tests.test_navigation import LABELS, label_of, nav_links
+from tests.test_navigation import LABELS, active_labels, label_of, nav_links, section_shown
 
 LOGOUT = reverse("accounts:logout")
 
@@ -70,6 +71,27 @@ class TenantTopbarTests(TwoTenantsTestCase):
         outside = header.replace(menu, "")
         self.assertNotIn("topbar-tenant", outside)
         self.assertNotIn("topbar-logout", outside)
+
+    def test_an_employee_given_the_lists_alone_reads_courses_in_the_menu(self):
+        """An employee of bar A given « Liste de courses » alone (04/10/2026):
+        one link, « Courses », inside what « Menu » opens, before his name
+        and his bar's; the folded bar says « Courses »; nothing of bar B."""
+        Membership.objects.filter(user=self.user_a).update(role=Membership.Role.MEMBER, pages=["shopping"])
+        self.client.force_login(self.user_a)
+        lists = reverse("inventory:shopping_lists")
+        response = self.client.get(lists)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([label_of(link) for link in nav_links(response)], ["Courses"])
+        self.assertEqual(active_labels(response), ["Courses"])
+        self.assertEqual(section_shown(response), "Courses")
+        header = response.content.decode()
+        header = header[header.index('<header class="topbar">') : header.index("</header>")]
+        menu = element_by_id(header, "topbar-menu")
+        nav = menu[menu.index("<nav") : menu.index("</nav>")]
+        self.assertIn(f'<a href="{lists}" class="active">Courses</a>', nav)
+        self.assertLess(menu.index("</nav>"), menu.index('class="topbar-account"'))
+        self.assertIn("alpha@example.invalid · Bar Alpha", menu)
+        self.assertNotContains(response, "Bar Beta")
 
     def test_the_name_is_text_whatever_it_holds(self):
         type(self.bar_a).objects.filter(pk=self.bar_a.pk).update(name='Le <b>Zinc</b> "essai"')
