@@ -4635,9 +4635,11 @@ Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
 associations »: three tabs - Exporter, Importer, Effacer - each with the same
 two groups of boxes, « Configuration » (fournisseurs, sources, associations
-produits → articles, recettes, liens recettes ↔ ventes, règles de la banque,
-types et formats de consignes) and « Données » (factures et tickets, banque,
-ventes, inventaires, consignes) - twelve sections. The owner asked for it on
+produits → articles, recettes, liens recettes ↔ ventes, formats des fichiers
+de caisse, règles de la banque, types et formats de consignes) and « Données »
+(factures et tickets, banque, ventes, inventaires, consignes) - thirteen
+sections (« Formats des fichiers de caisse » since 04/10/2026: « The till's
+file import », below). The owner asked for it on
 19/09; the old addresses redirect there and the old associations JSON still
 imports (`transfer/legacy.py`).
 
@@ -5678,8 +5680,82 @@ records sales. Add `--dry-run` first: it reports which till products match a
 recipe and which don't, without writing. `--file x.xlsx` skips the download.
 
 Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
-(`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
-run time, same as the Metro scraper.
+(`LADDITION_EMAIL` / `LADDITION_PASSWORD`, the owner's espace only:
+`vault.server_setting`), and are typed by the browser at run time, same as
+the Metro scraper.
+
+**Every till reading has ONE writer: `recipes.tasks.store_reading(export,
+log, *, payments_beside_sales=False)`** - the till products and their days
+(« Ventes », with the day's money), the recipes' sales under
+`sales.TILL_SOURCE`, then the payments, each step said in French through
+`log`. The job fetching L'Addition, `laddition_import` (whose output is now
+the job's French lines) and a file uploaded on « Ventes » (« The till's file
+import », below) all write through it. A reading of payments alone
+(`ParsedExport.sales_read` False) writes no sales and says nothing of them;
+`payments_beside_sales` writes a day's payments only where « Ventes » holds a
+sale (`payments.record_payments(beside_sales=True)`, `days_with_sales`,
+shared with `laddition_backfill_payments`) and lists the others
+(`RecordedPayments.days_without_sales`). The fetch keeps its old order
+(lines first, payments after, `beside_sales` False): the owner's imports
+write exactly as before.
+
+**The job's log follows LB-3, since a hosted bar may run it**: a failure is
+« Échec : » + `common.error_for_page(exc, said=tasks.TILL_REFUSALS)` - the
+till's own French refusals (`TillImportError`, `LadditionExportError`,
+`LadditionAuthError`, `LadditionDownloadError`, `XlsxError`,
+`TillFileError`) as they are, anything else one fixed sentence; the
+exception and its traceback always go to the server's log (`tasks.fail`),
+and the traceback is added to the job's log only where
+`server_accounts_allowed()` (the owner's, as before). The download's,
+session's and parser's messages are French and name no folder and no
+address (the export's URL is signed: it opens the bar's sales to anyone); a
+Selenium timeout or browser error is one sentence
+(`laddition_download.NO_ANSWER`, `NO_BROWSER`); a payments sheet that does
+not read says the reader's sentence or « la feuille ne se lit pas », the
+library's text logged (`_add_payments`).
+
+**L'Addition's card on « Ventes » is drawn only where its account is ready**
+(`recipes/pos/connectors.py`, `LADDITION.ready()`: `integration.till_allowed()`
+and `vault.ready("LADDITION_EMAIL", "LADDITION_PASSWORD")`, one reading of
+the store). Where the till is not this espace's, the « à configurer »
+sentence (`integration.refusal`); where it is and the account has no value,
+one line for the owner pointing at « Identifiants » - never a form that can
+only fail, never a server variable's name. `trigger_sales_import` refuses
+the same way before any job (`views.LADDITION_NOT_READY`). The test settings
+blank every credential, so a test drawing the card gives it an account
+(`recipes/tests/till_support.LADDITION_ACCOUNT`, the owner's .env values
+through `server_setting`).
+
+**The readers are hardened for files from outside, for every caller**
+(04/10/2026; the owner's downloads read exactly as before, none of this ever
+fires on them):
+- `xlsx_reader` refuses a cell past column XFD (16 384): one reference
+  « ZZZZZZZZZZZZ1 » in a tiny file asked for a row of ~10^17 cells - the whole
+  server out of memory. A caller needing the first columns says so
+  (`max_columns`) and the rest are never read. It refuses a DOCTYPE or an
+  ENTITY anywhere in a member: the encoding is decided first (a UTF-16/32
+  mark, a NUL in the first bytes, a declared encoding outside a few
+  ASCII-compatible ones: refused), then every chunk the XML parser reads is
+  scanned, with an overlap (`_Guarded`) - a DOCTYPE after kilobytes of
+  comments is found. For an upload (`untrusted=True`, `check_untrusted`):
+  100 MB a member and 200 MB in all once inflated, a ratio bound past 10 MB,
+  1 000 members, 1 000 000 shared strings - read off the zip's directory
+  (zipfile never inflates past the size it declares). The first sheet by
+  default, `date1904`, a seekable file object, numeric cells typed on request
+  (`Number`, a date cell `Moment`), rows numbered as Excel shows them. Every
+  refusal is an `XlsxError` in French naming no path, and every member is
+  closed when its reading ends or is given up (on Windows a file held open
+  cannot be deleted).
+- `laddition_xlsx` refuses a number `Decimal` reads but no export writes (an
+  exponent, NaN, Infinity, digits that are not ASCII: `PLAIN_NUMBER`) and a
+  day outside 2000-2099; bounds a (product, day)'s revenue to its (10, 2)
+  columns and a (day, method)'s payments to (12, 2) (« A figure wider than
+  the column », under « The electronic invoice ») and quantities
+  (`MAX_LINE_QUANTITY`, `MAX_DAY_QUANTITY`) - the file refused, naming the
+  product and the day; cuts a name, a category and a typology to 255; and
+  turns any `ArithmeticError` into a `LadditionExportError`. Something
+  Decimal does not read at all (« sept euros », the Total row's « - ») reads
+  as before: an amount unread, a row skipped.
 
 Four things that cost real debugging time:
 
@@ -5702,8 +5778,11 @@ Four things that cost real debugging time:
   "submit" while XPath `@type` matches nothing. It's matched on exact text —
   which also avoids the "Mot de passe oublié ?" button right next to it.
 
-The UI is two tabs of **Recettes & ventes**: "Ventes" runs the import
-(background thread + htmx polling, same shape as the invoice gather) and "À
+The UI is two tabs of **Recettes & ventes**: "Ventes" runs the imports -
+L'Addition's fetch (its card only where its account is ready, above) and a
+file of any till (« The till's file import », below), each a background
+thread + htmx polling, same shape as the invoice gather, one status card for
+both drawn apart from either door - and "À
 lier" (`/recipes/caisse/`) is the backlog of till products with no recipe -
 biggest sellers first, since that's where the unexplained stock is. Four
 actions per row, in place: link to a recipe (the one with a close name is
@@ -5845,10 +5924,12 @@ account.
   lines imported all the same. It is parsed apart and taken only whole.
 - **A day's payments only beside a day « Ventes » holds**
   (`PosProductDailyQuantity`), whoever writes them: payments on a day with no
-  sales are money the sales pages contradict. The import job and
-  `laddition_import` run the same order - `sync_pos_products`,
-  `record_sales`, `record_payments` - and « Remplacer » prunes the payments of
-  a day it leaves without sales.
+  sales are money the sales pages contradict. Every writer goes through
+  `store_reading`, in one order - `sync_pos_products`, `record_sales`,
+  `record_payments` -; a file uploaded writes its payments with
+  `beside_sales=True` (a file of payments alone could not hold the rule by
+  its order); and « Remplacer » prunes the payments of a day it leaves
+  without sales.
 - **`manage.py laddition_backfill_payments [--dry-run] [--folder]`** fills the
   days already imported from the .xlsx in the espace's `downloads/`, **contacting
   nothing** and reading the ticket sheet alone. The revenue backfill's shape:
@@ -5874,6 +5955,162 @@ its sales kept landing on the recipe, and a product sent back to the worklist
 was relinked by the next import. An ignored till product sells no recipe
 whatever its name (`record_sales` skips it, and does not list it as
 unmatched).
+
+### The till's file import (`recipes/pos/till_file.py`, « Formats des fichiers de caisse »)
+
+A bar whose till is not L'Addition - or that has old exports to bring - uploads
+its till's export on « Ventes » (« Importer un fichier de la caisse »). **No
+till is written in the code**: how its export is laid out is a `TillFormat`
+(migration `recipes/0018`, a table only) the bar describes on « Formats des
+fichiers de caisse » (`/recipes/caisse/formats/`, `recipes/till_views.py`),
+read by the pure `till_file.read` into the very `ParsedExport` L'Addition's
+reader returns, then written by `store_reading`. L'Addition's own « Lignes de
+ventes » export is offered too, read by its parser with no format and no
+account (`connectors.LADDITION_CHOICE`). Which till a bar has is derived,
+never a setting: its credentials and its formats say it, and one bar may use
+both. A future API connector is a `connectors.Fetcher` entry, an account on
+« Identifiants » and a reader returning a `ParsedExport`.
+
+**A format** (`till_file.check_format`, the model's `clean()`, each refusal
+on its field): « Ventes par produit » (product and quantity required; amount
+TTC, amount HT, rate, category, typology optional) or « Encaissements »
+(method and paid amount); the encoding, separator, decimal mark and date
+format of the bank's « Format du relevé »; an .xlsx's sheet (blank: the
+first); `service_day_end_hour` 0-11; « prix unitaire »; the method map. Each
+column is its **title as the header prints it** (accents, case and spaces
+aside - the header is the first of the first 30 rows holding every titled
+column, the rows above passed over and counted) **or its number from 1**
+(`MAX_COLUMN` 100); a column of the other kind, two roles on one column, an
+HT or rate column without the amount, a time without the day are refused. A
+« Ventes » format with no amount column is allowed - the page, « Tester »
+and the job say the money of those days stays « non lue » (Marges' banner).
+A format with no day column (a daily Z report) is read at the « Jour des
+ventes » posted with the upload; a day posted for a format that reads one is
+refused.
+
+**The rules, each a way a till's file could be silently wrong money**:
+- **A row that holds a sale is never dropped.** A day cell holding digits
+  that are no date of the format, a 31/02, a year outside 2000-2099, a dated
+  row with a product and no readable quantity, a payment with no readable
+  amount: the FILE is refused (`TillFileError`, « Ligne 12 : … Fichier
+  refusé. », the row numbered as the person sees it). A row whose day cell is
+  blank, or holds no digit at all and no readable sale (a « Total » footer,
+  the header of a format given by numbers), is passed over - counted, and
+  said in « Tester » and the job's log (`ParsedExport.skipped`). A digit-less
+  day cell on a row that reads as a sale (« lundi;Pinte;2;… ») is refused.
+- **The business day**: a time after the date (« 03/07/2026 23:41 », ISO's
+  « T », fractional seconds) or in a time column; a sale timed before
+  `service_day_end_hour` belongs to the day before. An .xlsx date cell is
+  Excel's serial (1900 or 1904 calendar, `xlsx_reader.date1904`), a whole
+  serial a date with no time (never shifted), a `t="d"` cell its ISO text.
+  A sales format and a payments format may say different hours: nothing
+  ties them, and a day's payments would then land on another day than its
+  sales - give both the same hour.
+- **Money**: the line's amount TTC (discounts off, a comp 0), or a unit price
+  × the quantity when ticked. HT per French rate bucket (`laddition_xlsx`'s
+  `KNOWN_RATES` and `_to_ht`; « 20 % », « 20 », « 0,2 », « 0.2 » one rate, a
+  « % » printed says it is a percentage, « 19,6 » none), or summed from an HT
+  column, which wins over the rate. No rate assumed: the TTC whose rate does
+  not read is `without_rate_ttc`. A (product, day) one of whose lines has no
+  readable amount is left unread (`days_without_amount`).
+- **Its own number reader** (`till_file.read_number`, never
+  `bank.statements`'): a text cell digit for digit with the format's decimal
+  mark (spaces, « ' » and the other mark between groups of three, a sign in
+  front or a « - » behind, a « € » at either end; no exponent, no NaN); at
+  most 2 decimals for an amount TTC or paid, 4 for HT, 3 for a quantity -
+  more is refused, never rounded. An .xlsx numeric cell is `Decimal` of its
+  text: its binary noise (10.499999999999998, under 1e-9) rounded half up to
+  those places, anything more refused (3.505 is no amount).
+- **Quantities are signed** (a refund), summed exactly per (product, day),
+  and a day ending on a fraction is rounded half away from zero and counted
+  (`quantities_rounded`) - never truncated (L'Addition's own reader still
+  truncates toward zero: its quantities are ±1).
+- **Payments**: each row one payment, filed under the format's map (« texte
+  de la caisse = Carte », its left side matched accent- and case-blind),
+  else the app's own word (« Carte », « Espèces », « Chèque »,
+  « Titres-restaurant », « Avoir »), else `PosDailyPayment.canonical()` (CB,
+  Cash…), else kept as printed and listed (`unmapped_methods`, said by
+  « Tester » and the job). `canonical()` itself is unchanged: the owner's
+  re-reads are as before. A row with an amount and no method is filed under
+  « Illisible » and counted. A new format starts with the usual French
+  spellings mapped (`forms.DEFAULT_METHOD_MAP`).
+- **Bounds**: a (product, day)'s revenue fits (10, 2), a (day, method)'s
+  payments (12, 2), a line's quantity 100 000, a day's 1 000 000, a name 255
+  (cut); at most 500 000 rows (`MAX_ROWS`) and 5 000 distinct products
+  (`MAX_PRODUCTS`) a file, `MAX_SEPARATORS` 5 000 a CSV line; a CSV decoded
+  as the bank's (« auto » UTF-16 behind its mark, else UTF-8, else
+  Windows-1252, never Windows-1252 behind a Unicode mark), a NUL or a
+  `csv.Error` refused; an .xlsx through the reader's upload bounds; .xls
+  refused (« enregistrez-le en .xlsx ou en .csv »).
+
+**The upload** (`till_views.upload_sales_file`, POST, `caisse/import/fichier/`):
+the weight (`common.file_too_big`), the kind, the choice (`connectors.resolve`:
+L'Addition's export must be an .xlsx; a format by `common.is_id`, which must
+exist and pass the check now), the day, a job already running - each refused
+before anything is kept. Then the file is staged under the espace's
+`imports/caisse/` (never `downloads/`: the backfills glob `downloads/*.xlsx`
+and a fetch takes the first new .xlsx landing there) and a `SalesImportJob`
+thread (`target=bound(tasks.import_till_file_task)`) reads it: the same
+status card, cancel, reaper and « Données » busy check as the fetch. The job
+resolves the choice again (a format deleted or edited meanwhile is said),
+reads, and only a file **read whole** is moved into place - L'Addition's
+export to `downloads/` (the backfills re-read it), any other to
+`downloads/caisse/`, the newest `tasks.KEPT_FILES` (50) kept - under
+« AAAAMMJJ-HHMMSS-<nom sûr> » (cut, `get_valid_filename`); a refused file is
+deleted. The log says the file, the format, the day given and « Importé par
+<nom> », then what was read (`tasks.reading_log`; `money_log` for sales,
+`payments_log` for L'Addition's export only - its words are that export's),
+then `store_reading` with the payments beside the days « Ventes » holds.
+**What a file imported again replaces is what it holds**: each (product,
+day) it prints (a product missing from a corrected file keeps its old day),
+or each day's payments whole; a sale typed by hand is never touched - the
+card says exactly that.
+
+**« Tester »** (the first submit button, so Enter never saves) reads the file
+picked on the page with the format AS TYPED, in memory, at most
+`TEST_ROW_LIMIT` (5 000) rows, and shows: the first 15 rows in numbered
+columns, the header row found and each role's column (« produit → colonne 2
+« Article » »), the rows read and passed over, the (product, day), units,
+TTC/HT, days covered, days left unread, fractions rounded; for payments, the
+total per method and the spellings nothing maps; which product names are
+new (« à lier ») against the till's - or the import's own refusal. Nothing
+saved, no file kept. « Lire un format » reads an invented export
+(`till_views.FORMAT_EXAMPLE`, read by a test).
+
+**The owner's alone** (`accounts/access.py`): the formats pages and the
+upload. An upload writes the till's sales AND payments, which nothing tells
+from the till's own and which « Entrées d'argent » holds against the bank -
+an employee given « Recettes & ventes » could otherwise hide a shortfall.
+The file card is drawn for the owner only.
+
+**« Données »**: « Formats des fichiers de caisse » (`formats_caisse`,
+`transfer/sections/till_formats.py`), configuration (order 52, requires
+nothing, nothing requires it): keyed by the name as the form compares it,
+every field but the id, the moment restored and never compared, a
+difference a conflict under « Fusionner » and replaced under « Remplacer »
+(whose prune deletes what the archive does not name, of a list it said),
+every format written through the model's check, its refusal in French.
+
+- Migration `recipes/0018`, **WRITTEN and left to be applied** (the owner,
+  after a backup, `migrate_tenants`; `serve` refuses to start until then).
+  One new empty table: nothing existing is read or rewritten, in any espace
+  or the `_template`. Until it is applied, « Ventes » (it lists the formats
+  for the owner), the formats pages and « Données » (it counts them) answer
+  « no such table ».
+
+Not done, the owner's call: ready-made formats per till (no real export of
+any - collect one at onboarding, build its format with « Tester », publish it
+as a « Configuration seule » archive), the till's money and payments in
+« Données », a generic backfill re-reading `downloads/caisse/`, a source per
+connector on `PosProduct` / `PosDailyPayment` (two tills on one day collide:
+the later reading replaces the day), non-French VAT, wide payment exports
+(one column per method), a global cap on browser sessions across espaces.
+
+Tests: `recipes/tests/test_till_file.py` (the reader), `test_xlsx_reader.py`
+and `test_laddition_limits.py` (the hardened readers), `test_store_reading.py`,
+`test_import_job_errors.py`, `test_till_format_views.py`,
+`test_till_file_import.py` (the upload, the cards, two espaces),
+`test_till_source.py`, and `transfer/tests/test_till_formats_section.py`.
 
 ### The three margins (`margins/computation.py`)
 
@@ -6356,6 +6593,26 @@ Not per (recipe, day). A sale typed in by hand exists precisely because the
 till never saw it, so an import must never overwrite it — and keyed without
 the source, re-importing a period would silently delete the manual entry for
 every day it touched. `sales_between` sums across sources.
+
+**Two sources, named once** (`recipes/sales.py`): `TILL_SOURCE` and
+`MANUAL_SALE_SOURCE` (re-exported from `recipes.forms`). **The till's key is
+« laddition » for EVERY connector** - L'Addition fetched, a file of any till
+uploaded, an API one day - and stays so (no data migration): the per-recipe
+till sales are rebuilt from tables that hold no source
+(`resync_recipe_from_daily_quantities` from `PosProductDailyQuantity`,
+« Données »'s rebuild), Marges counts any other source as typed by hand
+(`margins.computation.TILL_SOURCE`, `hand_typed_units`), and `till_links`
+compares the till's rows. A second key would be counted twice after the
+first link changed, read on Marges as typed by hand, and turned back into
+« laddition » by a « Données » round trip. Which connector read a day is in
+the job's log, never in the rows. **No writer spells a source**: the guard
+(`recipes/tests/test_till_source.py`) reads every non-test module for a
+`RecipeSale(...)`, `RecipeSale.objects.…(...)` or `record_sales(...)` call
+given a literal source. **The key is stored, never shown**: « Par origine »
+and « Dernières ventes » say « Caisse » and « Saisie à la main »
+(`SOURCE_LABELS`, `source_label`; a key nobody named is shown as stored), the
+totals rows keep their `source` beside a `label`, and the search finds the
+words as well as the keys (`sources_named`).
 
 ### "OU" nests
 
@@ -7294,7 +7551,9 @@ first area's page in the order of `AREAS`; « Aucune page ouverte » with none).
   decides which PDF Achats files as a slip - an employee could make invoices vanish); the
   timesheets' signatures (`staff:signature_*`, `month_reopen`: an employee given « Personnel »
   countersigned as his employer); deleting a stock take (it froze the stock's value at its date);
-  « Données », « Identifiants », « Accès des employés ».
+  the till's file formats and its file upload (`recipes:till_format*`, `upload_sales_file`: an
+  upload writes the till's sales and payments, and could hide a shortfall); « Données »,
+  « Identifiants », « Accès des employés ».
 - **A stored file by the folder it RESOLVES to** (`areas_of_file`): `/fichiers/` serves any file of
   the media root, so « consignes/../invoices/… » and « consignes\..\invoices\… » (the server's
   separator) are invoices, a name with « : », absolute or climbing out is the owner's. A plain
