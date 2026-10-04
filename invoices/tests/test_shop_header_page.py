@@ -118,6 +118,18 @@ class ImportCardTests(TestCase):
         self.assertContains(page, '<option value="new">+ Nouveau fournisseur…</option>', html=True)
         self.assertNotContains(page, 'name="new_header"')
 
+    def test_the_pdf_import_names_the_group_whose_invoices_open_in_the_list(self):
+        """The hand import reads with the supplier's own reader (its group
+        in the select), never a source's « Lecteur »: the card says so with
+        the select's own words."""
+        # Metro has its own reader; with a document it is no longer waiting
+        # for its first one (`invoice_supplier_choices`).
+        make_invoice(supplier=Supplier.objects.get(code="METRO"))
+        page = self.client.get(reverse("invoices:invoice_list"))
+        self.assertContains(page, '<optgroup label="Lecteur dédié">')
+        self.assertContains(page, "Si son fournisseur est dans le groupe « Lecteur dédié », la facture s'ouvre")
+        self.assertNotContains(page, "choisi pour la source")
+
 
 class AfterANewShopTests(TestCase):
     """A shop named without a header: its ticket says so on the review page,

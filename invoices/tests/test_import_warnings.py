@@ -61,6 +61,32 @@ class ImportWarningTests(TestCase):
         self.assertIn("n'a trouvé aucune ligne", invoice.error_message)
         self.assertEqual(invoice.status, Invoice.Status.NEEDS_REVIEW)
 
+    def test_it_is_named_by_its_label_not_its_registry_key(self):
+        """« Le parseur CECINA » was the code's word and key: the page calls
+        it a « lecteur », by its name. A reader without a label is named by
+        its key."""
+        self.assertIn("Le lecteur GROSSISTE n'a trouvé aucune ligne", self.import_with(parsed()).error_message)
+        Invoice.objects.all().delete()
+        reader = FakeParser(parsed())
+        reader.label = "Grossiste Exemple (Halles)"
+        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {"GROSSISTE": reader}):
+            invoice = parse_and_import(self.path, self.supplier)
+        self.assertIn("Le lecteur Grossiste Exemple (Halles) n'a trouvé aucune ligne", invoice.error_message)
+
+    def test_the_ai_reader_is_named_as_the_import_s_select_names_it(self):
+        """« Le lecteur LLM » was the registry's key; the PDF import's select
+        calls that group « Analyse IA »."""
+        from invoices.models import InvoiceType
+        from invoices.parsers import LLM_PARSER_KEY
+
+        self.supplier.parser_key = LLM_PARSER_KEY
+        self.supplier.save()
+        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {LLM_PARSER_KEY: FakeParser(parsed())}):
+            invoice = parse_and_import(self.path, self.supplier)
+        self.assertIn("Le lecteur Analyse IA n'a trouvé aucune ligne", invoice.error_message)
+        self.assertNotIn("LLM", invoice.error_message)
+        self.assertEqual(InvoiceType(parser_key=LLM_PARSER_KEY).reader_name, "Analyse IA")
+
     def test_a_parser_warning_is_kept_and_holds_the_invoice_for_review(self):
         """Even when every product is known and the invoice would otherwise
         be complete."""
@@ -97,14 +123,15 @@ class EmptyInvoicePageTests(TestCase):
         invoice = make_invoice(supplier=supplier)
         response = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
         self.assertContains(response, "Aucune ligne lue dans ce document")
-        self.assertNotContains(response, "n'a pas de parseur")
+        self.assertNotContains(response, "n'a pas de lecteur dédié")
         edit = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
         self.assertContains(edit, "Corrigez ce qui a été mal lu")
 
     def test_a_supplier_without_one_is(self):
         invoice = make_invoice(supplier=make_supplier(code="NOPARSER", parser_key=""))
         response = self.client.get(reverse("invoices:invoice_detail", args=[invoice.pk]))
-        self.assertContains(response, "n'a pas de parseur")
+        self.assertContains(response, "n'a pas de lecteur dédié")
+        self.assertNotContains(response, "parseur")
 
 
 class WarnedInvoiceIsFoundTests(TestCase):

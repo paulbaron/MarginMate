@@ -130,6 +130,7 @@ def _guess_invoice_number_and_date(full_text: str) -> tuple[str, date | None]:
 @register
 class UBAParser(InvoiceParser):
     supplier_code = "UBA"
+    label = "UBA"
     needs_tables = True
 
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:

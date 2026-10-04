@@ -59,7 +59,7 @@ class Supplier(models.Model):
         default=False,
         help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
     )
-    # A site that protects itself (Metro's firewall): when AdminMate last
+    # A site that protects itself (Metro's firewall): when MarginMate last
     # signed in there - noted before the password is sent, so a run that
     # dies still counts - and until when it leaves the site alone after a
     # refusal (scrapers/metro.metro_pause). Kept here, not read from the
@@ -164,6 +164,14 @@ class InvoiceType(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def reader_name(self) -> str:
+        """Its « Lecteur » on screen: the generic reader, or a reader by its
+        name (parsers.reader_label), as the source form lists them."""
+        from .parsers import reader_label
+
+        return reader_label(self.parser_key) if self.parser_key else "Lecteur générique"
 
 
 class EmailInvoiceSource(models.Model):
@@ -283,8 +291,8 @@ APP_ENV_PREFIXES = (
     "DEFAULT_FROM_EMAIL",
 )
 APP_ENV_REFUSED = (
-    "« {name} » est une variable de l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : "
-    "jamais celle d'un portail"
+    "« {name} » est une variable de l'application elle-même (la boîte mail, la caisse, le module d'un "
+    "fournisseur, l'IA) : jamais celle d'un portail"
 )
 
 

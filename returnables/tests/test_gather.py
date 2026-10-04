@@ -532,8 +532,9 @@ class PurchasesPeriodTests(NoNetworkTestCase):
 
 class GatherTenantsTests(TwoTenantsTestCase):
     """Bar Alpha is the platform owner's espace; Bar Beta another bar, whose
-    slips come through its own mailbox (its « Identifiants »). Both have the
-    seeded format, under the same pk."""
+    slips come through its own mailbox (its « Identifiants »). Both have
+    UBA's format, under the same pk: Beta, a new hosted espace, starts
+    without it (invoices.seeds) and is given it here."""
 
     owner_a = True
 
@@ -544,8 +545,10 @@ class GatherTenantsTests(TwoTenantsTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         with bound_tenant(self.bar_a):
-            self.code = code_of(seeded_format())
+            seeded = seeded_format()
+            self.code = code_of(seeded)
         with bound_tenant(self.bar_b):
+            make_format(name=SEEDED_FORMAT_NAME, pk=seeded.pk)
             self.assertEqual(code_of(seeded_format()), self.code, "the same pk in both, or this proves less")
 
     def beta_s_mailbox(self):

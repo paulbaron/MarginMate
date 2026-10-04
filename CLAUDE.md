@@ -1042,6 +1042,12 @@ enforces that the override lives in the base and nowhere else.
 parsers were replaced by one that reads a line for what its numbers do; a
 shop is data (`TicketShop`: header patterns, the placeholder name its till
 prints, whether its items carry a VAT code), registered once per supplier.
+**A configured till answers only in an espace holding its supplier row**
+(`receipts.configured_tills`, one query, on `recognise_shop`'s fallback only):
+a new espace starts without the original bar's local shops (`invoices.seeds`),
+and before, another bar's « Épicerie Sabah » went to Sabbh Oriental's till -
+or crashed the import once that row was gone. `import_receipt` files under a
+row of the espace or raises `UnrecognisedShopError`, never `DoesNotExist`.
 Measured against the 368 tickets a person had checked (`eval` against their
 stored lines, on a scratch copy of the database), it disagreed on 5 where the
 shop parsers disagreed on 21 - each of the 5 a person's shortcut (a quantity
@@ -2210,6 +2216,22 @@ the review screen, which also takes the ticket's date and total (a blank
 total keeps the one read: it is a field nobody filled in, not a total
 removed).
 
+**A source's « Lecteur »** (`InvoiceTypeForm`, `parsers.reader_choices`)
+lists « — Lecteur générique — », then the readers of a PDF layout by their
+`label`, sorted (Cecina (Vignerons de Cessenon), Metro, UBA:
+`parsers.layout_readers`) - never a till (keyed on its supplier's code, its
+settings one shop's tickets: every bar saw the original bar's local shops'
+codes there) nor the AI reader. A key saved before (a till's, one since
+removed) stays offered under its name, so no source becomes invalid. The
+sources table, an import's « Le lecteur X n'a trouvé aucune ligne » and the
+« Données » import's « garde son lecteur » note name a reader the same way
+(`parsers.reader_label`, `InvoiceType.reader_name`; the AI reader is
+« Analyse IA », `AI_READER_LABEL`, as the PDF import's select names its
+group); a new reader needs a `label` (`test_parser_contract`). The hand PDF
+import reads with the SUPPLIER's reader alone (`parse_and_import(supplier)`):
+its card names the select's group (« Si son fournisseur est dans le groupe
+« Lecteur dédié »… »), never a source's « Lecteur ».
+
 A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
 of the day: it comes round, so it is stored with the date, or a later ticket
 was refused as a duplicate. **The digits are counted without the zeros a till
@@ -2469,6 +2491,28 @@ suggestions » still takes everything; « Approuver les sûres » takes the
 - `least_confident` answers "low" for an unknown level - nothing unmeasured
   is ever approved in bulk. A rule's reasoning names the word matched and
   the article, in French, never the regex.
+- **A rule naming the original bar's own article names it only where that
+  article exists** (`MatchRule.bar_specific`, 04/10/2026): « Bière Du
+  Moment » for any Corona or Brooklyn, « Fût Felsgold », « Palette
+  Livraison », « Limoncel », « Foie Gras » under « Consommables ». A new bar
+  has no articles, so « Approuver les suggestions » made one of those names
+  for every match. Checked with THE lookup the suggestion is resolved with
+  (`existing_article`: `_normalize_casing`, then `name__iexact` - SQLite
+  folds ASCII case only), memoised per pass (`SuggestionContext.has_article`).
+  **Elsewhere the rule still answers, under the raw name**
+  (`_rule_suggestion`, the fallback's `_raw_article_name`): its unit and
+  counting stay - passed over, a « FUT 20L FELSGOLD » deposit became 20 L
+  of an unknown article, booked by « Approuver les suggestions » (review,
+  04/10/2026) - and so does its category, unless the original bar's is a
+  choice of its own (`elsewhere_category`: a pallet among « Consignes », a
+  foie gras in « Epicerie »). It keeps its place in the table, so a rule
+  further down never answers for it (a foie gras with pepper is no
+  « Poivre noir »). A bar-specific rule names a fixed article (no capture
+  group). The generic rules (Vodka, Gin, Tonic, Sirop…, « Casier verre »)
+  are unchanged, and so is the owner's espace wherever those articles
+  exist; one he renamed is now suggested under the raw name (the
+  fingerprint holds every article's name, so a stored suggestion is
+  remade).
 - **The benchmark and its counts stay out of the repository** (strict
   leave-one-out: the index rebuilt WITHOUT the judged product, its words out
   of the category classifier; the scratchpad's `loo_pipeline.py` and
@@ -5029,19 +5073,28 @@ imports (`transfer/legacy.py`).
   facture » rules read its credits and debits on draw; required, clearing
   the rules would have taken the lines), « Consignes » requires its types
   and formats (its counts and slips name them, PROTECT). **A new espace
-  already holds rows of four configuration sections** (the seeded
-  suppliers, the UBA mailbox search, the BNP format and eight recognition
-  rules - and, in a hosted espace, the OFX and CAMT.053 presets ahead of
-  them, known by their frozen names `bank.presets.NEW_ESPACE_*` through
-  `views._holds_only_bank_seeds` -, the three types and the UBA slip
-  format: `views.SEEDED_SECTIONS`):
+  already holds rows of up to four configuration sections** (the seeded
+  suppliers, the UBA mailbox search - the owner's espace only -, the BNP
+  format and eight recognition rules - and, in a hosted espace, the OFX
+  and CAMT.053 presets ahead of them, known by their frozen names
+  `bank.presets.NEW_ESPACE_*` through `views._holds_only_bank_seeds` -, the
+  three types and - the owner's only - the UBA slip format:
+  `views.SEEDED_SECTIONS`):
   merged, an archive's edited copy of one is a conflict and the seeded one
   stays, so on a new database (`_fresh_database`) the Importer tab's
   « Base neuve » note names the archive's parts among them and asks for
   « Remplacer » - **each only while it holds nothing but its seeds**
   (`views.holds_only_seeds`: the seeds by the names their migrations gave
   them, read off the migrations' own literals, edited or not; no ignore
-  rule at all, none is seeded). « Remplacer » deletes what the archive does
+  rule at all, none is seeded) **and holds a row at all** (`_holds_rows`,
+  reading the tables of `SEEDED_MODELS` - a test holds that map to each
+  section's own `count()`, so a part added to `SEEDED_SECTIONS` needs its
+  tables there: a new espace that is not the owner's starts without the
+  original bar's UBA, its mailbox source and slip format, Sabbh Oriental
+  and Wing Seng -
+  `invoices/seeds.py` - so its « Sources de factures » holds nothing to
+  replace; it is still a new database, holding a subset of
+  `SEEDED_SUPPLIERS`). « Remplacer » deletes what the archive does
   not name: an espace without its first invoice may well have imported
   statements and typed a « sans facture » rule already, and the note asked
   to delete it (review, 02/10/2026). The Exporter tab says the archive
@@ -8070,7 +8123,11 @@ with other tickets »): how a bon is read is a **format de bon**, a set of
 espace: three types (« Fûts », « Caisses verre », « Bouteilles CO2 ») and
 « UBA — bon du livreur », whose motifs were checked against the owner's real
 bons (every part found, every line read, every total matched, the re-sends
-and the replacements seen); tests that need an empty app call
+and the replacements seen) - except a new espace that is not the owner's,
+which drops that format with UBA (`invoices/seeds.py`, « Test data »): a bar
+buying from UBA there adds the supplier and a format de bon itself, or
+Achats' guard (`receipts.route_to_returnables`, active formats only) no
+longer sends a driver's bon to Consignes. Tests that need an empty app call
 `returnables/tests/support.py::no_defaults()`.
 
 **Migrations - unlike Personnel, other pages read these tables.**
@@ -8603,6 +8660,36 @@ arithmetic isn't exact decimal either — see the comments on
 `tests/factories.py` — plain functions, no factory_boy. Note that
 `invoices/migrations/0002_seed_suppliers` seeds METRO and UBA into every
 database, the test one included.
+
+**What a new espace starts with (`invoices/seeds.py`, 04/10/2026).** The test
+database, `_template` and the owner's espace hold every seed: Metro, UBA,
+« Autre (analyse IA) » (0002), « UBA - Factures » (0007), Franprix, Monoprix,
+Sabbh Oriental, Wing Seng (0012), the three returnable types and « UBA — bon
+du livreur » (returnables/0002). UBA, Sabbh Oriental and Wing Seng are the
+bar the app was written for: a new espace that is NOT the owner's drops them,
+with UBA's mailbox source and slip format (`forget_original_bar_suppliers`, a
+step of `accounts.provisioning.HOSTED_ESPACE_STEPS`, one transaction), and
+keeps Metro (not fetching), the AI reader, Franprix, Monoprix and the types.
+So **`Tenant.uses_server_integrations` also decides which seeds a new espace
+keeps** - it is set at creation only, and the owner's espace was adopted,
+never provisioned: nothing reaches it. Their readers and tills stay in the
+code (a till answers only where its row is, `receipts.configured_tills`;
+`create_shop` never takes a registry key as a code: « Sabbh » is
+`SABBH_2`). The seed migrations, `SEEDED_SUPPLIERS` and `SEEDED_SOURCE` are
+unchanged: a new espace holds a subset of the seeds. **A later data
+migration must not count on them**: `migrate_tenants` runs it in every
+espace, hosted ones included, so it looks UBA, SABBH, WINGSENG, « UBA -
+Factures » or the UBA slip format up with `.filter(...).first()` and does
+nothing where they are absent - never `.get()`, which stops the migration
+there, nor `get_or_create`, which puts back in every hosted espace what
+`forget_original_bar_suppliers` took out. In a real tenant's
+test (`TwoTenantsTestCase`), only an `owner=True` espace has UBA or its
+format: `returnables.tests.support.seeded_format()` makes the format again
+where it is absent (under a new pk - SQLite never reuses one; a test needing
+the same pk in two espaces passes `pk=` to `make_format`), and a gate test
+needing a mailbox source in the hosted espace makes its own
+(`invoices/tests/test_tenancy.py`, `reopen_the_owners_integrations_in_b`) -
+otherwise its `assert_not_called()` on the mailbox proves nothing.
 
 ## Known data issues (not code bugs)
 

@@ -211,6 +211,7 @@ def _guess_invoice_number_and_date(full_text: str, source_name: str) -> tuple[st
 @register
 class MetroParser(InvoiceParser):
     supplier_code = "METRO"
+    label = "Metro"
     # Without this, pdfplumber merges vertically-adjacent columns into a
     # single line and the product regex stops matching.
     text_extraction_kwargs = {"y_tolerance": 0}

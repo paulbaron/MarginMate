@@ -597,7 +597,21 @@ class ParserTests(TestCase):
             report = import_archive(reader, REPLACE).section("fournisseurs")
         self.assertEqual(Supplier.objects.get(code="METRO").parser_key, "METRO")
         self.assertIn(
-            f"Fournisseur « Metro » : garde son lecteur « METRO » (aucun dans l'archive) — {section.KEPT_BOUND}",
+            f"Fournisseur « Metro » : garde son lecteur « Metro » (le lecteur générique dans l'archive) — "
+            f"{section.KEPT_BOUND}",
+            report.notes,
+        )
+
+    def test_the_readers_are_named_as_the_source_form_names_them(self):
+        """Never by the registry's key (« CECINA »)."""
+        payloads = {"fournisseurs": {"suppliers": [{"code": "METRO", "name": "Metro", "parser_key": "CECINA"}]}}
+        from transfer.archive import ArchiveReader
+
+        with ArchiveReader(forge(payloads)) as reader:
+            report = import_archive(reader, REPLACE).section("fournisseurs")
+        self.assertIn(
+            "Fournisseur « Metro » : garde son lecteur « Metro » (« Cecina (Vignerons de Cessenon) » dans "
+            f"l'archive) — {section.KEPT_BOUND}",
             report.notes,
         )
 

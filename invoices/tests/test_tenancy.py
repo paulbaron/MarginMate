@@ -45,7 +45,7 @@ from invoices.parsers import LLM_PARSER_KEY
 from invoices.scrapers.generic_email import MAILBOX_MISSING
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
 from invoices.tests.pdf_files import write_pdf
-from tests.factories import make_invoice, make_supplier
+from tests.factories import make_invoice, make_invoice_type, make_supplier
 
 START, END = date(2026, 1, 1), date(2026, 1, 31)
 
@@ -116,9 +116,15 @@ class GateTests(TwoTenantsTestCase):
     def reopen_everything_in_b(self):
         """What a « Données » import or the admin could do to Beta's rows -
         Metro marked to fetch, every source active, a portal among them: the
-        data must not be what keeps Metro and the portals out of reach."""
+        data must not be what keeps Metro and the portals out of reach. A new
+        hosted espace starts without the original bar's mailbox source
+        (invoices.seeds): Beta is given one, or the mailbox went untested."""
         with bound_tenant(self.bar_b):
             Supplier.objects.filter(code="METRO").update(is_scrapable=True)
+            if not InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL).exists():
+                make_invoice_type(
+                    supplier=make_supplier(code="GROSSISTE_B", name="Grossiste Beta"), name="Grossiste Beta - Factures"
+                )
             box = make_supplier(code="BOX_B", name="Box Beta", parser_key="")
             portal = InvoiceType.objects.create(
                 name="Box Beta - Factures", supplier=box, source_kind=InvoiceType.SourceKind.WEBSITE
@@ -131,10 +137,12 @@ class GateTests(TwoTenantsTestCase):
             )
             InvoiceType.objects.update(is_active=True)
             mailbox = InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL)
-            return {
+            codes = {
                 "mailbox": [f"type-{pk}" for pk in mailbox.values_list("pk", flat=True)],
                 "portal": f"type-{portal.pk}",
             }
+        self.assertTrue(codes["mailbox"], "Beta holds a mailbox source, or the gate is proven on Metro alone")
+        return codes
 
     # ------------------------------------------------------------ the views
 

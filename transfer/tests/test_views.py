@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
@@ -24,6 +25,8 @@ from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.tenancy import bound_tenant
+from accounts.tests.support import TenancyTestCase
 from bank.models import IgnoreRule, OperationRule, StatementFormat
 from inventory.models import StockType
 from invoices.models import ScrapeJob, Supplier
@@ -798,6 +801,21 @@ class ImportTests(FakeSectionsMixin, TestCase):
                         self.assertIn(INFO[other].label, note)
         self.assertIn(everything, new_database_note(self.client.get(url)))
 
+    def test_the_new_database_note_leaves_out_a_part_holding_no_row(self):
+        """A new espace that is not the owner's starts without the original
+        bar's mailbox source (invoices.seeds): « Sources de factures » holds
+        nothing there, and « Remplacer » would replace nothing."""
+        from invoices.models import InvoiceType
+
+        stage = stage_of({"fournisseurs", "sources", "regles_banque", "types_consignes"})
+        url = reverse("transfer:data_import_stage", args=[stage.token])
+        InvoiceType.objects.filter(supplier__code="UBA").delete()
+        note = new_database_note(self.client.get(url))
+        self.assertIn("Base neuve", note)
+        self.assertNotIn(INFO["sources"].label, note)
+        for other in ("fournisseurs", "regles_banque", "types_consignes"):
+            self.assertIn(INFO[other].label, note)
+
     def test_the_new_database_note_needs_the_suppliers_in_the_archive(self):
         """An old associations file holds no « Enseignes et fournisseurs »:
         the note would ask for a box that is disabled (review, 19/09). Nor
@@ -1359,16 +1377,28 @@ class OldArchiveImportTests(TestCase):
         self.assertEqual(registry.get("types_consignes").snapshot(), before)
 
 
+def assert_rows_read_as_the_sections_count(test) -> None:
+    """`views._holds_rows` keeps its own map of each seeded part's tables
+    (`SEEDED_MODELS`): a part missing from it, or a table wrong, and the
+    « Base neuve » note left that part out without a word. It says what the
+    part's own section counts, in the database bound."""
+    test.assertEqual(set(views.SEEDED_MODELS), set(views.SEEDED_SECTIONS))
+    for key in views.SEEDED_SECTIONS:
+        with test.subTest(section=key):
+            test.assertEqual(views._holds_rows(key), any(registry.get(key).count().values()))
+
+
 class SeededSectionsTests(TestCase):
     """`views.SEEDED_SECTIONS` is what the migrations install into every
-    database, read off the real sections of a new one (the test database is
-    migrated like the owner's espace and the `_template`; a hosted espace is
-    also given the bank's OFX and CAMT.053 presets, `bank.presets.
+    database, read off the real sections of one holding every seed (the test
+    database is migrated like the template and the owner's espace; a new
+    hosted espace holds fewer suppliers, `SeededPartsInANewEspaceTests`, and
+    is also given the bank's OFX and CAMT.053 presets, `bank.presets.
     set_up_new_espace` - bank/tests/test_presets.py, `NewEspaceTests`): a
-    part missing from it is merged into a new
-    database, and the archive's edited copy of its installed rows stays a
-    conflict nobody was told to replace; a part named there that installs
-    nothing asks for « Remplacer » for no reason."""
+    part missing from it is merged into a new database, and the archive's
+    edited copy of its installed rows stays a conflict nobody was told to
+    replace; a part named there that installs nothing asks for « Remplacer »
+    for no reason."""
 
     def test_they_are_the_configuration_parts_a_new_database_holds_rows_of(self):
         self.assertTrue(views._fresh_database())
@@ -1382,6 +1412,49 @@ class SeededSectionsTests(TestCase):
         for key in views.SEEDED_SECTIONS:
             with self.subTest(section=key):
                 self.assertTrue(views.holds_only_seeds(key))
+
+    def test_a_part_holds_rows_where_its_section_counts_some(self):
+        assert_rows_read_as_the_sections_count(self)
+        # And where it counts none: every source deleted.
+        from invoices.models import InvoiceType
+
+        InvoiceType.objects.all().delete()
+        self.assertFalse(views._holds_rows("sources"))
+        assert_rows_read_as_the_sections_count(self)
+
+
+class SeededPartsInANewEspaceTests(TenancyTestCase):
+    """The « Base neuve » note computed in real new espaces
+    (accounts.provisioning): a hosted one starts without the original bar's
+    suppliers, their mailbox source and slip format (invoices.seeds), so its
+    « Sources de factures » holds nothing and is not named; the owner's
+    keeps every seed."""
+
+    STAGE = SimpleNamespace(sections={"fournisseurs", "sources", "regles_banque", "types_consignes"})
+
+    def configuration_holding_rows(self) -> set[str]:
+        return {key for key in INFO if INFO[key].group == Group.CONFIG and any(registry.get(key).count().values())}
+
+    def test_a_hosted_espace(self):
+        with bound_tenant(self.make_tenant("Bar Nouveau")):
+            self.assertTrue(views._fresh_database())
+            holding = self.configuration_holding_rows()
+            self.assertLessEqual(holding, set(views.SEEDED_SECTIONS))
+            self.assertNotIn("sources", holding)
+            assert_rows_read_as_the_sections_count(self)
+            for key in holding:
+                with self.subTest(section=key):
+                    self.assertTrue(views.holds_only_seeds(key))
+            parts = views._seeded_parts(self.STAGE)
+        self.assertNotIn(INFO["sources"].label, parts)
+        for key in ("fournisseurs", "types_consignes"):
+            self.assertIn(INFO[key].label, parts)
+
+    def test_the_owner_s_espace(self):
+        with bound_tenant(self.make_tenant("Bar du Propriétaire", owner=True)):
+            self.assertEqual(self.configuration_holding_rows(), set(views.SEEDED_SECTIONS))
+            parts = views._seeded_parts(self.STAGE)
+        self.assertEqual(parts, registry.labels(views.SEEDED_SECTIONS))
 
 
 class CountsTextTests(SimpleTestCase):

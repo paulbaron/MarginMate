@@ -5,7 +5,7 @@ unnamed ticket lines are known by (`ShopItemPrice`).
 
 Two things are never an import's or a clear's to touch:
 
-* **Metro's firewall state** (`scrape_*`): when AdminMate last signed in
+* **Metro's firewall state** (`scrape_*`): when MarginMate last signed in
   there, when it was refused, and until when it leaves the site alone.
   Never exported, never written, never reset. A restore that put back an
   older pause, or none, would let the next gather sign in to a site that
@@ -509,9 +509,12 @@ class SuppliersSection(Section):
             # Field by field, what a replace does not take is said « À
             # savoir »; « Gardés — encore utilisés » is for whole records.
             if bound:
-                there = f"« {value} »" if value else "aucun"
+                from invoices.parsers import reader_label
+
+                # By name, as the source form lists the readers.
+                there = f"« {reader_label(value)} »" if value else "le lecteur générique"
                 report.note(
-                    f"Fournisseur « {supplier.name} » : garde son lecteur « {supplier.parser_key} » "
+                    f"Fournisseur « {supplier.name} » : garde son lecteur « {reader_label(supplier.parser_key)} » "
                     f"({there} dans l'archive) — {KEPT_BOUND}"
                 )
             elif not known_parser(value):

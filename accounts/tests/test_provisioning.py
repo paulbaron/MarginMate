@@ -16,7 +16,9 @@ from accounts.tenancy import _bound_database, bound_tenant
 from accounts.tests.support import TenancyTestCase
 from bank import recognition, reconcile
 from bank.models import OperationRule, StatementFormat
+from invoices import seeds
 from invoices.models import InvoiceType, Supplier
+from returnables.models import ReturnableType, SlipFormat
 
 LEAF = ("invoices", "0035_supplier_typed_identifiers")
 
@@ -66,12 +68,40 @@ class CreateTenantTests(TenancyTestCase):
         self.assertNotEqual(one.dir_name, other.dir_name)
 
     def test_the_owner_s_integrations_are_switched_off_in_a_new_tenant(self):
-        tenant = provisioning.create_tenant("Bar Nouveau")
+        # The original bar's mailbox source is forgotten in a new espace
+        # (invoices.seeds): kept here, the switch-off itself is what is seen.
+        with mock.patch("invoices.seeds.forget_original_bar_suppliers"):
+            tenant = provisioning.create_tenant("Bar Nouveau")
         with bound_tenant(tenant):
             self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
             mailbox = InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL)
             self.assertTrue(mailbox.exists())
             self.assertFalse(mailbox.filter(is_active=True).exists())
+
+    def test_a_new_espace_starts_without_the_original_bar_s_suppliers(self):
+        """UBA (with its mailbox source and its slip format), Sabbh Oriental
+        and Wing Seng were the bar the app was written for: a new espace
+        keeps Metro (not fetching), the AI reader, Franprix, Monoprix and the
+        returnable types. The template keeps every seed."""
+        tenant = provisioning.create_tenant("Bar Nouveau")
+        with bound_tenant(tenant):
+            self.assertEqual(
+                set(Supplier.objects.values_list("code", flat=True)), {"METRO", "OTHER", "FRANPRIX", "MONOPRIX"}
+            )
+            self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
+            self.assertFalse(InvoiceType.objects.exists())
+            self.assertFalse(SlipFormat.objects.exists())
+            self.assertEqual(
+                list(ReturnableType.objects.values_list("name", flat=True)),
+                ["Fûts", "Caisses verre", "Bouteilles CO2"],
+            )
+        with _bound_database(paths.template_database()):
+            self.assertEqual(
+                set(Supplier.objects.filter(code__in=seeds.ORIGINAL_BAR_SUPPLIERS).values_list("code", flat=True)),
+                {"UBA", "SABBH", "WINGSENG"},
+            )
+            self.assertTrue(InvoiceType.objects.filter(supplier__code="UBA", name="UBA - Factures").exists())
+            self.assertTrue(SlipFormat.objects.filter(supplier__code="UBA").exists())
 
     def test_the_owner_s_tenant_keeps_them(self):
         tenant = provisioning.create_tenant("Bar du Propriétaire", uses_server_integrations=True)
@@ -80,6 +110,11 @@ class CreateTenantTests(TenancyTestCase):
             self.assertTrue(InvoiceType.objects.filter(source_kind="EMAIL", is_active=True).exists())
             # The owner's bank alone, as every database migrated alone.
             self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), ["BNP Paribas (CSV)"])
+            self.assertEqual(
+                set(Supplier.objects.filter(code__in=seeds.ORIGINAL_BAR_SUPPLIERS).values_list("code", flat=True)),
+                {"UBA", "SABBH", "WINGSENG"},
+            )
+            self.assertEqual(list(SlipFormat.objects.values_list("supplier__code", flat=True)), ["UBA"])
 
     def test_the_template_and_this_database_keep_the_seeds_alone(self):
         """The presets are a hosted espace's own step, never a migration's:
@@ -106,6 +141,13 @@ class CreateTenantTests(TenancyTestCase):
                         provisioning.create_tenant("Bar Raté")
                 self.assertFalse(Tenant.objects.exists())
                 self.assertEqual([p.name for p in paths.tenants_root().iterdir()], [paths.TEMPLATE_DIR])
+
+    def test_a_failure_forgetting_the_original_bar_leaves_nothing_behind(self):
+        with mock.patch("invoices.seeds.forget_original_bar_suppliers", side_effect=RuntimeError("panne d'essai")):
+            with self.assertRaisesMessage(RuntimeError, "panne d'essai"):
+                provisioning.create_tenant("Bar Raté")
+        self.assertFalse(Tenant.objects.exists())
+        self.assertEqual([p.name for p in paths.tenants_root().iterdir()], [paths.TEMPLATE_DIR])
 
     def test_a_taken_folder_is_never_removed(self):
         taken = paths.tenants_root() / "dossierpris1"

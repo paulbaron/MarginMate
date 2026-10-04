@@ -671,7 +671,7 @@ def parse_and_import(
     valuation or a margin, and a plausible-looking wrong figure is worse than
     no figure at all, because nothing downstream can tell the difference.
     """
-    from .parsers import get_parser
+    from .parsers import get_parser, reader_label
 
     # A PDF past ocr.MAX_PAGES is refused before anything reads a page or
     # files anything (DocumentTooBig): the AI reader had no cap of its own,
@@ -702,8 +702,8 @@ def parse_and_import(
     problems = list(parsed.warnings)
     if parser is not None and not parsed.lines:
         problems.append(
-            f"Le parseur {key} n'a trouvé aucune ligne dans ce document : sa mise en page a peut-être "
-            "changé. Saisissez les lignes à la main."
+            f"Le lecteur {reader_label(key)} n'a trouvé aucune ligne dans ce document : sa mise en page a "
+            "peut-être changé. Saisissez les lignes à la main."
         )
     if invoice.invoice_date is None:
         # Undated, it sits outside every stock valuation and the bank match.

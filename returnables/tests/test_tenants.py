@@ -24,7 +24,15 @@ from invoices import integrations
 from invoices.models import ScrapeJob
 from invoices.tasks import gather_invoices_task
 from returnables.models import Pickup, PickupPhoto, Slip
-from returnables.tests.support import make_pickup, make_slip, make_supplier, seeded_format, tiny_jpeg
+from returnables.tests.support import (
+    SEEDED_FORMAT_NAME,
+    make_format,
+    make_pickup,
+    make_slip,
+    make_supplier,
+    seeded_format,
+    tiny_jpeg,
+)
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from tests.support import _Forbidden
 
@@ -153,6 +161,10 @@ class GatherPerTenantTests(TenantsCase):
         for tenant in (self.bar_a, self.bar_b):
             with bound_tenant(tenant):
                 make_pickup()
+                if tenant == self.bar_b:
+                    # A new hosted espace starts without UBA's format
+                    # (invoices.seeds): Beta is given it under Alpha's pk.
+                    make_format(name=SEEDED_FORMAT_NAME, pk=self.format_pk)
                 self.format_pk = seeded_format().pk
 
     def test_bar_b_s_gather_runs_in_a_thread_bound_to_bar_b(self):

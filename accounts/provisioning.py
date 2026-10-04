@@ -136,6 +136,7 @@ def switch_off_server_integrations() -> None:
 HOSTED_ESPACE_STEPS: tuple[str, ...] = (
     "accounts.provisioning.switch_off_server_integrations",
     "bank.presets.set_up_new_espace",
+    "invoices.seeds.forget_original_bar_suppliers",
 )
 
 

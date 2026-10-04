@@ -311,9 +311,10 @@ class PortalTrustTests(TestCase):
             [
                 (
                     "Source « Portail essai » (UBA) : variable de l'identifiant : « METRO_EMAIL » est une variable de "
-                    "l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : jamais celle d'un portail ; "
+                    "l'application elle-même (la boîte mail, la caisse, le module d'un fournisseur, l'IA) : jamais celle "
+                    "d'un portail ; "
                     "variable du mot de passe : « METRO_PASSWORD » est une variable de l'application elle-même "
-                    "(Metro, la boîte mail, la caisse, l'IA) : jamais celle d'un portail"
+                    "(la boîte mail, la caisse, le module d'un fournisseur, l'IA) : jamais celle d'un portail"
                 )
             ],
         )

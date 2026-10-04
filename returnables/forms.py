@@ -386,7 +386,7 @@ class SlipFormatForm(forms.ModelForm):
             **{field.attr: field.label for field in patterns.FORMAT_FIELDS},
         }
         help_texts = {
-            "name": "Ex. « UBA — bon du livreur ».",
+            "name": "Ex. « Grossiste — bon du livreur ».",
             "supplier": "Le fournisseur dont ce format lit les bons : ils sont comparés à ses reprises.",
             "is_active": "Inactif, il ne reconnaît plus aucun document et n'est plus récupéré.",
             **FORMAT_HELP,

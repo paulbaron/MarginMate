@@ -1523,7 +1523,7 @@ def _can_reread(invoice) -> bool:
     if invoice.is_receipt:
         return parser_for(invoice.supplier) is not None
     parser = get_parser(invoice.supplier.parser_key)
-    return parser is not None and invoice.supplier.parser_key != "LLM"
+    return parser is not None and invoice.supplier.parser_key != LLM_PARSER_KEY
 
 
 def _reread_from_page(request, invoice) -> None:

@@ -602,16 +602,21 @@ class ModuleTests(SimpleTestCase):
 
 class TenantTests(TwoTenantsTestCase):
     """Real tenants (accounts.provisioning): each is copied from the
-    migrated _template, and keeps its files in its own media."""
+    migrated _template, and keeps its files in its own media. Bar Alpha is
+    the owner's."""
+
+    owner_a = True
 
     def test_every_new_tenant_is_given_the_seeds(self):
-        for bar in (self.bar_a, self.bar_b):
+        """The types in every espace; UBA's slip format in the owner's only:
+        a new hosted espace starts without UBA (invoices.seeds)."""
+        for bar, formats in ((self.bar_a, ["UBA"]), (self.bar_b, [])):
             with self.subTest(bar=bar.name), bound_tenant(bar):
                 self.assertEqual(
                     list(ReturnableType.objects.values_list("name", flat=True)),
                     ["Fûts", "Caisses verre", "Bouteilles CO2"],
                 )
-                self.assertEqual(list(SlipFormat.objects.values_list("supplier__code", flat=True)), ["UBA"])
+                self.assertEqual(list(SlipFormat.objects.values_list("supplier__code", flat=True)), formats)
 
     def test_a_deletion_in_one_tenant_leaves_the_other_s_file_of_the_same_name(self):
         photos = {}

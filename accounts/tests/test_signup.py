@@ -111,6 +111,8 @@ class SignupTests(SignupTestCase):
         with bound_tenant(tenant):
             self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
             self.assertFalse(InvoiceType.objects.filter(source_kind="EMAIL", is_active=True).exists())
+            # Nor the original bar's own suppliers (invoices.seeds).
+            self.assertFalse(Supplier.objects.filter(code__in=["UBA", "SABBH", "WINGSENG"]).exists())
 
     def test_the_code_is_read_whatever_its_case_dashes_or_spaces(self):
         typed = "  " + self.code.replace("-", " ").lower() + " "
