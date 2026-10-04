@@ -248,6 +248,36 @@ class SandboxTests(SimpleTestCase):
         self.assertEqual(errors, [])
         self.assertEqual(most[0], 1)
 
+    def test_a_document_waits_its_turn_a_bounded_time(self):
+        """Another document may hold PDFIUM_LOCK for RENDER_SECONDS, and a
+        folder's thread queue one after another: past PDFIUM_WAIT_SECONDS,
+        refused - « réessayez », said on the file's line like a refusal."""
+        from invoices.receipt_batches import READING_REFUSALS
+
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with ocr.PDFIUM_LOCK:
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(10))
+        with (
+            mock.patch.object(ocr, "PDFIUM_WAIT_SECONDS", 0.05),
+            mock.patch.object(pdfium_sandbox, "run", never("PDFium")),
+            self.assertRaises(ocr.DocumentTooBig) as refused,
+        ):
+            list(ocr.page_images(self.drawn()))
+        said = "Un autre document est en cours d'affichage : réessayez dans un instant."
+        self.assertEqual(str(refused.exception), said)
+        self.assertEqual(error_for_page(refused.exception, said=READING_REFUSALS), said)
+        self.assertNothingLeft()
+        self.assertEqual(ocr.PDFIUM_WAIT_SECONDS, 2 * ocr.RENDER_SECONDS)
+
     @skipUnless(os.name == "nt", "a Job Object is Windows'")
     def test_the_child_is_in_its_job_before_it_is_given_the_pdf(self):
         """The child reads nothing of the file before the server has put it

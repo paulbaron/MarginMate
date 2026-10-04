@@ -347,7 +347,14 @@ class DocumentTooBig(ValueError):
 #: requests', and eight of them at RENDER_MEMORY each would be 12 GB. A page
 #: handed to the caller holds nothing. Re-entrant, as when PDFium ran in
 #: this process: a thread inside it may be the one collecting a generator.
+#: One document holds it RENDER_SECONDS at most, and a document waits for it
+#: PDFIUM_WAIT_SECONDS at most - then it is refused, « réessayez »
+#: (PDFIUM_BUSY): a folder's thread may queue heavy documents one after
+#: another, an RLock serves its waiters in no order, and a request already
+#: holding receipts.OCR_LOCK waited without a limit, every bar's OCR with it.
 PDFIUM_LOCK = threading.RLock()
+PDFIUM_WAIT_SECONDS = 2 * RENDER_SECONDS
+PDFIUM_BUSY = "Un autre document est en cours d'affichage : réessayez dans un instant."
 
 
 def _centimetres(points: float) -> str:
@@ -431,7 +438,8 @@ def _drawn_pages(path: str):
     RENDER_OUTPUT_BYTES once written - past which, DocumentTooBig « trop
     lourd à afficher ». One such process at a time (PDFIUM_LOCK), held while
     it draws every page and never while the caller works on one: its OCR
-    takes seconds. The pages come back losslessly, the very pixels
+    takes seconds; waited for PDFIUM_WAIT_SECONDS at most (PDFIUM_BUSY,
+    a DocumentTooBig). The pages come back losslessly, the very pixels
     PDFium gave, one at a time from a private folder removed whatever
     happens. What PDFium cannot open is UnreadablePdf, said « PDF
     illisible » as its own error was. About 0,4 s more a document than
@@ -446,8 +454,12 @@ def _drawn_pages(path: str):
     folder = tempfile.mkdtemp(prefix="pdfium-")
     try:
         limits = {name: globals()[name] for name in LIMITS}
-        with PDFIUM_LOCK:
+        if not PDFIUM_LOCK.acquire(timeout=PDFIUM_WAIT_SECONDS):
+            raise DocumentTooBig(PDFIUM_BUSY)
+        try:
             outcome = pdfium_sandbox.run(os.path.abspath(path), folder, limits, RENDER_MEMORY, RENDER_SECONDS)
+        finally:
+            PDFIUM_LOCK.release()
         result = outcome.result or {}
         if outcome.expired:
             raise DocumentTooBig(TOO_SLOW_TO_DRAW.format(seconds=RENDER_SECONDS))
