@@ -581,9 +581,11 @@ handlers render them.
   Cloudflare's 100 MB (« A folder is a background job » and below).
   `invoices/ocr.page_images` weighs a document BEFORE rendering:
   `MAX_PAGES` 30, `RENDER_MAX_PIXELS` 40 Mpx from `page.get_size()` (a lower
-  resolution down to 100 dpi, then `DocumentTooBig`), `IMAGE_MAX_PIXELS`
-  read from the header. **Tests patch the caps down and use tiny files -
-  never a big render** (the owner's PC froze twice on 29/09).
+  resolution down to 100 dpi, then `DocumentTooBig`; in the PDFium child,
+  `pdfium_worker.plan_pdf`, every page before the first is drawn),
+  `IMAGE_MAX_PIXELS` read from the header. **Tests patch the caps down and
+  use tiny files - never a big render** (the owner's PC froze twice on
+  29/09).
 - **A PDF's pages are counted before any pdfplumber page is made**
   (HARDEN-01): pdfplumber keeps every page it read until the file closes,
   and closing it MAKES every page not made yet - a PDF under 25 MB can hold
@@ -598,10 +600,81 @@ handlers render them.
   pdfplumber one (it runs first, on every PDF). A bon (`returnables.
   reading.pdf_text`) is counted the same way, to its own 5 pages, before
   pdfplumber opens it. **Never `len(pdf.pages)` on a file from outside.**
-- **One call into PDFium at a time** (`ocr.PDFIUM_LOCK`, re-entrant): it is
-  not thread-safe, and a folder's thread reads its files without
-  `receipts.OCR_LOCK` beside the requests and the gathers. `page_images`
-  holds it for each call and never while the caller OCRs a page.
+- **An Achats PDF is weighed before anything reads or renders it**
+  (`ocr._weigh_contents`, from `check_page_count`, `pdf_pages` and
+  `page_images`): its content streams through pdfminer's bounded decoders,
+  sharing `ocr.MAX_INFLATE_TOTAL` (64 MB inflated), and what PDFium will
+  DRAW of them, sharing `ocr.MAX_RUN_TOTAL` (8 MB): every /Contents listing,
+  every Do of a form as often as it is drawn, every annotation's
+  appearances (`_decode_drawn`; PDFium parses a form again for each draw
+  and keeps about 20 bytes a byte of path - 40 annotations sharing one 1 MB
+  appearance took 850 MB, and pdfminer never reads an annotation). Every
+  XObject drawn, inline image and annotation counts against
+  `reading.MAX_PAGE_GLYPHS` a page. Each refusal is a DocumentTooBig of its
+  own (« trop lourd », « trop long à lire », « trop chargé »). The readers
+  then walk `pdf_pages` inside `ocr.bounded_reading`, which turns
+  pdfminer's own bounds (inflate, run, glyphs, fonts' codes: « What one bon
+  may cost pdfminer », under « Consignes ») into DocumentTooBig, never « no
+  text layer », which sent the file on to PDFium. Real invoices: 342 KB
+  drawn at most, 10 objects a page at most. **Never render with
+  `draw_annots=False` to save the weighing**: 81 of 1 374 real invoices carry
+  annotations. `page_images` weighs strictly
+  (`_weigh_contents(strict=True)`): a file pdfminer cannot open or walk, a
+  stream it cannot decode, or no page is `common.UnreadablePdf` before any
+  child is started (a file cut before its xref, which PDFium rebuilds, went
+  through unweighed). All 1 374 real invoices weigh. `check_page_count` and
+  the text layer still let such a file pass.
+- **PDFium never runs in the server's process** (`ocr.page_images` →
+  `_drawn_pages` → `invoices/pdfium_sandbox.run` →
+  `invoices/pdfium_worker.py`, which imports no Django): every PDF is drawn
+  by a child `sys.executable -I` that sends its pid and waits; the server
+  puts it in a Windows Job Object (commit cap `ocr.RENDER_MEMORY` 1,5 GB,
+  killed with the job) BEFORE sending it the path; an rlimit elsewhere; a
+  wall clock `RENDER_SECONDS` (60 s) everywhere; its pages may weigh
+  `RENDER_OUTPUT_BYTES` (512 MB), uncompressed (PPM) up to
+  `RENDER_RAW_BYTES` (128 MB) then PNG. Past any of them: DocumentTooBig
+  « trop lourd à afficher ». No Job Object is a logged warning and the
+  clock - **never a fallback to PDFium in-process**. One child at a time
+  (`ocr.PDFIUM_LOCK`, re-entrant, held while it runs, never while the
+  caller OCRs a page): a folder's thread reads its files without
+  `receipts.OCR_LOCK` beside the requests and the gathers. The pages come
+  back through a temporary folder of its own, removed whatever happens.
+  What PDFium cannot open, or a child gone silent, is `common.UnreadablePdf`
+  (« PDF illisible », like PdfiumError). A few KB of tiling pattern, Type3
+  glyph, soft mask or ink annotation took 0,7-1,3 GB and 20-50 s of PDFium:
+  only the OS bounds that. Real invoices: 133 MB, 1,7 s at most, the same
+  pixels byte for byte; about 0,4 s more a document. Tests patch the caps
+  down (40 MB, 0,05 s).
+- **Known and left** (the PDF bounds, review of 04/10/2026):
+  - pdfminer still parses whole objects inside the server's process; the
+    reviewer's minor point about object size is not addressed. The
+    review's 14 KB ink file costs 6,9 s of CPU and 333 MB in
+    `_weigh_contents`: resolving the annotation parses its InkList and its
+    object stream, and any object in that stream (the page itself, say)
+    makes pdfminer parse the whole stream, so `check_page_count` is exposed
+    too. Only the 64 MB inflate cap on the object stream bounds it, about 9
+    times the 7 MB case. It needs a finding of its own - a cap on
+    pdfminer's `PSBaseParser` tokens per object, for instance.
+  - Under the caps, a hostile PDF can still hold `PDFIUM_LOCK` for up to
+    60 s and make one child commit up to 1,5 GB, which delays every bar's
+    previews and OCR. The worst real document needs 1,7 s and 133 MB, so
+    both constants could be lowered (say 20 s, or 512 MB) if that margin is
+    wanted: the owner's call.
+  - On Windows the cap goes on the interpreter, not on the venv's launcher
+    (python.exe is a launcher): the launcher stays outside the job, but it
+    only waits for the interpreter.
+  - Without a Job Object (the warning in the log), only the clock bounds
+    the child: memory is not capped on Windows then.
+  - One Python process per document, about 0,4 s more; on disk per
+    document, up to 128 MB uncompressed plus PNG pages, 512 MB at most,
+    the folder removed at the end.
+  - A worker that crashed is « PDF illisible », logged with its exit code,
+    not « trop lourd »: only a memory cap Windows reported, or the clock,
+    gives « trop lourd ». Outside Windows, with no report from a job, a
+    child killed by its rlimit is taken as « trop lourd » whenever it gave
+    no result.
+  - Embedded Type1 font headers, and fonts' other dictionaries, are bounded
+    only by the stream size.
 
 **Signing and signup** (staff/, accounts/signup.py):
 - `check_code` reserves a try with ONE conditional UPDATE (`code_attempts__lt`,
@@ -954,8 +1027,27 @@ lines it will write** (a supplier of charges: `expense_lines`, not
 only as they were written, a refusal left the copied file in media. Every
 caller of a path ending in `replace_invoice_lines` catches it beside
 `InvoiceLinesInUseError`: « Relire » (`_reread_from_page`) says it;
-`reread_receipt` keeps the old reading. `receipt_batches._import_with_shop`
-records its import inside the try, as `_read_file` does.
+`reread_receipt` keeps the old reading. And so do `redo_as_expenses` (per
+document: it keeps its lines, and the confirmation names it - « A supplier
+of charges has no products ») and `reread_receipt`'s charge branch (the old
+reading stays). `refile_as_charge` itself lets it through, so « Relire » on
+a charge says why it refused; `_reread_receipt_file` saves a charge's new
+text and date in the same transaction as the refile.
+`receipt_batches._import_with_shop` records its import inside the try, as
+`_read_file` does.
+
+**And the movement a line books.** A line that fits its own columns can
+still divide into a movement no column holds: 25 000 EUR for one tray of a
+KG product at factor 0.02 is 1 250 000 EUR a kilo in
+`StockMovement.unit_cost_ht` (10,4), and the home page and Marges answered
+500 for the whole bar. `inventory.services.movement_refusal(line)` asks it
+of one line with `compute_movement_amounts`' own arithmetic (shared with
+`conversion_refusal` through `_movement_overflow`), skipping a spreading
+line and a product with no stock type, and `importing._refuse_wide_movement`
+raises `LineTooWideError` on it. `import_parsed_invoice` asks it after
+resolving the products and **before** the Invoice and its source file are
+saved; `replace_invoice_lines` asks it inside its transaction before each
+`create_stock_movement_for_line`. Every caller above catches it.
 
 **The conversion factor too.** The Stock page's inline factor, the panel's
 « 1 produit = » and a stored suggestion under « Approuver » are read by
@@ -971,11 +1063,18 @@ Marges and « Combler les écarts » pages down for the whole bar. So
 `services.conversion_refusal(product, unit, factor)` recomputes every
 line's movement with `compute_movement_amounts` BEFORE anything is written,
 and the two views and « Approuver » ask it; its message names only the
-figure that overflows. It is not inside `compute_movement_amounts`, so
-invoice import is untouched. The suggestion generator
-(`_resolve_stock_type_match`) rounds its factor to four decimals: « SAFRAN
-0,25G » is 0.00025 kg, which the parser refuses, and the suggestion made
-again was the same, so the product could never be approved.
+figure that overflows. Changing an article's own unit is asked too:
+`StockTypeUpdateView` runs `conversion_refusal` for each linked product
+with the new unit before saving (from Unité to Litre a line's measured
+volume becomes what its cost is divided by), and refuses the form under
+« Unité » with the sentence, its lead given by
+`conversion_refusal(..., refused=...)`. It is not inside
+`compute_movement_amounts`; invoice import asks the same arithmetic of
+each line it writes (`movement_refusal`, « And the movement a line books »,
+above). The suggestion generator (`_resolve_stock_type_match`) rounds its
+factor to four decimals, and one the rounding would move by more than
+0.5 % is left to a person (« A factor finer than its column is no
+factor », under « The suggestions of the « À classer » panel »).
 
 **`decimal.InvalidOperation` and `decimal.Overflow` are ArithmeticErrors, not
 ValueErrors.** `1E+500` and `1E+999999999` both parse as Decimals and explode
@@ -1113,7 +1212,11 @@ string from every one. A PDF that does carry text (a web shop's invoice) is
 read from it and never OCR'd (`ocr.text_layer_pages`): two Nisbets invoices
 read as seven characters because the OCR was given their logo, the only
 image in the file, for the page - an embedded image is the page only when it
-covers it (`ocr.covers_page`). `invoices/ocr.py` stands in for `extract_text()`, and
+covers it (`ocr.covers_page`). A text layer pdfminer stops at one of its
+bounds is DocumentTooBig, never « no text layer », which sent the file on
+to PDFium (`ocr.bounded_reading`; PDFium itself runs in a child process:
+« What a page may say about an error, a redirect, an upload »).
+`invoices/ocr.py` stands in for `extract_text()`, and
 `parsers/receipt_base.py::ReceiptParser` is the only class allowed to
 override `parse()` besides the LLM fallback. The ticket reader still
 implements `parse_pages` **only**, so every layout is still testable from
@@ -1313,7 +1416,10 @@ What it knows, all arithmetic:
   standing alone, one separator twice, a year no later than next year's:
   pairs of digits in a row are a phone number (« 01.99.00.42.17 »). The
   first date printed wins, whatever its year's digits. Measured on 958
-  stored documents: 14 dates change, each to the one stored by hand;
+  stored documents: 14 dates change, each to the one stored by hand. A
+  date printed in figures counts only when it is a real date
+  (`receipt_base._figure_dates`): a code shaped like one (« 45.67.12 »)
+  above « Facture du 19 mai 2026 » left the document dateless;
 - a **line holding a date is an item all the same** when it prints amounts:
   an invoice's rows carry the period they cover ("Abonnement 01/08/2026au
   31/08/2026 1,00 64,44 20,00% 64,44"), and thrown away for its date, one
@@ -1337,9 +1443,11 @@ What it knows, all arithmetic:
   printed number in place of such a stand-in (a date-total or a long digit
   run, never a real number, never one another document of the supplier
   holds, never a supplier with its own reader): 139 documents on 19/09. A
-  dot inside a number is part of it (« Numéro de facture :
-  20250314.38604 », an ice supplier): cut at it, every such invoice was filed
-  under its date, and two deliveries of one day collided.
+  dot inside a number is part of it when a figure follows
+  (`generic_receipt.REFERENCE`): « Numéro de facture : 20250314.38604 »
+  (an ice supplier) is one number, « 1234.Merci » is 1234. Cut at the dot,
+  every such invoice was filed under its date, and two deliveries of one
+  day collided.
   `refresh_document_numbers` gives a number that is its document's date
   the whole number printed after it (8 on 04/10/2026).
 
@@ -1586,6 +1694,15 @@ with what is wrong written on it instead.
 have its lines replaced (InvoiceLinesInUseError) and is left alone, and its
 charge items go back with the refusal. Made before it, a charge item named
 after the supplier stayed on no line (scratch copy, 19/09).
+
+`redo_as_expenses` returns `(done, left)`: `left` is the documents whose
+charge reading holds a figure no column does (`LineTooWideError`: ten at
+200 000 fit, one line of 2 000 000 does not). Each is left with its lines,
+as a document a stock take was priced from is, and the confirmation names
+them (« N document(s) gardent leurs lignes … corrigez-les document par
+document. »). Raised past the view, the page answered 500 with
+`expenses_only` already saved, the later documents never refiled, and a
+second confirmation saying « déjà un fournisseur de charges ».
 
 **A charge keeps its own checks** ("Total de la charge", "Date du ticket":
 `importing.charge_state`). A charge fetched by a portal or the mailbox goes
@@ -2432,6 +2549,16 @@ be added to those filters too: unlisted, the delete raises ProtectedError
 and falls back to the old per-product loop (`_remove_one_by_one`), correct
 but slow. A queryset delete skips a custom `Product.delete()` - it has none.
 
+An import's « Remplacer » collects the products its rewritten or removed
+lines free (`InvoicesSection.unused`) and removes them once, at the end of
+the apply and of the prune (`_remove_unused`), never after each document.
+Removed after each document, a product freed by one document and taken
+back by the next was deleted under it: the run's `ProductResolver` still
+handed it out, the line pointed at a row that was gone, and the confirm
+failed at its commit after a clean preview - a rollback, and the restore
+refused (review, 04/10/2026). `ProductResolver.forget` drops what the
+end-of-run removal deleted.
+
 ### Correcting an invoice's lines
 
 The correction page shows a name, a count, a weight, the amounts and VAT (and
@@ -2603,6 +2730,23 @@ suggestions » still takes everything; « Approuver les sûres » takes the
 - `least_confident` answers "low" for an unknown level - nothing unmeasured
   is ever approved in bulk. A rule's reasoning names the word matched and
   the article, in French, never the regex.
+- **A factor finer than its column is no factor.**
+  `_resolve_stock_type_match` rounds the suggested factor to the four
+  decimals `stock_equivalent` holds, and a rounding that moves it by more
+  than 0.5 % - to 0 included (« SAFRAN 0,04G » is 0.00004 kg) - makes no
+  factor at all: stored as `""`, « basse », with the exact figure and
+  « plus fin que les 4 décimales d'un facteur, à saisir » in its reasoning.
+  Rounded and left sure, 0.25 g of a kg article (0.00025) became 0.0003
+  and « Approuver les sûres » booked every purchase 20 % over. A factor
+  four decimals hold (0.7, 0.0015) or nearly hold (1/3) keeps its
+  confidence. `approve_all_suggestions` leaves such a suggestion as it is
+  (counted, « leur facteur étant à saisir ») instead of clearing it -
+  cleared, it was made again the same and refused at every click - and the
+  panel's « 1 produit = » field is `required` for it, since a blank factor
+  posted is taken as 1. A new article a suggestion describes is made only
+  once its factor is taken: `_resolve_suggestion_stock_type` returns it
+  unsaved and the approval `get_or_create`s it after `conversion_refusal`,
+  so a refused suggestion leaves no empty article behind.
 - **The benchmark and its counts stay out of the repository** (strict
   leave-one-out: the index rebuilt WITHOUT the judged product, its words out
   of the category classifier; the scratchpad's `loo_pipeline.py` and
@@ -3026,7 +3170,12 @@ sources' defaults. The check belongs in the views, **not in
 `EmailInvoiceSourceForm.clean()`**: the test dates are drawn by hand
 without their errors, so a form-level error was silent, and it stopped
 « Enregistrer », which the test dates never had a say in. The import card's
-two date inputs carry `min="2000-01-01"` `max=today`.
+two date inputs carry `min="2000-01-01"` `max=today`, and the period the
+card offers - since the newest invoice brought in, or a failed gather's own
+period offered again - is never before `forms.EARLIEST_DOCUMENT_DATE`
+(`workspace.py`). A gather asked from « 26 » before `gather_range_problem`
+existed, or an e-invoice dated 0001 as a source's newest, was offered and
+refused by the date box's own min.
 
 **Plou & Fils changes its layout**: a "Taux" column on product rows (2026),
 a VAT summary one column shorter, "Référence interne" instead of "N°
@@ -3267,6 +3416,19 @@ chosen by hand on one debit, one invoice across two debits.
   own IMMEDIATE transaction; « rattachée entre-temps », nothing written.
   `reconcile.mark_no_invoice` / `reopen` still clear the links for the
   callers that mean it (« Données »'s tests).
+- **A stale « Délier » takes off what its row showed, or nothing.** The
+  row's « Délier » / « Tout délier » posts the invoices it was drawn with
+  (hidden `shown` inputs, one per link), and `views._unlink_as_shown` takes
+  them off only when the line still pays exactly that set, checked inside
+  the unlink's IMMEDIATE transaction; otherwise nothing is written and the
+  page says « Cette opération a changé entre-temps : rien n'a été délié. »
+  (`UNLINK_CHANGED_MEANWHILE`). A button that removes everything on a row
+  removes what the row showed, never what the line holds at the click:
+  another tab or « Propositions » may have put an invoice there the reader
+  never saw. A POST without `shown` is refused the same way, even on a
+  line paying nothing, which `reconcile.unlink` would otherwise turn
+  `settled_by_hand`. Tests post what the page draws
+  (`LinkPage.drawn_unlink`), not a bare action.
 - **« Données » keys links by the PAIR** (`transfer/sections/bank.py`), and
   neither « Fusionner » nor « Remplacer » refuses one for being « already
   paid » any more. What holds a link back is the LINE's own decision here -
@@ -4761,6 +4923,12 @@ is listed « ne compte pas », and a gap it leaves is asked on the page.
   tab shown again days later has its browser refuse today's date until it
   is reloaded. Nothing stale is written: the server bounds the date to its
   own today, and a date that has a balance asks « Remplacer ».
+- **Several accounts, one of them quiet** (the owner decides): an account
+  with no recent operation keeps every later gap « relevé à importer » for
+  ever - `complete_through` is the earliest account's day, and re-importing
+  a quiet account's statement adds no line. Leaving it out of the minimum
+  goes against review C1; naming on the page the account that holds
+  completeness back is the safe half.
 
 Tests: `bank/tests/test_treasury.py` (the pure rules, one `SimpleTestCase`
 per rule, plus `LoadQueriesTests`, `ModelTests`, `MigrationTests`),
@@ -4936,15 +5104,26 @@ imports (`transfer/legacy.py`).
   by its rank in its invoice, a bank line by its fingerprint, a treasury
   point by its day and an adjustment by its random `reference`. A document
   with no number, no stored sha and no file on the disk (typed by hand
-  without a file, or a ticket whose PDF is gone) is ranked among its
-  supplier's such documents by (imported_at, id): `invoice_keys` groups it
-  under ("no file", supplier code), and `InvoiceIndex` finds it by that
-  rank (step 4). They were all (supplier, "", "", "", 0): a merge of the
+  without a file, or a ticket whose PDF is gone) carries the moment it was
+  typed: its key's `moment` is its imported_at in UTC, which an import
+  writes back (`_create`'s bulk_update, `_replace`'s assign). Its
+  occurrence is its rank, by id, among its supplier's such documents of
+  that same moment, and `InvoiceIndex` step 4 (`_fileless`) finds it the
+  same way. They were all (supplier, "", "", "", 0): a merge of the
   espace's own export added a copy, and a restore kept one of two, moving
-  the other's payment onto it (audit 04/10/2026). Archives taken before
-  still say occurrence 0 for all of them; importing one no longer
-  duplicates the first, but the others are skipped as answering the same
-  document. A supplier the fournisseurs section skipped is refused for the
+  the other's payment onto it (audit 04/10/2026). Ranked among all of the
+  supplier's such documents (09c08aa), deleting one between the export and
+  the import shifted every later one onto its neighbour: a merge said
+  « différente » twice and created the last one again (review,
+  04/10/2026). Only these keys carry `moment` (it is in `KEY_FIELDS`, so in
+  the canonical key). A key without one ranks among all of the supplier's
+  such documents: in an archive taken before, every such key says 0, so
+  the first answers the first document here and the others answer the same
+  one and are skipped, never created again. That pairs by position, never
+  by content: when the document it answers is an unrelated one (one
+  deleted here after the export, an archive from another espace),
+  « Fusionner » reports a conflict and leaves it as it is instead of adding
+  the archive's. A supplier the fournisseurs section skipped is refused for the
   rest of the run (`SupplierResolver.refuse`): found by its name instead,
   its documents would land on the supplier that name belongs to here. A
   product's folded name finds it only when the archive does not name that
@@ -4997,13 +5176,19 @@ imports (`transfer/legacy.py`).
   `parse_checks: [1]` took « À vérifier » down.
 - **A count no page bounds is held to ±`2**31 - 1` by its section**
   (`codec.check_count`, `MAX_COUNT`): `InvoiceLine.colisage`, the till's
-  quantities per day and the sales typed in. `codec.load` still bounds no
+  quantities per day, the sales typed in and a pickup photo's width and
+  height (« « Consignes » is two sections »). `codec.load` still bounds no
   integer - the positions keep their own bounds and their own French -, so
   a new IntegerField an archive carries needs either its own bound or
   `check_count`: from 2**63 the row is not stored (OverflowError) and just
-  under it the rebuild's sums overflow. Any other failure of the import
-  preview is logged and said on the page (« L'aperçu a échoué, rien n'a été
-  changé »), like the confirm's, never a 500.
+  under it the rebuild's sums overflow. A recipe ingredient's `group` needs
+  no such bound: the recipes section's per-ingredient full_clean already
+  holds it to SQLite's top (2**63 - 1, the recipe form's own) and skips the
+  recipe. Any other failure of the import preview is logged and said on the
+  page (« L'aperçu a échoué, rien n'a été changé »), like the confirm's,
+  never a 500. After « Importer » is clicked, a failure is said as
+  « L'import a échoué, rien n'a été changé », whichever step failed;
+  « L'aperçu a échoué » is the preview button's only.
 - **Fusionner** adds what is missing, fills what a section lists as fillable
   when it is blank here, and never changes a value that exists (a conflict,
   said). **Remplacer** makes the section exactly the archive, except what kept
@@ -5171,7 +5356,9 @@ imports (`transfer/legacy.py`).
   `returnables.patterns` exactly as the forms check it (« motif refusé :
   <champ> — <raison> »), references and checks are validated (« lecture
   illisible »), a count outside 1..9 999 is refused before the database's
-  CHECK - each skips its record with its reason. Files only under
+  CHECK - each skips its record with its reason. A photo's width and height
+  are held to `codec.check_count`, since no full_clean runs on photos: from
+  2**63 the insert's OverflowError failed the whole preview. Files only under
   `consignes/` (`archive.STORAGE_FOLDERS`), written through the same
   `check_file`/`save_file` as the invoices', old ones deleted on commit; a
   photo missing from the exporting disk leaves its reprise without it (said),
@@ -5236,7 +5423,17 @@ imports (`transfer/legacy.py`).
   never merged as « inchangé ». One the archive classifies but this database
   lacks is created classified, with `is_expense` False.
 - Everything is refused while a gather or an import job runs: an import holds
-  SQLite's write lock for its whole transaction.
+  SQLite's write lock for its whole transaction. So is a second preview,
+  import or staging of the same espace while one runs (`views._one_import`,
+  a set of `tenant_key`s under a lock, refused at once with `IMPORT_RUNNING`
+  raised as `Busy` - « Un import est déjà en cours pour cet espace » -,
+  never queued). Each run holds the archive's sections parsed, up to about
+  0.9 GB for a hostile archive under archive.py's value budget, and several
+  tabs held one each, eight across the server's threads (review,
+  04/10/2026). It is per espace: another bar never waits on this one.
+  Known and left, the owner's call: previews and imports of DIFFERENT
+  espaces still run at once, each bounded by the archive-wide 25 M value
+  budget (~1 GB); only the same espace is serialised.
 - The archive (`.zip`, format `marginmate-archive` v1, `manifest.json`, one
   JSON per section, `files/`) holds the owner's invoices, bank and prices:
   never in git, never in a fixture. Build and read it streaming - the files
@@ -5265,9 +5462,27 @@ imports (`transfer/legacy.py`).
   `run_import` loads every section before applying any and the parses stay
   in memory to the end, so a cap per member let twelve members just under
   it hold some 10 GB. A real section is about 25 values a row: a million
-  rows fit. The legacy single-file path (`staging._stage_legacy`) counts
-  the same way. Nothing serialises two previews posted at once: each holds
-  its own archive's parse.
+  rows fit. The manifest has a share of its own, `MAX_MANIFEST_VALUES` (10
+  a member, a million): a real one is about 5 values a file. The old
+  associations file (`staging._stage_legacy`) has bounds of its own,
+  checked before it is read: `MAX_LEGACY_BYTES` (16 MB) and
+  `MAX_LEGACY_VALUES` (a million), refused as « Export d'associations
+  refusé : il est trop gros (16 Mo au plus). ». A real one is a few hundred
+  KB, and under the archive's bounds « {"products": [[], [], …]} » parsed
+  into some 0.9 GB before its shape was looked at. One preview, import or
+  staging of an espace runs at a time (`views._one_import`, above):
+  staging an upload or a backup parses its manifest, or an old associations
+  file whole, and eight sent at once from tabs or a script filled the
+  server's threads (review, 04/10/2026). **A stage keeps a few KB of its
+  manifest** (`staging._kept`): format, version, created_at, app_revision,
+  reason and each known section's counts, refused past `MAX_KEPT_BYTES`
+  (64 KB, notes included). state.json is read outside the lock, at every
+  view of the Importer tab (once per stage waiting) and of the stage's
+  page. Kept whole, a 16 MB manifest padded with an unknown key cost some
+  360 MB and 4 s a view per stage left waiting, and the lock only takes
+  them one at a time, it does not limit how many wait (review,
+  04/10/2026). Nothing but the pages reads `stage.manifest`: the preview
+  and the import open the archive again.
 
 Test every section the same way (`transfer/tests/support.py`): a round trip
 (export, clear, import, same snapshot by natural keys, files byte-identical),
@@ -5403,11 +5618,22 @@ silently, the units may differ. Rows being deleted are skipped, and
 `_stock_take_form_view` deletes them before saving the rest, so a row taken
 out and typed again in one save works. A typed negative count is refused;
 an old negative line coming back untouched is not, so it never traps the
-inventory. Known and left: swapping the products of two existing rows in
-one save, or two tabs adding the same product, still meets the unique
-constraint. The live price (`value_stock_take_line`) refuses what the save
-refuses: not finite, negative, or 1 000 000 and over. `taken_at` is between
-01/01/2000 and 31/12 of next year.
+inventory. A save that moves saved lines onto each other's product or
+article (a shift: row 0 takes row 1's product while row 1 moves on; a swap)
+repeats nothing on the page, so `BaseStockTakeLineFormSet.clean` accepts
+it, but updating the lines one at a time met the unique constraints, and
+no line can be nulled in between (`stocktakeline_exactly_one_source`).
+`_stock_take_form_view` therefore deletes every changed saved line whose
+product or article moved, before any line is saved and in the same
+transaction. Each is then written again under its own pk (`save()`
+inserts what its UPDATE no longer finds), so the edit form, ordered by
+pk, keeps the row where it was, and its sources are rebuilt as for any
+changed line. Known and left, the owner's call: two tabs adding the same
+product, or a stale tab saving a row onto a product another tab added as
+a new line meanwhile, still meet the unique constraint. The live price
+(`value_stock_take_line`) refuses what the save refuses: not finite,
+negative, or 1 000 000 and over. `taken_at` is between 01/01/2000 and
+31/12 of next year.
 
 **An invoice line with no printed volume stores `total_volume` 0, not NULL.**
 `product_counting_ratios` skips those lines (`total_volume__gt=0`); tested
@@ -7412,18 +7638,31 @@ failed first):
 - **The month's page costs the same whatever the number of versions**: every
   version's events in one prefetch, handed to `verify_event_chain(request,
   events)` (`SignatureQueryCountTests`). It had cost three queries a version.
-- **What anyone holding the link can make the journal say at will** -
-  « Lien ouvert », a PDF fetched through the link (`note_download`), a code
-  refused before any comparison (« aucun code en cours », « code expiré »,
-  « trop d'essais ») - goes through `signature_requests._log_unless_repeated`:
-  once an hour per (kind, IP, device, detail), and at most
-  `REPEATED_EVENTS_PER_HOUR` (10) an hour per kind and detail whatever the
-  devices claim, checked in the transaction that appends it. Once per
-  SESSION held only for a browser that keeps its cookie: a script wrote an
-  event and a session row per hit, and the proof file and the owner's month
-  page grew linearly (20 000 events: 5 s, 5 MB). Nothing is written into
-  the session for them. A code compared and the owner's own downloads
-  (`record_download`) are always events.
+- **What anyone holding the link can make the journal say at will is
+  capped twice.** « Lien ouvert », « Document téléchargé » per file (a PDF
+  fetched through the link, `note_download`), a code refused before any
+  comparison (« aucun code en cours », « code expiré », « trop d'essais »)
+  go through `signature_requests._log_unless_repeated`: once an hour per
+  (kind, IP, device, detail), at most `REPEATED_EVENTS_PER_HOUR` (10) an
+  hour per kind and detail whatever the devices claim, and at most
+  `REPEATED_EVENTS_PER_REQUEST` (200) of a kind and detail in the request's
+  whole life - past that, nothing more of them is logged for that request.
+  Checked in the transaction that appends it. Once per SESSION held only
+  for a browser that keeps its cookie: a script wrote an event and a
+  session row per hit, and the proof file and the owner's month page grew
+  linearly (20 000 events: 5 s, 5 MB). Ten an hour from a script changing
+  its user agent at every hit were still ~10 000 hash-chained events over a
+  fortnight, renewed by each « Nouveau lien » or countersignature. Nothing
+  is written into the session for them. A code compared and the owner's
+  own downloads (`record_download`) are always events; the owner's are
+  DOWNLOADED events with the same detail, so they count toward both caps
+  (`test_two_hundred_openings_in_a_request_s_life_at_most`,
+  `test_the_life_cap_counts_each_file_on_its_own`). Known and left, the
+  owner's call: a client keeping no cookie that POSTs « Recevoir un code
+  par e-mail » or « J'ai un code » still leaves one django_session row per
+  post (the refusal notice is carried in the session,
+  `public_views._notify`), and serve's start-up `clear_expired` removes
+  them only after two weeks. Carrying the notice otherwise is a UX choice.
 
 **The employer draws his signature too** (the owner, 28/09: « I cannot draw
 my signature as the employer »). « Contresigner… » on the month's page opens
@@ -7783,18 +8022,43 @@ pages, 200 000 characters, pdfminer's zoo of exceptions all « pas un PDF
 lisible », and what pdfminer INFLATES bounded: a 5 MB file can decompress to
 gigabytes, so `reading.bound_pdf_decoding` - installed by the app's
 `ready()`, for the whole process, Achats' PDFs included - caps Flate, LZW
-and RunLength at 64 MB per stream, and one bon's streams share 64 MB through
-`inflate_budget`; past it the bon is « trop long »); the format given or the ONE active format whose start motif
-matches (several is a refusal naming them); the re-send check (same format,
-number, delivery date, references and lines - only for a reading that names
-its bon); a reading that failed is stored anyway (file, text, the failed
-check) so « Relire » can fix it once the format is - a mailed bon refused
-would be lost for good. The file is `bon-<number kept to [0-9A-Za-z-]>.pdf`
-(a captured « 12/34 » or « ../x » is no folder), saved inside the atomic
-block with its row and lines, and deleted by the handlers OUTSIDE it when
-the block fails: Django has no « on rollback ». It never calls an invoice
+and RunLength at 64 MB per stream; what one bon may cost, below); the
+format given or the ONE active format whose start motif matches (several is
+a refusal naming them); the re-send check (same format, number, delivery
+date, references and lines - only for a reading that names its bon); a
+reading that failed is stored anyway (file, text, the failed check) so
+« Relire » can fix it once the format is - a mailed bon refused would be
+lost for good. The file is `bon-<number kept to [0-9A-Za-z-]>.pdf` (a
+captured « 12/34 » or « ../x » is no folder), saved inside the atomic block
+with its row and lines, and deleted by the handlers OUTSIDE it when the
+block fails: Django has no « on rollback ». It never calls an invoice
 importer - a bon read as an invoice files the empties as positive purchase
 lines, silently wrong money.
+
+**What one bon may cost pdfminer** (`reading.pdf_text`): its streams share
+4 MB through `inflate_budget` - and so does what pdfminer's interpreter
+RUNS of them, counted every time it runs one
+(`reading.bound_pdf_interpreting`: a stream listed again in /Contents, or a
+form drawn again with Do, is decoded and charged once but interpreted each
+time, at 6 to 11 s of CPU a MB; `RunLimit` is an `InflateLimit`); a page
+stops at `MAX_PAGE_GLYPHS` (30 000) glyphs, painted path segments and
+figures together (an image drawn by Do or inline, a form drawn), before the
+character, the curve or the figure is made (`reading.bound_pdf_glyphs`,
+process-wide, installed by the app's `ready()` with the decoders: about
+2 KB kept per glyph, point or figure; a 1 KB file drew 600 000 « A » into
+1,4 GB, a 4 KB one 400 000 images into 866 MB); and a reading's fonts
+declare `reading.MAX_CMAP_CODES` (200 000) codes at most - ToUnicode ranges
+and characters, TrueType cmaps of every format, CID /W and /W2 ranges,
+counted before each is made (`reading.bound_pdf_cmaps`, process-wide; an
+872-byte file took 360 MB). Past any of these the bon is « trop long »; an
+Achats reader's fonts past `MAX_CMAP_CODES` are DocumentTooBig « ses
+polices déclarent plus de 200 000 caractères » (`ocr.bounded_reading`).
+The most any of 1 374 real invoices declares is 1 416. « Ajouter des
+bons » refuses a post of more than `slips.MAX_SLIP_UPLOAD_FILES` (20)
+documents, or heavier than `common.UPLOAD_MAX_TOTAL_BYTES`, whole and
+before any is read; `store_uploads` reads for `UPLOAD_SECONDS` (60) at most
+and lists the files left « pas lu ». Every bon of a post is read in the
+request.
 
 **Which bons count (`comparison.effective_slips`)**, over EVERY bon of the
 formats involved, never only the ones on screen: a bon's moment is
@@ -7968,13 +8232,18 @@ no text) is imported as before. The « Analyse IA » upload goes through it
 too, before `parse_and_import`. A folder import draws a routed bon « Rangé
 dans Consignes », and one several formats recognise « Erreur » (stored
 nowhere, said in the batch's log); naming the shop of a kept file that turns
-out to be a bon does the same. Without the guard, UBA's bon was recognised by its printed
-phone number and read as a ticket - the empties filed as purchases. The
-cost: while a format has a start motif (the seeded one does), every PDF
-imported on Achats is read once more by pdfplumber. Not guarded: a mailbox
-source with a reader of its own (`parse_and_import`) and Metro, which never
-go through `import_document` - the seeded UBA invoice source does not match
-a bon's sender or subject (pinned by a test).
+out to be a bon does the same. A new shop named for such a slip, filed in
+Consignes or not (`ShopChoiceError` raised from a
+`RoutedToReturnablesError`, read off `__cause__`), is said « Enseigne X
+créée, sans ce fichier. » without « choisissez-la dans la liste »
+(`views._say_shop_made_anyway`), as `upload_invoice` does for every slip: a
+slip is no shop's document. Without the guard, UBA's bon was recognised by
+its printed phone number and read as a ticket - the empties filed as
+purchases. The cost: while a format has a start motif (the seeded one
+does), every PDF imported on Achats is read once more by pdfplumber. Not
+guarded: a mailbox source with a reader of its own (`parse_and_import`) and
+Metro, which never go through `import_document` - the seeded UBA invoice
+source does not match a bon's sender or subject (pinned by a test).
 
 **« Données »** (`transfer/sections/returnable_types.py` for the types and
 formats, in the « Configuration » group, and `transfer/sections/returnables.py`
