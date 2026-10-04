@@ -132,7 +132,10 @@ def switch_off_server_integrations() -> None:
 #: migrated, bound to it, in this order: dotted paths, resolved at the call
 #: (a test patches a step where it lives). The seed migrations wrote the
 #: owner's bar into the template; each step takes back what is his alone.
-HOSTED_ESPACE_STEPS: tuple[str, ...] = ("accounts.provisioning.switch_off_server_integrations",)
+HOSTED_ESPACE_STEPS: tuple[str, ...] = (
+    "accounts.provisioning.switch_off_server_integrations",
+    "invoices.seeds.forget_original_bar_suppliers",
+)
 
 
 def set_up_hosted_espace() -> None:

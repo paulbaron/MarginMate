@@ -137,6 +137,15 @@ class CreateShopTests(TestCase):
         make_supplier(code="EPICERIE_DU_COIN", name="Autre")
         self.assertEqual(create_shop("Épicerie du coin").code, "EPICERIE_DU_COIN_2")
 
+    def test_never_a_code_a_reader_of_the_code_answers_to(self):
+        """A new espace has no Sabbh Oriental nor Wing Seng (invoices.seeds):
+        a shop of its own named so must not become that till - its settings,
+        its header patterns - nor any other reader's supplier."""
+        Supplier.objects.filter(code__in=["SABBH", "WINGSENG"]).delete()
+        for name, code in (("Sabbh", "SABBH_2"), ("Wingseng", "WINGSENG_2"), ("Cecina", "CECINA_2"), ("LLM", "LLM_2")):
+            with self.subTest(name=name):
+                self.assertEqual(create_shop(name).code, code)
+
     def test_what_is_refused(self):
         make_invoice(supplier=Supplier.objects.get(code="SABBH"), ocr_text="Sabbh Oriental\nRUE DU TEMPLE\n")
         make_invoice(supplier=Supplier.objects.get(code="FRANPRIX"), ocr_text="FRANPRIX\n2 RUE DU TEMPLE\n")

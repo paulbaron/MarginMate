@@ -114,13 +114,16 @@ OWNER_ONLY = "Seul le propriétaire de l'espace peut importer ou effacer des don
 TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: Installed by the migrations into every database: a database holding only
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
-#: archive's settings.
+#: archive's settings. A new hosted espace holds only some of them - not the
+#: original bar's UBA, SABBH and WINGSENG (invoices.seeds) - and is new too.
 SEEDED_SUPPLIERS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 #: The sections whose rows the migrations install into every database too
 #: (the suppliers, the UBA mailbox search, the bank's format and recognition
 #: rules, the returnable types and the UBA slip format): merged into a new
 #: database, an archive's edited copy of one of them is a conflict and the
-#: installed one stays - only « Remplacer » gives them the archive's.
+#: installed one stays - only « Remplacer » gives them the archive's. A part
+#: holding no row is not named (`_holds_rows`): a new hosted espace holds no
+#: source.
 SEEDED_SECTIONS = ("fournisseurs", "sources", "regles_banque", "types_consignes")
 
 TABS = (
@@ -649,7 +652,26 @@ def _seeded_parts(stage) -> list[str]:
     present = [key for key in SEEDED_SECTIONS if key in stage.sections and key in usable]
     if not present or not _fresh_database():
         return []
-    return registry.labels(key for key in present if holds_only_seeds(key))
+    return registry.labels(key for key in present if _holds_rows(key) and holds_only_seeds(key))
+
+
+#: The tables each of `SEEDED_SECTIONS` installs rows into.
+SEEDED_MODELS = {
+    "fournisseurs": ("invoices.Supplier",),
+    "sources": ("invoices.InvoiceType",),
+    "regles_banque": ("bank.StatementFormat", "bank.OperationRule", "bank.IgnoreRule"),
+    "types_consignes": ("returnables.ReturnableType", "returnables.SlipFormat"),
+}
+
+
+def _holds_rows(key: str) -> bool:
+    """Whether this database holds a row of seeded part `key`: one holding
+    none has nothing installed for « Remplacer » to replace - a new espace
+    that is not the owner's starts without the original bar's mailbox
+    source (invoices.seeds). Read from the tables, as `holds_only_seeds`."""
+    from django.apps import apps
+
+    return any(apps.get_model(label).objects.exists() for label in SEEDED_MODELS.get(key, ()))
 
 
 def _stored_strategies(stage) -> dict[str, Strategy]:

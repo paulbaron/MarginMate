@@ -4684,7 +4684,12 @@ imports (`transfer/legacy.py`).
   « Remplacer » - **each only while it holds nothing but its seeds**
   (`views.holds_only_seeds`: the seeds by the names their migrations gave
   them, read off the migrations' own literals, edited or not; no ignore
-  rule at all, none is seeded). « Remplacer » deletes what the archive does
+  rule at all, none is seeded) **and holds a row at all** (`_holds_rows`: a
+  new espace that is not the owner's starts without the original bar's UBA,
+  its mailbox source and slip format, Sabbh Oriental and Wing Seng -
+  `invoices/seeds.py` - so its « Sources de factures » holds nothing to
+  replace; it is still a new database, holding a subset of
+  `SEEDED_SUPPLIERS`). « Remplacer » deletes what the archive does
   not name: an espace without its first invoice may well have imported
   statements and typed a « sans facture » rule already, and the note asked
   to delete it (review, 02/10/2026). The Exporter tab says the archive
@@ -7372,7 +7377,11 @@ with other tickets »): how a bon is read is a **format de bon**, a set of
 espace: three types (« Fûts », « Caisses verre », « Bouteilles CO2 ») and
 « UBA — bon du livreur », whose motifs were checked against the owner's real
 bons (every part found, every line read, every total matched, the re-sends
-and the replacements seen); tests that need an empty app call
+and the replacements seen) - except a new espace that is not the owner's,
+which drops that format with UBA (`invoices/seeds.py`, « Test data »): a bar
+buying from UBA there adds the supplier and a format de bon itself, or
+Achats' guard (`receipts.route_to_returnables`, active formats only) no
+longer sends a driver's bon to Consignes. Tests that need an empty app call
 `returnables/tests/support.py::no_defaults()`.
 
 **Migrations - unlike Personnel, other pages read these tables.**
@@ -7905,6 +7914,27 @@ arithmetic isn't exact decimal either — see the comments on
 `tests/factories.py` — plain functions, no factory_boy. Note that
 `invoices/migrations/0002_seed_suppliers` seeds METRO and UBA into every
 database, the test one included.
+
+**What a new espace starts with (`invoices/seeds.py`, 04/10/2026).** The test
+database, `_template` and the owner's espace hold every seed: Metro, UBA,
+« Autre (analyse IA) » (0002), « UBA - Factures » (0007), Franprix, Monoprix,
+Sabbh Oriental, Wing Seng (0012), the three returnable types and « UBA — bon
+du livreur » (returnables/0002). UBA, Sabbh Oriental and Wing Seng are the
+bar the app was written for: a new espace that is NOT the owner's drops them,
+with UBA's mailbox source and slip format (`forget_original_bar_suppliers`, a
+step of `accounts.provisioning.HOSTED_ESPACE_STEPS`, one transaction), and
+keeps Metro (not fetching), the AI reader, Franprix, Monoprix and the types.
+So **`Tenant.uses_server_integrations` also decides which seeds a new espace
+keeps** - it is set at creation only, and the owner's espace was adopted,
+never provisioned: nothing reaches it. Their readers and tills stay in the
+code (a till answers only where its row is, `receipts.configured_tills`;
+`create_shop` never takes a registry key as a code: « Sabbh » is
+`SABBH_2`). The seed migrations, `SEEDED_SUPPLIERS` and `SEEDED_SOURCE` are
+unchanged: a new espace holds a subset of the seeds. In a real tenant's
+test (`TwoTenantsTestCase`), only an `owner=True` espace has UBA or its
+format: `returnables.tests.support.seeded_format()` makes the format again
+where it is absent (under a new pk - SQLite never reuses one; a test needing
+the same pk in two espaces passes `pk=` to `make_format`).
 
 ## Known data issues (not code bugs)
 

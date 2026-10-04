@@ -1005,7 +1005,10 @@ def create_shop(name: str, header: str = "", ignoring=(), expenses_only: bool = 
     header = check_header(header, ignoring)
     base = re.sub(r"[^A-Z0-9]+", "_", plain_text(name)).strip("_")[:24] or "ENSEIGNE"
     code, suffix = base, 1
-    while Supplier.objects.filter(code=code).exists():
+    # Never a code a reader of the code answers to, its row absent or not: a
+    # shop named « Sabbh » in an espace without Sabbh Oriental (invoices.seeds)
+    # would become that till (ticket_parser_for is keyed on the code).
+    while code in PARSER_REGISTRY or Supplier.objects.filter(code=code).exists():
         suffix += 1
         code = f"{base}_{suffix}"
     supplier = Supplier.objects.create(

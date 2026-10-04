@@ -532,7 +532,8 @@ class PurchasesPeriodTests(NoNetworkTestCase):
 
 class GatherTenantsTests(TwoTenantsTestCase):
     """Bar Alpha is the owner's tenant; Bar Beta uses none of the server's
-    accounts. Both have the seeded format, under the same pk."""
+    accounts. Both have UBA's format, under the same pk: Beta, a new hosted
+    espace, starts without it (invoices.seeds) and is given it here."""
 
     owner_a = True
 
@@ -543,8 +544,10 @@ class GatherTenantsTests(TwoTenantsTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         with bound_tenant(self.bar_a):
-            self.code = code_of(seeded_format())
+            seeded = seeded_format()
+            self.code = code_of(seeded)
         with bound_tenant(self.bar_b):
+            make_format(name=SEEDED_FORMAT_NAME, pk=seeded.pk)
             self.assertEqual(code_of(seeded_format()), self.code, "the same pk in both, or this proves less")
 
     def test_the_card_offers_the_slips_in_the_owners_tenant_only(self):
