@@ -26,7 +26,9 @@ IMMUTABLE = "max-age=31536000, public, immutable"
 
 #: The date of each file's copy in STATIC_ROOT, read once: code, the same
 #: for every espace, and changed only by the collectstatic of a new start.
-_COLLECTED: dict[str, int] = {}
+#: None for a file with no copy there - one added since, which WhiteNoise,
+#: having indexed STATIC_ROOT at the start, would not serve either.
+_COLLECTED: dict[str, int | None] = {}
 
 
 @receiver(setting_changed)
@@ -41,14 +43,12 @@ def collected_version(path: str) -> int | None:
     with no copy there."""
     if settings.WHITENOISE_AUTOREFRESH or not settings.STATIC_ROOT:
         return None
-    version = _COLLECTED.get(path)
-    if version is None:
+    if path not in _COLLECTED:
         try:
-            version = int(os.path.getmtime(os.path.join(settings.STATIC_ROOT, path)))
+            _COLLECTED[path] = int(os.path.getmtime(os.path.join(settings.STATIC_ROOT, path)))
         except (OSError, ValueError):
-            return None
-        _COLLECTED[path] = version
-    return version
+            _COLLECTED[path] = None
+    return _COLLECTED[path]
 
 
 class VersionedWhiteNoiseMiddleware(WhiteNoiseMiddleware):

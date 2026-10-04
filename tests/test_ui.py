@@ -1117,6 +1117,17 @@ class AssetVersioningTests(TestCase):
         with mock.patch.object(os.path, "getmtime", side_effect=AssertionError("dated again")):
             self.assertEqual(assets.asset("css/marginmate.css"), "/static/css/marginmate.css?v=1700000000")
 
+    def test_on_the_server_a_file_with_no_copy_is_looked_for_there_once(self):
+        """A file added after the start's collectstatic has no copy to date,
+        and WhiteNoise, which indexed STATIC_ROOT once, will not serve one
+        made later: looking for it again at every page found nothing."""
+        from config.static import collected_version
+
+        self.collected()
+        self.assertIsNone(collected_version("css/essai-absent.css"))
+        with mock.patch.object(os.path, "getmtime", side_effect=AssertionError("looked for again")):
+            self.assertIsNone(collected_version("css/essai-absent.css"))
+
     def test_on_the_server_the_address_asset_prints_is_kept_a_year(self):
         """WhiteNoise said « max-age=60 » of every file: after a minute each
         page asked again for its stylesheet and topbar.js before drawing
