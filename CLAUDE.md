@@ -3232,7 +3232,23 @@ datum is, so a format of them names no column.
   OFX or CAMT.053 file, each refused in French; a refusal echoes
   `ECHO_MAX` (80) characters of the file at most (`echoed`: an amount, a
   code, a currency can be the whole file, and a message travels through the
-  session). Every refusal is French: `statements.REFUSALS` and each
+  session). **A CSV row is bounded too** (`MAX_ROW_CHARS`, 64 Kio over every
+  line a quoted cell spans, `NOT_A_CSV`, counted by `_RowBound` as the csv
+  module asks for each line): the module builds a whole row before anything
+  counts its cells, and one row of 9 MB held 231 MB (review, 04/10/2026). An
+  OFX or CAMT.053 label is cut to `LABEL_MAX` (1 000, what the rules read -
+  `cut_label`, as a type is cut: a CAMT.053 payroll batch's label joins
+  fifty payees and is read, cut); a CSV's is as printed. **Every reader is
+  linear in its file** (review, 04/10/2026, each pinned by a test): an OFX
+  file's comments are set aside in one pass (`ofx._without_comments`; a
+  lazy `<!--.*?-->` cost about forty hours of CPU on 8 Mo of unclosed
+  `<!--`, and « Relevé OFX » is every hosted espace's default), a leaf finds
+  its known parents at once (`ofx._nearest`), a CAMT.053 element ending
+  empties its parent (`del parent[:]` - one `remove` each moved every sibling
+  a 64 KB chunk built ahead: a sibling flood inside one entry took 22 s),
+  and more `=` than `camt.MAX_ATTRIBUTES` (200 000: every attribute has one,
+  and expat builds an element's all at once) is refused before parsing.
+  Every refusal is French: `statements.REFUSALS` and each
   reader's `REFUSALS` are what the readers' mutation tests
   (`test_ofx.MutationTests`, `test_camt.MutationTests`, 1 500 damaged files
   each) find, and nothing else.
@@ -3248,11 +3264,24 @@ datum is, so a format of them names no column.
   (two accounts refuse the file); each `STMTTRN` of `BANKTRANLIST` - never
   the pending `BANKTRANLISTP` -: `DTPOSTED`'s first eight digits (they must
   be digits before `strptime`), `DTAVAIL` the value date, `TRNAMT` digit
-  for digit (« -12.50 », « -12,5 »; « 1.234,56 », an exponent refused), a
+  for digit (« -12.50 », « -12,5 »; « 1.234,56 », an exponent refused, and
+  a third decimal that is not a zero - « -8.505 » was read and rounded by
+  the column while the fingerprint kept it), a
   `CURRENCY` other than the euro refused (`ORIGCURRENCY` only informs),
   `NAME` (else `PAYEE/NAME`) then `MEMO` the label, `TRNTYPE` the type.
   `DTUSER` and `FITID` are not read: a card date comes from a rule, and the
   fingerprint is the CSV's - the same month in SGML and XML gives the same.
+  A file holding no `<OFX>` at all - a CSV, most often, the usual French
+  export, under a hosted espace's default « Relevé OFX » - is told where a
+  CSV is read (`statements.not_this_kind`: « … se lit avec un format CSV -
+  choisissez-en un à l'import, ou ajoutez-en un sur « Format du relevé »
+  (« Partir d'un modèle ») »), never only to export it as OFX again; an
+  account wider than its column has the reader's own sentence
+  (`ofx.ACCOUNT_TOO_LONG`, `camt.ACCOUNT_TOO_LONG`: the CSV's tells a person
+  to tighten an account pattern these formats do not have). **An encoded
+  line break (`&#10;`, `&#13;`) in a label refuses the file** (B3: no
+  control but the tab) - a literal one is read; whether to map those two to
+  a space is the lead's decision (review, 04/10/2026, note 16).
 - **CAMT.053** (`bank/camt.py`): guarded as `invoices.einvoice` guards an
   e-invoice, with a bank's sentences, BEFORE any parser (8 Mo; a wide
   encoding; a declared encoding outside utf-8, us-ascii, iso-8859-1,
@@ -3263,25 +3292,37 @@ datum is, so a format of them names no column.
   finished element cleared and let go of**, and any ParseError, ValueError
   or LookupError said as `BROKEN_XML`. A camt.052 or .054 is said as such.
   One line per `Ntry`, a batch included; BOOK only (`Sts` or `Sts/Cd`),
-  euros only, DBIT negative, `BookgDt` and `ValDt`, the ISO code
+  euros only, DBIT negative, the amount two decimals at most (zeros past
+  them aside, up to the schema's five), `BookgDt` and `ValDt`, the ISO code
   `Domn/Fmly/SubFmly` (« PMNT/CCRD/POSD ») then `Prtry/Cd` as the type,
   `AddtlNtryInf` (else each detail's counterparty and `Ustrd`) as the label;
-  the account `Acct/Id/IBAN` (else `Othr/Id`), one per file.
+  the account `Acct/Id/IBAN` (else `Othr/Id`), one per file. A file that is
+  no XML at all (it does not open on « < », a byte order mark and spaces
+  aside) is told where a CSV is read, before any parser.
 - **The file's kind is read from its content, never switched**
   (`statements.sniff`, its first 4 KB): an OFX or a camt document under a
   format of another kind is refused naming both kinds by their labels
   (« Ce fichier est un relevé OFX / QFX (Money), et le format « … » lit les
   fichiers CSV (colonnes) : choisissez un format OFX / QFX (Money) à
   l'import, ou ajoutez-en un sur « Format du relevé ». »), another XML
-  document (an invoice dropped there) has its own sentence. A CSV has no
-  mark: none of the 400 oracle files is taken for anything (pinned), so the
-  CSV path is untouched. Read with another format in silence, a file would
-  go in with another account, label and fingerprint than the person chose.
-  The import and « Tester » take `.csv`, `.ofx`, `.qfx` and `.xml`
-  (`ACCEPTED_EXTENSIONS`, one `ACCEPT_ATTRIBUTE` for every file input).
+  document (an invoice dropped there) has its own sentence, and **another
+  camt message (camt.052, camt.054) its own, under any format**
+  (`statements.other_camt`: `sniff` says « camt.052 »; called a CAMT.053,
+  it was sent to a CAMT.053 format that then refused it as a camt.052). A
+  CSV has no mark: none of the 400 oracle files is taken for anything
+  (pinned), so the CSV path is untouched. Read with another format in
+  silence, a file would go in with another account, label and fingerprint
+  than the person chose. « Tester » asks `refuse_another_kind` before it
+  numbers a row (an OFX file's lines were drawn as a CSV's columns above
+  « this is an OFX »), and checks a CSV's text once (`csv_text`) for its
+  rows and its operations (`parse_statement(…, text=)`): split twice, never
+  three times. The import and « Tester » take `.csv`, `.ofx`, `.qfx` and
+  `.xml` (`ACCEPTED_EXTENSIONS`, one `ACCEPT_ATTRIBUTE` for every file
+  input).
 - **Presets: « Partir d'un modèle »** (`bank/presets.py`, the list page's
   `#modeles`, posted as `action=modele` and answered before the format
-  form is read; linked from Banque's empty state, an empty list and
+  form is read; linked from Banque's empty state - which names them from
+  `presets.PRESETS`, no bank written in the template -, an empty list and
   « Reconnaissance des opérations »): « Relevé OFX » (rules on the
   `TRNTYPE` codes POS, DIRECTDEBIT, XFER/DIRECTDEP), « Relevé CAMT.053 »
   (rules on the ISO codes PMNT/CCRD/POSD, PMNT/RDDT, PMNT/ICDT, PMNT/RCDT,
@@ -3582,9 +3623,17 @@ datum is, so a format of them names no column.
   source form's lesson, « Gathering invoices »). So the form requires a
   CSV's fields of a CSV alone (`CSV_REQUIRED`), drops their errors for
   another kind (a page without its script sent them) and stores
-  `forms.CANONICAL` in them; a POST saying no kind keeps the format's own.
-  The form's own errors are said once (`_form_fields.html`'s
-  `fields_only`). **`staff/tests/page_forms.py` posts nothing a
+  `forms.CANONICAL` in them (`presets` stores the same, one definition); a
+  POST saying no kind keeps the format's own. **A stored format's kind of
+  file never changes**: its menu is drawn disabled, saying why
+  (`forms.FILE_TYPE_FIXED`), and nothing posted for it is read - changed,
+  the BNP format's columns were written over with `CANONICAL`, and the
+  preset, which keeps a name that is there, could not bring them back
+  (review, 04/10/2026). Another kind is a new format. The encoding's help
+  says a CAMT.053 file reads in the encoding its XML declares. The form's
+  own errors are said once (`_form_fields.html`'s `fields_only`).
+  `bank/tests/test_statement_format_browser.py` (tagged « browser ») saves
+  an OFX format in Chrome, the script hiding and disabling a CSV's fields. **`staff/tests/page_forms.py` posts nothing a
   `<fieldset disabled>` holds** (but its first `<legend>`), as a browser:
   a test of « Format du relevé » sends exactly what the owner's click
   would. The list says each format's kind (« Fichier ») and, for an OFX or
@@ -3623,8 +3672,11 @@ datum is, so a format of them names no column.
   `file_type` is carried and compared like any field; **a format record
   without one (an archive written before 0009) is a CSV**, never « not
   said »: replaced onto an OFX format of the same name here, its columns
-  would otherwise have been written onto a format that stayed OFX. The
-  date column is no longer a required key (`FORMAT_REQUIRED`): a CSV
+  would otherwise have been written onto a format that stayed OFX. A record
+  of a kind that names no column has a CSV's fields as the page stores them
+  (`NO_COLUMN_FILE_TYPES`, `forms.CANONICAL`), whatever the archive says
+  there: the check skips them for such a kind, and they were stored as said.
+  The date column is no longer a required key (`FORMAT_REQUIRED`): a CSV
   without one is refused by the format's own check (« colonne de la date :
   indiquez une colonne »).
 - Migration `bank/0007`, **WRITTEN and left to be applied** with 0003-0006
