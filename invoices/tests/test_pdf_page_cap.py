@@ -839,3 +839,94 @@ class TooManyCodesTests(TestCase):
     def test_within_the_cap_the_document_reads(self):
         with mock.patch.object(reading, "MAX_CMAP_CODES", 6_000):
             self.assertEqual(ocr.text_layer_pages(self.path), [None])
+
+
+class TooBigObjectsTests(TestCase):
+    """pdfminer builds every object it parses whole, and parses a whole
+    object stream for one of its objects: an ink annotation of 4 million
+    points beside the page, in a 55 KB file, took 24 s and 1,1 GB in
+    check_page_count alone. Every Achats reader stops at
+    `returnables.reading.MAX_PARSED_TOKENS` tokens and says it on the file's
+    line. Machine safety: the cap is patched down to 1 000, the annotation
+    holds 5 000 numbers - but for the review's own file, refused at the real
+    caps before its object stream is parsed."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "encre.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(5_000))
+        patch = mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        from invoices.parsers import llm_fallback
+
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+            "llm_fallback": llm_fallback._extract_text,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture.",
+            )
+
+    def test_an_annotation_s_object_stream_is_refused_by_the_weighing(self):
+        """The page outside it: only weighing what PDFium will draw resolves
+        the annotation - refused there, in the page count and before PDFium,
+        and not as « trop lourd une fois décompressé »."""
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(5_000, page_inside=False))
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture.",
+            )
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            ocr.check_page_count(self.path)
+
+    def test_the_e_invoice_reader_finds_none_and_the_count_says_it(self):
+        from invoices import einvoice
+
+        self.assertIsNone(einvoice.embedded_xml(self.path))
+        with mock.patch("invoices.receipts.page_images", never("page_images")):
+            with self.assertRaises(ocr.DocumentTooBig):
+                import_document(self.path, display_filename="encre.pdf")
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_the_review_s_file_is_refused_at_once(self):
+        """4 million points, at the real caps: its object stream decodes to
+        16 MB, past MAX_OBJECT_STREAM_BYTES - refused before it is parsed."""
+        import time
+
+        from returnables.tests.test_reading import ink_in_object_stream
+
+        with open(self.path, "wb") as handle:
+            handle.write(ink_in_object_stream(4_000_000))
+        started = time.process_time()
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 100_000), self.assertRaises(ocr.DocumentTooBig):
+            ocr.check_page_count(self.path)
+        self.assertLess(time.process_time() - started, 5)
+
+    def test_within_the_cap_the_document_reads(self):
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.document_text(self.path), "")

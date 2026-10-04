@@ -331,6 +331,7 @@ TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caract�
 TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
 TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
 TOO_MANY_CODES = "Document trop chargé pour être lu : ses polices déclarent plus de {limit} caractères."
+TOO_BIG_OBJECTS = "Document trop chargé pour être lu : ses objets sont trop gros pour un ticket ou une facture."
 TOO_HEAVY_TO_DRAW = "Document trop lourd à afficher : plus de {weight} de mémoire pour dessiner ses pages."
 TOO_SLOW_TO_DRAW = "Document trop lourd à afficher : plus de {seconds} secondes pour dessiner ses pages."
 TOO_MUCH_DRAWN = "Document trop lourd à afficher : ses pages dessinées pèsent plus de {weight}."
@@ -609,7 +610,9 @@ def check_page_count(path: str) -> None:
     every page made) took 4,5 s and 25 MB.
 
     Then its pages' content streams are weighed (`_weigh_contents`): past
-    MAX_INFLATE_TOTAL inflated, or MAX_RUN_TOTAL drawn, DocumentTooBig too.
+    MAX_INFLATE_TOTAL inflated, or MAX_RUN_TOTAL drawn, DocumentTooBig too -
+    and so are, in either, objects past what pdfminer may parse
+    (reading.bound_pdf_parsing: TOO_BIG_OBJECTS).
 
     Not a PDF (by its name: a photo is `page_images`' to weigh), or one
     pdfminer cannot open or walk: it passes - what is wrong with it is said
@@ -619,9 +622,13 @@ def check_page_count(path: str) -> None:
 
 
 def _refuse_past_the_cap(path: str) -> None:
+    from returnables import reading
+
     try:
         counted, declared = _walk_pages(path, MAX_PAGES + 1)
-    except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+    except Exception as error:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+        if reading.parse_refused(error):
+            raise DocumentTooBig(TOO_BIG_OBJECTS) from None
         return
     if counted > MAX_PAGES:
         said = declared if isinstance(declared, int) and declared > MAX_PAGES else f"plus de {MAX_PAGES}"
@@ -675,6 +682,8 @@ def _weigh_contents(path: str, strict: bool = False) -> None:
         except (DocumentTooBig, UnreadablePdf):
             raise
         except Exception as error:  # pdfminer raises its own zoo for a broken file
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             if strict:
@@ -769,6 +778,8 @@ def _decode_drawn(page, budget: list, drawn: list, strict: bool = False) -> None
         try:
             return resolve1(item)
         except Exception as error:  # noqa: BLE001 - a missing object, PDFium skips it too
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             return None
@@ -777,6 +788,8 @@ def _decode_drawn(page, budget: list, drawn: list, strict: bool = False) -> None
         try:
             return copy.copy(stream).get_data()
         except Exception as error:  # a damaged stream is the reader's to say
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             if strict:
@@ -884,7 +897,8 @@ def bounded_reading():
     MAX_INFLATE_TOTAL (returnables.reading.inflate_budget - should a stream
     escape `_weigh_contents`), what it runs MAX_RUN_TOTAL, and what pdfminer
     stopped (those budgets, a page past reading.MAX_PAGE_GLYPHS glyphs, fonts
-    mapping past reading.MAX_CMAP_CODES codes) is DocumentTooBig, said on the
+    mapping past reading.MAX_CMAP_CODES codes, objects past what
+    reading.bound_pdf_parsing parses) is DocumentTooBig, said on the
     file's line - not the PdfminerException pdfplumber wraps it in, which a
     reader's caller takes for a broken file. Entered by the caller, not
     inside `pdf_pages`: the page is read in the caller's loop, never in the
@@ -907,6 +921,8 @@ def bounded_reading():
             if reading.codes_refused(error):
                 limit = group_thousands(reading.MAX_CMAP_CODES)
                 raise DocumentTooBig(TOO_MANY_CODES.format(limit=limit)) from None
+            if reading.parse_refused(error):
+                raise DocumentTooBig(TOO_BIG_OBJECTS) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             raise

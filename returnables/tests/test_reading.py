@@ -9,6 +9,7 @@ invoices/tests/pdf_files.write_pdf into a temporary folder.
 
 import io
 import os
+import struct
 import tempfile
 import zlib
 from datetime import date
@@ -1284,3 +1285,148 @@ class CMapBoundTests(SimpleTestCase):
             self.assertTrue(reading.codes_refused(caught.exception), repr(caught.exception))
             with pdfplumber.open(io.BytesIO(mapping_codes(bfrange(0, 599), fonts=2))) as pdf:
                 self.assertEqual(pdf.pages[0].extract_text(), "REPRISE VIDE")
+
+
+def ink_in_object_stream(numbers: int, page_inside: bool = True) -> bytes:
+    """A one-page PDF printing DRAWN whose page sits in an object stream beside
+    an ink annotation of `numbers` coordinates - the security review's file:
+    whatever wants the page (counting the pages) has pdfminer parse the
+    whole stream, the annotation's every number built. Not `page_inside`:
+    the annotation alone, which only weighing the page's drawings wants."""
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>"
+    )
+    ink = b"<< /Type /Annot /Subtype /Ink /Rect [0 0 595 842] /InkList [[" + b"10 " * numbers + b"]] >>"
+    held = [(3, page), (6, ink)] if page_inside else [(6, ink)]
+    pairs, at = [], 0
+    for number, body in held:
+        pairs.append(f"{number} {at}")
+        at += len(body) + 1
+    first = (" ".join(pairs) + " ").encode()
+    packed = zlib.compress(first + b" ".join(body for _number, body in held))
+    loose = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        4: b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+        5: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        7: (
+            f"<< /Type /ObjStm /N {len(held)} /First {len(first)} /Filter /FlateDecode /Length {len(packed)} >>\n"
+            "stream\n".encode()
+            + packed
+            + b"\nendstream"
+        ),
+    }
+    if not page_inside:
+        loose[3] = page
+    output, offsets = bytearray(b"%PDF-1.5\n"), {}
+    for number, body in sorted(loose.items()):
+        offsets[number] = len(output)
+        output += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(output)
+    rows = {0: (0, 0, 65535), 8: (1, xref, 0)}
+    rows.update({number: (2, 7, index) for index, (number, _body) in enumerate(held)})
+    table = b"".join(struct.pack(">BIH", *rows.get(number, (1, offsets.get(number), 0))) for number in range(9))
+    output += f"8 0 obj\n<< /Type /XRef /Size 9 /W [1 4 2] /Root 1 0 R /Length {len(table)} >>\nstream\n".encode()
+    output += table + f"\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(output)
+
+
+def page_holding(junk: bytes) -> bytes:
+    """A one-page PDF printing DRAWN whose page dictionary holds `junk`."""
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 5 0 R >> >> " + junk + b" >>",
+            b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
+
+
+class ParseBoundTests(SimpleTestCase):
+    """pdfminer builds every object it parses whole, and parses a whole
+    object stream as soon as one of its objects is wanted: a 55 KB file
+    whose object stream held an ink annotation of 4 million points beside
+    its page took 24 s and 1,1 GB to count its pages. Every pdfminer reader
+    now stops a reading at MAX_PARSED_TOKENS tokens, a token at
+    MAX_TOKEN_BYTES, an object stream at MAX_OBJECT_STREAM_BYTES, before
+    more is built. MACHINE SAFETY: the caps are patched DOWN; nothing here
+    parses more than a few thousand tokens."""
+
+    def parsed(self, content: bytes) -> list:
+        """The tokens pdfminer's object parser read while pdf_text read
+        `content`, and what it gave."""
+        from pdfminer.pdfparser import PDFParser
+
+        made, nexttoken = [], PDFParser.nexttoken
+
+        def counted(parser):
+            made.append(1)
+            return nexttoken(parser)
+
+        counted.parse_bound = True
+        with mock.patch.object(PDFParser, "nexttoken", counted):
+            try:
+                return [len(made), pdf_text(content)]
+            except Exception as error:  # noqa: BLE001 - what the reader raised is the result
+                return [len(made), error]
+
+    def test_an_object_stream_past_the_tokens_is_too_long_before_it_is_built(self):
+        bomb = ink_in_object_stream(5_000)
+        self.assertLess(len(bomb), 1_000)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000):
+            made, said = self.parsed(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertLessEqual(made, 1_001)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            self.assertEqual(pdf_text(bomb), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_PARSED_TOKENS, 100_000)
+
+    def test_comments_count_as_tokens(self):
+        """One nexttoken reads a run of them whole: counted one by one."""
+        content = page_holding(b"%\n" * 2_000)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000), self.assertRaises(SlipError) as caught:
+            pdf_text(content)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 5_000):
+            self.assertEqual(pdf_text(content), "REPRISE VIDE")
+
+    def test_a_token_past_its_bytes_is_too_long(self):
+        """pdfminer copies a long token again for every 4 KB it reads of it:
+        8 MB of string took 1,6 s, of hexadecimal 3,7 s."""
+        for junk in (b"/Junk (" + b"a" * 20_000 + b")", b"/Junk <" + b"41" * 10_000 + b">", b"%" * 20_000 + b"\n"):
+            with self.subTest(junk=junk[:7]):
+                with mock.patch.object(reading, "MAX_TOKEN_BYTES", 8_192), self.assertRaises(SlipError) as caught:
+                    pdf_text(page_holding(junk))
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                with mock.patch.object(reading, "MAX_TOKEN_BYTES", 64 * 1024):
+                    self.assertEqual(pdf_text(page_holding(junk)), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_TOKEN_BYTES, 1024 * 1024)
+
+    def test_an_object_stream_past_its_bytes_is_too_long_before_it_is_parsed(self):
+        bomb = ink_in_object_stream(500)
+        with mock.patch.object(reading, "MAX_OBJECT_STREAM_BYTES", 1_000):
+            made, said = self.parsed(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertLess(made, 200)
+        with mock.patch.object(reading, "MAX_OBJECT_STREAM_BYTES", 4_000):
+            self.assertEqual(pdf_text(bomb), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_OBJECT_STREAM_BYTES, 1024 * 1024)
+
+    def test_a_document_read_outside_any_reading_is_bounded_alone(self):
+        """pdfminer opened with no reading under way (no inflate_budget):
+        the document is held to the cap by itself."""
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdfpage import PDFPage
+        from pdfminer.pdfparser import PDFParser
+
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000):
+            with self.assertRaises(reading.ParseLimit):
+                list(PDFPage.create_pages(PDFDocument(PDFParser(io.BytesIO(ink_in_object_stream(5_000))))))
+            document = PDFDocument(PDFParser(io.BytesIO(ink_in_object_stream(500))))
+            self.assertEqual(len(list(PDFPage.create_pages(document))), 1)

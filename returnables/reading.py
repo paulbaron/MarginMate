@@ -30,6 +30,13 @@
   in an 872-byte file took 360 MB. One reading's fonts together declare MAX_CMAP_CODES at most
   (`CMapLimit`, an InflateLimit): the slip is « trop long », Achats' reader
   DocumentTooBig.
+- **And what its parser builds** (`bound_pdf_parsing`, process-wide): every
+  object it parses is built whole, and an object stream parsed whole for
+  one of its objects - a 55 KB file's ink annotation of 4 million points
+  took 24 s and 1,1 GB to count its pages. One reading parses
+  MAX_PARSED_TOKENS tokens, a token MAX_TOKEN_BYTES and an object stream
+  MAX_OBJECT_STREAM_BYTES at most (`ParseLimit`, an InflateLimit): the slip
+  is « trop long », Achats' reader DocumentTooBig.
 - `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
   lines, what could not be read, the delivery date, the number, the
   delivery-note references, « annule et remplace », the printed total, the
@@ -112,6 +119,16 @@ MAX_PAGE_GLYPHS = 30_000
 #: billion, is refused in 0,4 s, 33 MB). Three fonts mapping every 2-byte
 #: code fit; the most of 1 374 real invoices is 1 416, in one reading.
 MAX_CMAP_CODES = 200_000
+#: What pdfminer's object parser may read of one PDF (bound_pdf_parsing): its
+#: tokens - every number, name, string, bracket and keyword of the objects
+#: it parses - and comments in one reading (the review's object stream of
+#: 280 000 numbers is refused in 0,4 s and 7 MB); one token's bytes; an
+#: object stream's, decoded. Of 1 374 real invoices, one reading parses
+#: 8 042 tokens at most (Achats' text layer), no token spans two 4 KB reads,
+#: and the biggest object stream decodes to 11 KB.
+MAX_PARSED_TOKENS = 100_000
+MAX_TOKEN_BYTES = 1024 * 1024
+MAX_OBJECT_STREAM_BYTES = 1024 * 1024
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
 SHOWN_LINE_CHARS = 120
@@ -262,12 +279,19 @@ class CMapLimit(InflateLimit):
     """The codes a reading's fonts map, past MAX_CMAP_CODES."""
 
 
+class ParseLimit(InflateLimit):
+    """What pdfminer's object parser reads in one reading, past its bounds
+    (MAX_PARSED_TOKENS, MAX_TOKEN_BYTES, MAX_OBJECT_STREAM_BYTES)."""
+
+
 #: [bytes left] of the reading under way in this thread (pdf_text), or None.
 _BUDGET: ContextVar[list | None] = ContextVar("returnables_inflate_budget", default=None)
 #: [bytes left] the interpreter may still run in that reading, or None.
 _RUN: ContextVar[list | None] = ContextVar("returnables_run_budget", default=None)
 #: [codes left] the fonts of that reading may still map, or None.
 _CODES: ContextVar[list | None] = ContextVar("returnables_cmap_codes", default=None)
+#: [tokens left] pdfminer's object parser may still read in that reading, or None.
+_TOKENS: ContextVar[list | None] = ContextVar("returnables_parsed_tokens", default=None)
 
 
 @contextmanager
@@ -276,14 +300,16 @@ def inflate_budget(total: int, run: int | None = None):
     the streams of one document together (a page may list hundreds); what
     the interpreter runs has `run` bytes (`total` when None), a stream
     counted each time it is run (`bound_pdf_interpreting`); its fonts' maps
-    MAX_CMAP_CODES codes (`bound_pdf_cmaps`). Yields the budget, [bytes
-    left]: -1 once a decode, or a run, was refused."""
+    MAX_CMAP_CODES codes (`bound_pdf_cmaps`); its objects MAX_PARSED_TOKENS
+    tokens (`bound_pdf_parsing`). Yields the budget, [bytes left]: -1 once
+    a decode, or a run, was refused."""
     budget = [total]
     token, run_token = _BUDGET.set(budget), _RUN.set([total if run is None else run])
-    codes_token = _CODES.set([MAX_CMAP_CODES])
+    codes_token, tokens_token = _CODES.set([MAX_CMAP_CODES]), _TOKENS.set([MAX_PARSED_TOKENS])
     try:
         yield budget
     finally:
+        _TOKENS.reset(tokens_token)
         _CODES.reset(codes_token)
         _RUN.reset(run_token)
         _BUDGET.reset(token)
@@ -303,6 +329,11 @@ def run_refused(error: BaseException | None) -> bool:
 def codes_refused(error: BaseException | None) -> bool:
     """Whether CMapLimit is behind `error` (inflate_refused says so too)."""
     return _behind(error, CMapLimit)
+
+
+def parse_refused(error: BaseException | None) -> bool:
+    """Whether ParseLimit is behind `error` (inflate_refused says so too)."""
+    return _behind(error, ParseLimit)
 
 
 def _behind(error: BaseException | None, kind: type) -> bool:
@@ -649,6 +680,97 @@ def _bounded_widths(get_widths, numbers: int):
 bound_pdf_cmaps()
 
 
+# -- What pdfminer parses ---------------------------------------------------------------------------------------------
+
+
+def bound_pdf_parsing() -> None:
+    """Count what pdfminer's object parser reads - the file's objects and an
+    object stream's, never a page's content (the run budget bounds that,
+    `bound_pdf_interpreting`) nor a font's maps -, for the whole process
+    (idempotent), and stop past its bounds (`ParseLimit`, an InflateLimit)
+    before the next token is made: MAX_PARSED_TOKENS tokens and comments in
+    one reading (`inflate_budget`; with no reading, for its document),
+    MAX_TOKEN_BYTES read for one token, an object stream decoding past
+    MAX_OBJECT_STREAM_BYTES. pdfminer builds every object it parses whole -
+    an array of four million numbers is a list of four million - and parses
+    a whole object stream as soon as one of its objects is wanted: a 55 KB
+    file whose object stream held an ink annotation of 4 million points took
+    24 s and 1,1 GB to count its pages, the page being in that stream. A
+    long token is copied again for every 4 KB read: 8 MB of string took
+    1,6 s, of hexadecimal 3,7 s."""
+    from pdfminer.pdfparser import PDFParser, PDFStreamParser
+    from pdfminer.psparser import PSBaseParser
+
+    if getattr(PDFParser.nexttoken, "parse_bound", False):
+        return
+    nexttoken, parse_comment, fillbuf = PSBaseParser.nexttoken, PSBaseParser._parse_comment, PSBaseParser.fillbuf
+    stream_parser = PDFStreamParser.__init__
+
+    def counted_nexttoken(self):
+        _count_token(self)
+        self._buffers_left = MAX_TOKEN_BYTES // self.BUFSIZ
+        try:
+            return nexttoken(self)
+        finally:
+            self._buffers_left = None
+
+    def counted_comment(self, s, i):
+        # Never a token: one nexttoken would read a run of them whole.
+        _count_token(self)
+        return parse_comment(self, s, i)
+
+    def bounded_fillbuf(self):
+        before = self.buf
+        refilled = fillbuf(self)
+        left = getattr(self, "_buffers_left", None)
+        # Counted inside nexttoken only: nextline reads a stream's bytes.
+        if left is not None and self.buf is not before:
+            self._buffers_left = left - 1
+            if left <= 0:
+                _refuse_parsing(self)
+        return refilled
+
+    def bounded_stream_parser(self, data):
+        if len(data) > MAX_OBJECT_STREAM_BYTES:
+            _refuse_parsing(None)
+        stream_parser(self, data)
+
+    counted_nexttoken.parse_bound = True
+    PDFParser.nexttoken = counted_nexttoken
+    PDFParser._parse_comment = counted_comment
+    PDFParser.fillbuf = bounded_fillbuf
+    PDFStreamParser.__init__ = bounded_stream_parser
+
+
+def _tokens_left(parser) -> list | None:
+    """[tokens left] of the reading under way - else of `parser`'s document,
+    or of `parser` alone (None: of no reading)."""
+    left = _TOKENS.get()
+    if left is None and parser is not None:
+        holder = parser.doc if getattr(parser, "doc", None) is not None else parser
+        left = holder.__dict__.setdefault("_tokens_left", [MAX_PARSED_TOKENS])
+    return left
+
+
+def _count_token(parser) -> None:
+    left = _tokens_left(parser)
+    left[0] -= 1
+    if left[0] < 0:
+        raise ParseLimit("trop d'éléments dans les objets du PDF")
+
+
+def _refuse_parsing(parser) -> None:
+    """Past a bound: this token, and every later one of the same reading
+    (pdfminer may swallow an error and parse on)."""
+    left = _tokens_left(parser)
+    if left is not None:
+        left[0] = -1
+    raise ParseLimit("objet PDF trop long")
+
+
+bound_pdf_parsing()
+
+
 # -- The PDF --------------------------------------------------------------------------------------------------------
 
 
@@ -656,7 +778,8 @@ def pdf_text(content: bytes) -> str:
     """The text layer of a slip's PDF, pages joined by a newline - or
     SlipError: over 5 MB, over 5 pages or 200 000 characters (checked while
     extracting, page by page), a page drawing over MAX_PAGE_GLYPHS glyphs,
-    fonts mapping over MAX_CMAP_CODES codes,
+    fonts mapping over MAX_CMAP_CODES codes, objects past what
+    bound_pdf_parsing lets pdfminer parse,
     streams inflating past MAX_INFLATE_STAGE or, together - or run by the
     interpreter, as often as it runs them -, past MAX_INFLATE_TOTAL (« trop
     long »), no text at all (a scan),
@@ -672,6 +795,7 @@ def pdf_text(content: bytes) -> str:
     bound_pdf_interpreting()
     bound_pdf_glyphs()
     bound_pdf_cmaps()
+    bound_pdf_parsing()
     texts, budget = [], None
     try:
         with inflate_budget(MAX_INFLATE_TOTAL) as budget:
@@ -690,7 +814,7 @@ def pdf_text(content: bytes) -> str:
     except Exception as error:  # noqa: BLE001 - pdfminer's zoo of errors is a French refusal, never a 500
         # However pdfplumber wrapped it (PdfminerException), a decode past
         # its bound left the budget refused; a page past MAX_PAGE_GLYPHS too,
-        # and fonts past MAX_CMAP_CODES (an InflateLimit).
+        # and fonts past MAX_CMAP_CODES, objects past MAX_PARSED_TOKENS (InflateLimits).
         if (budget is not None and budget[0] < 0) or inflate_refused(error) or glyphs_refused(error):
             raise SlipError(TOO_LONG) from None
         raise SlipError(NOT_A_PDF) from None
