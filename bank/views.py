@@ -17,8 +17,10 @@ them explain.
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import copy
+import heapq
 import math
 import re
 import tempfile
@@ -2614,6 +2616,20 @@ def _fill(rows, with_choices: bool = True) -> None:
     naming = reconcile.supplier_naming() if open_rows else {}
     # Each invoice's option, worded once for the page (`_choice_label`).
     worded: dict[int, tuple[str, str]] = {}
+    if with_choices:
+        # The invoices by date, for each row to slice its window out of
+        # rather than test every one: years of invoices paid in cash, never
+        # on the bank, made that rows x invoices. `position` is the order of
+        # `unpaid_invoices`, which the sort kept between equals - it still
+        # decides between them, so the same fifteen come out in the same
+        # order.
+        position = {invoice.pk: index for index, invoice in enumerate(invoices)}
+        undated = [invoice for invoice in invoices if invoice.invoice_date is None]
+        dated = sorted(
+            (invoice for invoice in invoices if invoice.invoice_date is not None),
+            key=lambda invoice: invoice.invoice_date,
+        )
+        days = [invoice.invoice_date for invoice in dated]
 
     for row in pick_rows:
         due = row.line.amount_due
@@ -2628,16 +2644,18 @@ def _fill(rows, with_choices: bool = True) -> None:
         if not with_choices:
             continue
         first, last = reconcile.choices_window(row.line)
-        near = [
-            invoice for invoice in invoices if invoice.invoice_date is None or first <= invoice.invoice_date <= last
-        ]
-        near.sort(
+        near = undated + dated[bisect.bisect_left(days, first) : bisect.bisect_right(days, last)]
+        paid_on = row.line.paid_on
+        best = heapq.nsmallest(
+            MAX_CHOICES,
+            near,
             key=lambda invoice: (
                 abs(totals[invoice.pk] - due),
-                abs((invoice.invoice_date - row.line.paid_on).days) if invoice.invoice_date else UNDATED_LAST,
-            )
+                abs((invoice.invoice_date - paid_on).days) if invoice.invoice_date else UNDATED_LAST,
+                position[invoice.pk],
+            ),
         )
-        for invoice in near[:MAX_CHOICES]:
+        for invoice in best:
             if invoice.pk not in worded:
                 worded[invoice.pk] = (localize(invoice.pk), _choice_label(invoice, totals[invoice.pk]))
             row.choices.append(worded[invoice.pk])

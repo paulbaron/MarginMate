@@ -9,8 +9,10 @@ queryset made per bank line for its payments was a tenth of « Banque », and
 """
 
 import re
+from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.db import connection
 from django.template import Context, Template
@@ -324,6 +326,97 @@ class RoundedTotalTests(TestCase):
         for invoice in (printed, from_ht, stated, empty):
             with self.subTest(invoice=invoice.pk):
                 self.assertSameTotal(invoice)
+
+
+def old_choices(row, invoices, totals):
+    """The pick-list as `views._fill` chose it before 04/10/2026: every
+    unpaid invoice of the page tested against the row's dates, the window
+    sorted whole - the oracle the quicker choice is held to."""
+    first, last = reconcile.choices_window(row.line)
+    near = [invoice for invoice in invoices if invoice.invoice_date is None or first <= invoice.invoice_date <= last]
+    due = row.line.amount_due
+    near.sort(
+        key=lambda invoice: (
+            abs(totals[invoice.pk] - due),
+            abs((invoice.invoice_date - row.line.paid_on).days) if invoice.invoice_date else views.UNDATED_LAST,
+        )
+    )
+    return [views.localize(invoice.pk) for invoice in near[: views.MAX_CHOICES]], max(len(near) - views.MAX_CHOICES, 0)
+
+
+class PickListTests(TestCase):
+    """The pick-list offers the same fifteen invoices, in the same order and
+    with the same « de plus », as when every row sorted every unpaid invoice
+    of the page - ties on the amount and the day, undated invoices, the
+    window's edges - without reading every one of them for every row."""
+
+    def test_the_same_options_in_the_same_order(self):
+        supplier = make_supplier()
+        paid_on = date(2026, 6, 15)
+        # Each day of the window's edges and inside it, four invoices: two
+        # of 10,00 (a tie on everything), 11,00 and 9,00.
+        for offset in (-181, -180, -179, -30, -3, 0, 3, 7, 8):
+            for amount in ("10.00", "11.00", "10.00", "9.00"):
+                invoice = make_invoice(supplier=supplier, invoice_date=paid_on + timedelta(days=offset))
+                make_invoice_line(invoice=invoice, total_ht=amount)
+        for _undated in range(3):
+            undated = make_invoice(supplier=supplier)
+            make_invoice_line(invoice=undated, total_ht="10.00")
+            Invoice.objects.filter(pk=undated.pk).update(invoice_date=None)
+        shifts = ((0, "10.00"), (0, "12.00"), (-60, "10.00"), (3, "9.00"), (200, "10.00"), (-400, "9.00"))
+        lines = [
+            debit(paid_on + timedelta(days=shift), f"PRLV SEPA EXEMPLE {n}", amount, f"pick{n}")
+            for n, (shift, amount) in enumerate(shifts)
+        ]
+        rows = [views.Row(line, views.TODO) for line in lines[:-1]] + [views.Row(lines[-1], views.LINKED)]
+        views._fill(rows)
+
+        start, _end = reconcile.search_window(lines)
+        invoices = list(reconcile.unpaid_invoices(start, max(line.paid_on for line in lines) + timedelta(days=7)))
+        totals = {invoice.pk: reconcile.rounded_total(invoice) for invoice in invoices}
+        for row in rows:
+            with self.subTest(line=row.line.label):
+                chosen, more = old_choices(row, invoices, totals)
+                self.assertEqual([value for value, _label in row.choices], chosen)
+                self.assertEqual(row.more_choices, more)
+        self.assertEqual(rows[0].more_choices, 7 * 4 + 3 - views.MAX_CHOICES)
+        self.assertEqual(len(rows[-1].choices), 3)  # the undated alone
+
+    def test_a_row_reads_the_invoices_near_its_dates_not_every_one(self):
+        """Over years of unpaid invoices - paid in cash, never on the bank -
+        every row testing every one was rows x invoices."""
+        supplier = make_supplier()
+        for n in range(120):
+            invoice = make_invoice(supplier=supplier, invoice_date=date(2022, 1, 1) + timedelta(days=15 * n))
+            make_invoice_line(invoice=invoice, total_ht="10.00")
+        lines = [
+            debit(date(2022, 1, 1) + timedelta(days=60 * n), f"PRLV SEPA EXEMPLE {n}", "10.00", f"r{n}")
+            for n in range(30)
+        ]
+        rows = [views.Row(line, views.LINKED) for line in lines]
+        reads = Counter()
+
+        class Counted:
+            """An invoice, counting how often its date is read."""
+
+            def __init__(self, invoice):
+                self.invoice = invoice
+
+            def __getattr__(self, name):
+                return getattr(self.invoice, name)
+
+            @property
+            def invoice_date(self):
+                reads["date"] += 1
+                return self.invoice.invoice_date
+
+        unpaid = reconcile.unpaid_invoices
+        with mock.patch.object(
+            reconcile, "unpaid_invoices", lambda start, end: [Counted(i) for i in unpaid(start, end)]
+        ):
+            views._fill(rows)
+        self.assertTrue(all(row.choices for row in rows))
+        self.assertLess(reads["date"], len(rows) * 120)
 
 
 class ProposalsAndRulesQueriesTests(Statement, TestCase):
