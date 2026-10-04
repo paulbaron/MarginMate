@@ -57,8 +57,10 @@ nothing newly wrong.
 from __future__ import annotations
 
 import math
+import re
 import statistics
 import threading
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import cast
@@ -301,7 +303,9 @@ MAX_INFLATE_TOTAL = 64 * 1024 * 1024
 #: What pdfminer's interpreter may run of one PDF, a stream counted each
 #: time it runs - a page drawing one form a thousand times runs it a
 #: thousand times (returnables.reading.bound_pdf_interpreting), at 6 to
-#: 11 s of CPU a MB. The most of 1 374 real invoices is 340 KB.
+#: 11 s of CPU a MB. The most of 1 374 real invoices is 340 KB. The same
+#: total for what PDFium will draw, weighed before it opens the file
+#: (`_decode_drawn`): about 20 bytes of page objects a byte of path.
 MAX_RUN_TOTAL = 8 * 1024 * 1024
 
 TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
@@ -501,7 +505,7 @@ def check_page_count(path: str) -> None:
     every page made) took 4,5 s and 25 MB.
 
     Then its pages' content streams are weighed (`_weigh_contents`): past
-    MAX_INFLATE_TOTAL inflated, DocumentTooBig too.
+    MAX_INFLATE_TOTAL inflated, or MAX_RUN_TOTAL drawn, DocumentTooBig too.
 
     Not a PDF (by its name: a photo is `page_images`' to weigh), or one
     pdfminer cannot open or walk: it passes - what is wrong with it is said
@@ -536,8 +540,11 @@ def _weigh_contents(path: str) -> None:
     bounded decoders as often as a page lists it, from a copy dropped at
     once (the object itself stays cached undecoded: uncached, an object
     stream was parsed again for every object it holds - 200 ms on a Free
-    invoice). A file pdfminer cannot open or walk, or a stream it cannot decode,
-    passes: what is wrong with it is said by what reads it next."""
+    invoice). What PDFium will draw of them is weighed as well
+    (`_decode_drawn`): past MAX_RUN_TOTAL drawn, or a page drawing more than
+    reading.MAX_PAGE_GLYPHS XObjects and annotations, DocumentTooBig. A file
+    pdfminer cannot open or walk, or a stream it cannot decode, passes: what
+    is wrong with it is said by what reads it next."""
     import itertools
 
     from pdfminer.pdfdocument import PDFDocument
@@ -547,11 +554,12 @@ def _weigh_contents(path: str) -> None:
     from returnables import reading
 
     with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
+        drawn = [MAX_RUN_TOTAL]
         try:
             with open(path, "rb") as handle:
                 document = PDFDocument(PDFParser(handle))
                 for page in itertools.islice(PDFPage.create_pages(document), MAX_PAGES + 1):
-                    _decode_drawn(page, budget)
+                    _decode_drawn(page, budget, drawn)
         except DocumentTooBig:
             raise
         except Exception as error:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
@@ -562,36 +570,170 @@ def _weigh_contents(path: str) -> None:
             raise _too_heavy()
 
 
-def _decode_drawn(page, budget: list) -> None:
-    """Decode every content stream `page` draws: its /Contents, and the
-    forms its resources hold, theirs too (each form once a page)."""
+#: What draws an XObject in a content stream, read as PDFium reads it: the
+#: operand before « Do » - a name (#xx escapes and all), or a string, which
+#: PDFium takes for a name too - a comment allowed in between; and an inline
+#: image's « BI ». Possessive, so a run of « % » never backtracks. Over,
+#: never under: a « /Fm1 Do » inside a string counts as well.
+_DELIMITER = rb"\s\x00/\[\]()<>{}%"
+_DRAWS = re.compile(
+    rb"(?:/(?P<name>[^" + _DELIMITER + rb"]*+)|\((?P<string>(?:[^()\\]|\\.)*+)\)|<(?P<hex>[0-9A-Fa-f\s\x00]*+)>)"
+    rb"(?:[\s\x00]++|%[^\r\n]*+)*+Do(?![^" + _DELIMITER + rb"])"
+    rb"|(?<![^\s\x00\[\]()<>{}%])BI(?![^" + _DELIMITER + rb"])",
+    re.DOTALL,
+)
+_NAME_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
+_STRING_ESCAPE = re.compile(rb"\\([0-7]{1,3}|\r\n|.)", re.DOTALL)
+_STRING_ESCAPES = {
+    b"n": b"\n",
+    b"r": b"\r",
+    b"t": b"\t",
+    b"b": b"\b",
+    b"f": b"\f",
+    b"\r\n": b"",
+    b"\r": b"",
+    b"\n": b"",
+}
+
+
+def _unescaped(escape) -> bytes:
+    if escape[1][:1].isdigit():
+        return bytes([int(escape[1], 8) & 0xFF])
+    return _STRING_ESCAPES.get(escape[1], escape[1])
+
+
+def _drawn(data: bytes) -> tuple[Counter, int]:
+    """What `data` draws (`_DRAWS`): how often each XObject name, as
+    pdfminer keys it, and how many inline images."""
+    names, inline = Counter(), 0
+    if b"Do" not in data and b"BI" not in data:
+        return names, inline
+    for match in _DRAWS.finditer(data):
+        name, string, digits = match.group("name", "string", "hex")
+        if name is not None:
+            raw = _NAME_ESCAPE.sub(lambda escape: bytes([int(escape[1], 16)]), name)
+        elif string is not None:
+            raw = _STRING_ESCAPE.sub(_unescaped, string)
+        elif digits is not None:
+            digits = re.sub(rb"[\s\x00]", b"", digits)
+            raw = bytes.fromhex((digits + b"0" * (len(digits) % 2)).decode())
+        else:
+            inline += 1
+            continue
+        try:
+            names[raw.decode()] += 1
+        except UnicodeDecodeError:
+            names[raw.decode("latin-1")] += 1
+    return names, inline
+
+
+def _decode_drawn(page, budget: list, drawn: list) -> None:
+    """Decode every content stream `page` draws, charging each to `drawn`
+    as often as PDFium draws it: its /Contents, every form each time a Do
+    draws it, every annotation's appearances (security review: PDFium
+    parses a form again for each, and keeps about 20 bytes of page objects
+    a byte of path - a 7,6 KB file whose 40 annotations share one 1 MB
+    appearance took 850 MB, and pdfminer reads no annotation). Past
+    MAX_RUN_TOTAL, DocumentTooBig; and past reading.MAX_PAGE_GLYPHS
+    XObjects, inline images and annotations on the page, PDFium keeping an
+    object of each. The forms its resources hold that nothing draws are
+    decoded too. A form is decoded once a page, and never drawn inside
+    itself, as pdfminer and PDFium do; what cannot be found draws nothing."""
     import copy
 
-    from pdfminer.pdftypes import PDFStream, dict_value, resolve1
+    from pdfminer.pdftypes import PDFStream, dict_value, list_value, resolve1
     from pdfminer.psparser import LIT
 
+    from common import group_thousands, weight
     from returnables import reading
 
-    pending, seen = [(page.contents, page.resources)], set()
+    def resolved(item):
+        try:
+            return resolve1(item)
+        except Exception as error:  # noqa: BLE001 - a missing object, PDFium skips it too
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            return None
+
+    def decoded(stream) -> bytes:
+        try:
+            return copy.copy(stream).get_data()
+        except Exception as error:  # noqa: BLE001 - a damaged stream is the reader's to say
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            return b""
+
+    known = {}
+
+    def form(item, appearance: bool = False) -> tuple | None:
+        """(the form, its size, what it draws), or None for no form - an
+        image is never decoded (pdfminer's CCITT decoder took 4 s on a real
+        invoice). An appearance is a form, whatever its Subtype says."""
+        stream = resolved(item)
+        if not isinstance(stream, PDFStream) or not (appearance or stream.get("Subtype") is LIT("Form")):
+            return None
+        key = id(stream) if stream.objid is None else stream.objid
+        if key not in known:
+            data = decoded(stream)
+            known[key] = (len(data), _drawn(data))
+        return (stream, *known[key])
+
+    def charge(size: int) -> None:
+        drawn[0] -= size
+        if drawn[0] < 0:
+            raise DocumentTooBig(TOO_LONG_CONTENT.format(weight=weight(MAX_RUN_TOTAL)))
+
+    objects = [0]
+
+    def count(times: int) -> None:
+        objects[0] += times
+        if objects[0] > reading.MAX_PAGE_GLYPHS:
+            raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=group_thousands(reading.MAX_PAGE_GLYPHS)))
+
+    resources = dict_value(page.resources)
+    contents = []
+    for item in page.contents:
+        stream = resolved(item)
+        if isinstance(stream, PDFStream):
+            contents.append(decoded(stream))
+            charge(len(contents[-1]))
+    # Read as one, as PDFium does: a name may end one stream and its Do start the next.
+    pending = [(_drawn(b"\n".join(contents)), resources, 1, frozenset())]
+    del contents
+    for annotation in list_value(resolved(page.annots)):
+        count(1)
+        appearances = dict_value(resolved(dict_value(resolved(annotation)).get("AP")))
+        for key in ("N", "R", "D"):
+            appearance = resolved(appearances.get(key))
+            for state in [appearance] if isinstance(appearance, PDFStream) else dict_value(appearance).values():
+                if (found := form(state, appearance=True)) is not None:
+                    stream, size, draws = found
+                    charge(size)
+                    own = dict_value(resolved(stream.get("Resources"))) or resources
+                    pending.append((draws, own, 1, frozenset([stream.objid])))
     while pending:
-        streams, resources = pending.pop()
-        for item in streams:
-            stream = resolve1(item)
-            if not isinstance(stream, PDFStream):
+        (names, inline), outer, times, inside = pending.pop()
+        count(inline * times)
+        xobjects = dict_value(resolved(outer.get("XObject")))
+        for name, drawings in names.items():
+            count(drawings * times)
+            found = form(xobjects.get(name))
+            if found is None or found[0].objid in inside:
                 continue
-            try:
-                copy.copy(stream).get_data()
-            except Exception as error:  # noqa: BLE001 - a damaged stream is the reader's to say
-                if budget[0] < 0 or reading.inflate_refused(error):
-                    raise _too_heavy() from None
-        for item in dict_value(dict_value(resources).get("XObject")).values():
+            stream, size, draws = found
+            charge(size * drawings * times)
+            own = dict_value(resolved(stream.get("Resources"))) or outer
+            pending.append((draws, own, drawings * times, inside | {stream.objid}))
+    holders, seen = [resources], set()
+    while holders:
+        for item in dict_value(resolved(holders.pop().get("XObject"))).values():
             objid = getattr(item, "objid", None)
             if objid is not None and objid in seen:
                 continue
             seen.add(objid)
-            form = resolve1(item)
-            if isinstance(form, PDFStream) and form.get("Subtype") is LIT("Form"):
-                pending.append(([form], form.get("Resources")))
+            found = form(item)
+            if found is not None:
+                holders.append(dict_value(resolved(found[0].get("Resources"))))
 
 
 def pdf_pages(path: str):
