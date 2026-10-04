@@ -20,8 +20,9 @@ those codes (receipts.create_shop), and a supplier brought back under one -
 a « Données » archive of the original bar - is read as before.
 
 The template, the seed migrations and « Données »'s `SEEDED_SUPPLIERS` /
-`SEEDED_SOURCE` are left as they are: a new espace holds a subset of the
-seeds, so it is still a new database there. The owner's espace was adopted,
+`SEEDED_SOURCE` are left as they are (but for OTHER, which 0037 takes out
+of every database): a new espace holds a subset of the seeds, so it is
+still a new database there. The owner's espace was adopted,
 never provisioned: nothing here reaches it.
 """
 
