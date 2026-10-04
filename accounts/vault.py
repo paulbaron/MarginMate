@@ -104,6 +104,12 @@ WEAK_KEY = (
     "La clé secrète du serveur (DJANGO_SECRET_KEY) est absente ou publique : aucun identifiant ne peut être "
     "enregistré avant qu'elle soit réglée."
 )
+#: WEAK_KEY in an espace that is not the platform owner's: it names no
+#: server setting, and says who can act on it.
+WEAK_KEY_HOSTED = (
+    "La clé secrète du serveur n'est pas réglée : aucun identifiant ne peut être enregistré — prévenez "
+    "l'administrateur de MarginMate."
+)
 BUSY_MESSAGE = "Les identifiants sont momentanément inaccessibles : réessayez dans un instant."
 UNREADABLE_MESSAGE = (
     "Les identifiants enregistrés ne peuvent pas être lus sur ce serveur : rien n'a été enregistré, pour ne pas "
@@ -370,7 +376,7 @@ def save(
         if not allowed_name(name) or not isinstance(host, str) or len(host) > 253:
             raise VaultError(f"Site refusé pour {name!r}")
     if secret_key_problem(getattr(settings, "SECRET_KEY", "")):
-        raise VaultError(WEAK_KEY)
+        raise VaultError(WEAK_KEY if server_accounts_allowed() else WEAK_KEY_HOSTED)
     tenant = require_tenant()
     with _LOCK:
         state, random_key = _open(tenant)

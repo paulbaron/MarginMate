@@ -35,6 +35,10 @@ connectors sign in with what it typed here. The .env's values - shown as
 server's, and exist on the owner's page only
 (`accounts.tenancy.server_accounts_allowed`): another bar's page never reads
 the file, and its connectors never fall back on it (`vault.server_setting`).
+Another bar's page holds the accounts its connectors use - the mailbox,
+L'Addition, the AI reading - and neither Metro nor a portal, which are the
+owner's alone (invoices/integrations.py); its fields are named after their
+account (`FIELD_ALIASES`), so no server variable's name reaches it.
 """
 
 from __future__ import annotations
@@ -51,9 +55,8 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 
 from . import sudo, vault
-from .tenancy import integrations_allowed, is_owner, server_accounts_allowed
+from .tenancy import is_owner, server_accounts_allowed
 
-REFUSED = "La page Identifiants : à configurer — disponible prochainement dans les réglages de votre espace."
 NOT_OWNER = "Seul le propriétaire de l'espace peut voir et modifier les identifiants des comptes."
 CLEAR_SUFFIX = "__clear"
 START_OVER = "tout_ressaisir"
@@ -88,6 +91,8 @@ STARTED_OVER = (
     "Identifiants illisibles effacés. Saisissez-les de nouveau ; pour un espace client dont les identifiants sont "
     "dans le fichier .env, cochez de nouveau sa case."
 )
+#: STARTED_OVER on another bar's page, which has no .env and no portal.
+STARTED_OVER_HOSTED = "Identifiants illisibles effacés. Saisissez-les de nouveau."
 #: The .env names the application still reads for the mailbox when the
 #: current ones are absent (config/settings.py): a line under the old name
 #: is the same password in clear.
@@ -168,8 +173,8 @@ FIXED_ACCOUNTS = [
     Account(
         "laddition",
         "L'Addition (caisse)",
-        "Le compte L'Addition Reporting d'où sont importées les ventes. Une autre caisse : importez son export "
-        "(CSV ou Excel) dans Recettes → Ventes, sans identifiant.",
+        "Le compte L'Addition Reporting d'où sont récupérées les ventes (Recettes & ventes › Ventes). Une autre "
+        "caisse : importez son export sur la même page, sans identifiant.",
         [
             Credential("LADDITION_EMAIL", "Identifiant (e-mail)", input_type="email"),
             Credential("LADDITION_PASSWORD", "Mot de passe", secret=True),
@@ -185,6 +190,63 @@ FIXED_ACCOUNTS = [
         ],
     ),
 ]
+
+
+#: The accounts another bar's page offers: its connectors' own. Metro and
+#: the portals are the platform owner's alone (invoices/integrations.py).
+HOSTED_ACCOUNT_KEYS = ("mailbox", "laddition", "ai")
+
+#: A credential's field on another bar's page: named after its account and
+#: its role, never after the server's variable its value is stored under
+#: (the store keeps the .env's names, so that every connector asks one
+#: question). `field_alias` names any other.
+FIELD_ALIASES = {
+    MAILBOX_ADDRESS: "boite_adresse",
+    MAILBOX_PASSWORD: "boite_mot_de_passe",
+    MAILBOX_HOST: "boite_serveur",
+    "LADDITION_EMAIL": "caisse_identifiant",
+    "LADDITION_PASSWORD": "caisse_mot_de_passe",
+    "ANTHROPIC_API_KEY": "ia_cle",
+    "METRO_EMAIL": "metro_identifiant",
+    "METRO_PASSWORD": "metro_mot_de_passe",
+}
+#: How another bar's page names a value no account uses any more, in its
+#: « Effacer » box: in words, never by the server's variable.
+ALIAS_WORDS = {
+    MAILBOX_ADDRESS: "l'adresse de la boîte mail",
+    MAILBOX_PASSWORD: "le mot de passe de la boîte mail",
+    MAILBOX_HOST: "le serveur de la boîte mail",
+    "LADDITION_EMAIL": "l'identifiant L'Addition",
+    "LADDITION_PASSWORD": "le mot de passe L'Addition",
+    "ANTHROPIC_API_KEY": "la clé d'API Anthropic",
+    "METRO_EMAIL": "l'identifiant Metro",
+    "METRO_PASSWORD": "le mot de passe Metro",
+}
+
+
+def field_alias(name: str) -> str:
+    """The HTML name of `name`'s field on another bar's page: its alias, its
+    « Effacer » box's alias, the page's own fields as they are, and any other
+    store name as a digest of it (a name the bar's own store holds)."""
+    import hashlib
+
+    if name.endswith(CLEAR_SUFFIX):
+        return field_alias(name[: -len(CLEAR_SUFFIX)]) + CLEAR_SUFFIX
+    if name in (DRAWN_FIELD, START_OVER) or name.startswith((HOST_FIELD, SITE_FIELD)):
+        return name
+    if name in FIELD_ALIASES:
+        return FIELD_ALIASES[name]
+    return "valeur_" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+
+
+def page_accounts(state: vault.VaultState):
+    """(the accounts the page offers, the portals' report) for the bound
+    espace: every fixed account and every portal's in the platform owner's,
+    the mailbox, L'Addition and the AI reading in any other."""
+    if server_accounts_allowed():
+        report = portal_accounts(state.secret_names)
+        return FIXED_ACCOUNTS + report.accounts, report
+    return [account for account in FIXED_ACCOUNTS if account.key in HOSTED_ACCOUNT_KEYS], PortalReport([], [])
 
 
 @dataclass
@@ -321,7 +383,11 @@ class CredentialsForm(forms.Form):
     with (`host__<key>`), and, while its values come from the .env, a box
     confirming that site (`site_env__<key>`)."""
 
-    def __init__(self, accounts: list[Account], state: vault.VaultState, env_names: set[str], *args, **kwargs):
+    def __init__(
+        self, accounts: list[Account], state: vault.VaultState, env_names: set[str], *args, aliased=False, **kwargs
+    ):
+        # Set before the fields are made: `add_prefix` names them.
+        self.aliased = aliased
         super().__init__(*args, **kwargs)
         self.accounts = accounts
         self.state = state
@@ -380,7 +446,8 @@ class CredentialsForm(forms.Form):
                     initial=self.env_confirmed(account),
                 )
         for name in self.orphans:
-            self.fields[name + CLEAR_SUFFIX] = forms.BooleanField(label=f"Effacer {name}", required=False)
+            shown = ALIAS_WORDS.get(name, "une valeur enregistrée") if aliased else name
+            self.fields[name + CLEAR_SUFFIX] = forms.BooleanField(label=f"Effacer {shown}", required=False)
         self.fields[DRAWN_FIELD] = forms.CharField(
             required=False, widget=forms.HiddenInput, initial=state_digest(state)
         )
@@ -388,6 +455,17 @@ class CredentialsForm(forms.Form):
             self.fields[START_OVER] = forms.BooleanField(
                 label="Tout ressaisir : les identifiants illisibles seront effacés", required=False
             )
+
+    def add_prefix(self, field_name):
+        """A field's HTML name: the store's own name on the platform owner's
+        page, its alias on any other (`FIELD_ALIASES`)."""
+        if self.aliased:
+            return field_alias(field_name)
+        return super().add_prefix(field_name)
+
+    def posted(self, name: str) -> bool:
+        """Whether the post carried `name`'s field."""
+        return self.add_prefix(name) in self.data
 
     def env_only(self, account: Account) -> list[str]:
         """The account's names whose value comes from the .env (none stored)."""
@@ -406,7 +484,7 @@ class CredentialsForm(forms.Form):
             name = credential.name
             if self.cleaned_data.get(name + CLEAR_SUFFIX):
                 return True
-            if name not in self.data:
+            if not self.posted(name):
                 continue
             typed = self.cleaned_data.get(name) or ""
             if name in self.secret_names:
@@ -431,7 +509,7 @@ class CredentialsForm(forms.Form):
             before_host = mailbox_host(stored)
             after = dict(stored)
             for name in (MAILBOX_HOST, MAILBOX_ADDRESS):
-                if name in self.data:
+                if self.posted(name):
                     after[name] = cleaned.get(name) or ""
             changed = mailbox_host(after) != before_host or (after.get(MAILBOX_ADDRESS) or "") != (
                 stored.get(MAILBOX_ADDRESS) or ""
@@ -445,13 +523,13 @@ class CredentialsForm(forms.Form):
         # The store changed while the page was open (another tab saved, or
         # it could not be read when the page was drawn - every login then
         # read blank, and saving would have removed them): nothing saved.
-        if (self.data.get(DRAWN_FIELD) or "") != state_digest(self.state):
+        if (self.data.get(self.add_prefix(DRAWN_FIELD)) or "") != state_digest(self.state):
             self.add_error(None, STATE_CHANGED)
         # A portal's site changed while the page was open (a source edited,
         # an archive imported): what was typed was for the site the page
         # showed, and is not bound to another one.
         for account in self.accounts:
-            drawn_for = self.data.get(HOST_FIELD + account.key) or ""
+            drawn_for = self.data.get(self.add_prefix(HOST_FIELD + account.key)) or ""
             if account.host and drawn_for != account.host and self._touches(account):
                 self.add_error(None, SITE_CHANGED.format(title=account.title, host=account.host))
         return cleaned
@@ -473,7 +551,7 @@ class CredentialsForm(forms.Form):
             if name in self.secret_names and self.cleaned_data.get(name + CLEAR_SUFFIX):
                 changes[name] = None
                 continue
-            if name not in self.data:
+            if not self.posted(name):
                 continue
             typed = self.cleaned_data.get(name) or ""
             if name in self.secret_names:
@@ -564,6 +642,7 @@ class CredentialsForm(forms.Form):
                 rows.append(
                     {
                         "field": self[name],
+                        "html_name": self[name].html_name,
                         "clear": self[name + CLEAR_SUFFIX] if name in self.secret_names else None,
                         "status": "" if optional_missing else status,
                         "status_label": "Facultatif" if optional_missing else STATUS_LABELS[status],
@@ -586,7 +665,10 @@ class CredentialsForm(forms.Form):
         return sections
 
     def orphan_rows(self) -> list[dict]:
-        return [{"name": name, "clear": self[name + CLEAR_SUFFIX]} for name in self.orphans]
+        return [
+            {"name": name, "html_name": self[name + CLEAR_SUFFIX].html_name, "clear": self[name + CLEAR_SUFFIX]}
+            for name in self.orphans
+        ]
 
 
 def _page(request, form, report, status=200):
@@ -601,16 +683,23 @@ def _page(request, form, report, status=200):
         "still_in_env": [line for section in sections for row in section["rows"] for line in row["still_in_env"]],
         "development": settings.DEBUG,
         "server_accounts": server_accounts_allowed(),
+        # Another bar's page: the portals are the platform owner's alone.
+        "portals_refused": None if server_accounts_allowed() else _portals_refused(),
     }
     return render(request, "accounts/credentials.html", context, status=status)
+
+
+def _portals_refused() -> str:
+    from invoices import integrations
+
+    return integrations.PORTALS
 
 
 @sensitive_post_parameters()
 @never_cache
 def credentials_page(request):
-    if not integrations_allowed():
-        status = 403 if request.method == "POST" else 200
-        return render(request, "accounts/credentials.html", {"refused": REFUSED}, status=status)
+    """Every espace's owner, his MarginMate password confirmed: each bar
+    types here what its own connectors sign in with (since 04/10/2026)."""
     if not is_owner(request):
         return render(request, "accounts/credentials.html", {"refused": NOT_OWNER}, status=403)
     if not sudo.confirmed(request):
@@ -626,12 +715,13 @@ def _credentials(request):
         # Drawn from an empty state, the logins would read as blank and the
         # next save would remove them: no form until the store can be read.
         return render(request, "accounts/credentials.html", {"refused": BUSY_PAGE}, status=503)
-    report = portal_accounts(state.secret_names)
-    accounts = FIXED_ACCOUNTS + report.accounts
+    accounts, report = page_accounts(state)
     env_names = _env_values()
+    # Another bar's fields carry no server variable's name (FIELD_ALIASES).
+    aliased = not server_accounts_allowed()
     if request.method != "POST":
-        return _page(request, CredentialsForm(accounts, state, env_names), report)
-    form = CredentialsForm(accounts, state, env_names, request.POST)
+        return _page(request, CredentialsForm(accounts, state, env_names, aliased=aliased), report)
+    form = CredentialsForm(accounts, state, env_names, request.POST, aliased=aliased)
     if not form.is_valid():
         return _page(request, form, report, status=400)
     save = form.to_save()
@@ -651,7 +741,7 @@ def _credentials(request):
         return _page(request, form, report, status=400)
     removed_only = save.changes and not any(save.changes.values()) and not any(save.env_bindings.values())
     if not save:
-        message = STARTED_OVER
+        message = STARTED_OVER if server_accounts_allowed() else STARTED_OVER_HOSTED
     elif removed_only:
         message = "Identifiants effacés."
     else:
