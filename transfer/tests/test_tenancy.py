@@ -15,6 +15,7 @@ tenant's own.
 
 import json
 import sqlite3
+import threading
 from datetime import date
 from html import unescape
 from pathlib import Path
@@ -193,6 +194,52 @@ class StagingTests(TenantTestCase):
     def test_an_export_waits_in_the_tenant_s_own_folder(self):
         with bound_tenant(self.bar_a):
             self.assertEqual(staging.exports_dir().parent, paths.tenant_dir(self.bar_a) / paths.STAGING)
+
+
+class OneImportAtATimeTests(TenantTestCase):
+    """Each preview or import holds the archive's sections parsed - up to
+    about 0.9 GB for a hostile one: posted from several tabs, one espace
+    held several at once, eight across the server's threads (review,
+    04/10/2026)."""
+
+    POSTED = {"sections": ["fournisseurs"], "strategie-fournisseurs": "fusionner", "action": "previsualiser"}
+
+    def test_a_second_run_of_the_same_espace_is_refused_at_once_and_another_espace_runs(self):
+        stage_a, stage_b = self.upload_of(self.bar_a), self.upload_of(self.bar_b)
+        url_a = reverse("transfer:data_import_stage", args=[stage_a.token])
+        url_b = reverse("transfer:data_import_stage", args=[stage_b.token])
+        client_b = self.client_class()
+        confirm_password(client_b, self.user_b)
+        self.log_in(self.user_a)
+        real = views.run_import
+        runs = []
+        during = {}
+
+        def while_a_previews(*args, **kwargs):
+            runs.append(args)
+            if len(runs) == 1:  # A's: the others run as they are
+                # A's second tab, in this thread: its binding nests into A's.
+                during["a"] = self.client.post(url_a, self.POSTED)
+                # B's, in its own thread, as the server serves it.
+                worker = threading.Thread(target=lambda: during.update(b=client_b.post(url_b, self.POSTED)))
+                worker.start()
+                worker.join()
+            return real(*args, **kwargs)
+
+        with mock.patch("transfer.views.run_import", side_effect=while_a_previews):
+            first = self.client.post(url_a, self.POSTED)
+        self.assertEqual(said(during["a"]), [views.IMPORT_RUNNING])
+        self.assertEqual(said(during["b"]), [])
+        self.assertEqual(said(first), [])
+        with bound_tenant(self.bar_b):
+            self.assertTrue(staging.get(stage_b.token).state.get("preview"))
+        with bound_tenant(self.bar_a):
+            self.assertTrue(staging.get(stage_a.token).state.get("preview"))
+
+        # Over, it leaves nothing behind: A previews again.
+        again = self.client.post(url_a, self.POSTED)
+        self.assertRedirects(again, url_a, fetch_redirect_response=False)
+        self.assertEqual(said(again), [])
 
 
 class FilesTests(TenantTestCase):

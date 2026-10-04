@@ -39,7 +39,8 @@ NOTHING_REREAD = "Aucun document n'a été relu ; rien n'a été appris."
 
 
 class Busy(Exception):
-    """A gather or an import job runs: the message is BUSY."""
+    """A gather or an import job runs (the message is BUSY), or another
+    import of the same espace (views.IMPORT_RUNNING)."""
 
 
 class _Rollback(Exception):
