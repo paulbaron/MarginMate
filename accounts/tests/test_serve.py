@@ -22,11 +22,14 @@ import tempfile
 import time
 import warnings
 import wsgiref.util
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.sessions.models import Session
 from django.contrib.staticfiles.management.commands.runserver import (
     Command as RunserverCommand,
 )
@@ -37,6 +40,7 @@ from django.core.management.commands.runserver import Command as CoreRunserverCo
 from django.core.signals import request_finished, request_started
 from django.db import close_old_connections, connections
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from waitress import create_server
 from waitress.adjustments import Adjustments
 
@@ -496,6 +500,29 @@ class ServeTests(TenancyTestCase):
         self.assertIn("Vérifications : tout est en ordre.", out)
         self.assertEqual(calls, [])
         self.collected.assert_not_called()
+
+    def test_the_expired_sessions_are_cleared_before_it_serves(self):
+        """Nothing else ever removed them: a visitor of a signing link that
+        keeps no cookie left a row in the accounts database at every post.
+        A session still running is kept - nobody is logged out."""
+        live, expired = SessionStore(), SessionStore()
+        for store in (live, expired):
+            store["essai"] = 1
+            store.create()
+        Session.objects.filter(session_key=expired.session_key).update(
+            expire_date=timezone.now() - timedelta(minutes=1)
+        )
+        out, _, _, _ = self.run_serve("--port", str(free_port()))
+        self.assertTrue(Session.objects.filter(session_key=live.session_key).exists())
+        self.assertFalse(Session.objects.filter(session_key=expired.session_key).exists())
+        self.assertIn("Sessions expirées effacées.", out)
+        # Checking only touches nothing.
+        expired.create()
+        Session.objects.filter(session_key=expired.session_key).update(
+            expire_date=timezone.now() - timedelta(minutes=1)
+        )
+        self.run_serve("--verifier")
+        self.assertTrue(Session.objects.filter(session_key=expired.session_key).exists())
 
     def test_ctrl_c_stops_it_cleanly(self):
         def interrupted():
