@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import tempfile
 import threading
 from datetime import date, timedelta
@@ -260,8 +261,24 @@ def invoice_preview(request, pk):
     )
 
 
+#: The hand-typed invoices this login made, by the one-time value of the
+#: page that made each (`jeton`): that page posted again - a double tap, a
+#: phone resending after a slow answer - opens the invoice it made rather
+#: than filing the purchase twice. A number would be refused as a duplicate
+#: (import_parsed_invoice), but most paper invoices typed here have none.
+#: In the session, and only the last few.
+MANUAL_INVOICES_MADE = "manual_invoices_made"
+MANUAL_INVOICES_KEPT = 20
+
+
 def create_manual_invoice(request):
     if request.method == "POST":
+        token = request.POST.get("jeton", "")[:64]
+        made = request.session.get(MANUAL_INVOICES_MADE, {})
+        already = Invoice.objects.filter(pk=made[token]).first() if token in made else None
+        if already is not None:
+            messages.info(request, f"Facture déjà créée : {already}")
+            return redirect("invoices:invoice_detail", pk=already.pk)
         form = ManualInvoiceForm(request.POST, request.FILES)
         formset = ManualInvoiceLineFormSet(request.POST)
         if form.is_valid() and formset.is_valid():
@@ -305,6 +322,9 @@ def create_manual_invoice(request):
                     source_file_path=tmp_path,
                     display_filename=uploaded.name if uploaded else None,
                 )
+                if token:
+                    made[token] = invoice.pk
+                    request.session[MANUAL_INVOICES_MADE] = dict(list(made.items())[-MANUAL_INVOICES_KEPT:])
                 messages.success(request, f"Facture créée : {invoice}")
                 return redirect("invoices:invoice_detail", pk=invoice.pk)
             except DuplicateInvoiceError as exc:
@@ -317,7 +337,11 @@ def create_manual_invoice(request):
     else:
         form = ManualInvoiceForm()
         formset = ManualInvoiceLineFormSet()
-    return render(request, "invoices/manual_invoice_form.html", {"form": form, "formset": formset})
+    return render(
+        request,
+        "invoices/manual_invoice_form.html",
+        {"form": form, "formset": formset, "jeton": secrets.token_urlsafe(16)},
+    )
 
 
 def _parse_date(value: str | None) -> date | None:

@@ -388,3 +388,41 @@ class FiguresWiderThanTheirColumnTests(TestCase):
         with self.assertRaises(LineTooWideError):
             replace_invoice_lines(invoice, [wide()])
         self.assertEqual(invoice.lines.count(), 0)
+
+
+class ManualInvoicePostedTwiceTests(TestCase):
+    """Most paper invoices typed in have no number, and the number was the
+    only thing refusing a second copy: two taps on « Créer la facture » on a
+    phone filed the purchase twice - its stock, its « Facturé » in Marges,
+    and two documents for one bank debit."""
+
+    def setUp(self):
+        self.supplier = make_supplier(code="NOPARSER", name="Sans parseur", parser_key="")
+        self.url = reverse("invoices:invoice_create_manual")
+
+    def post(self, token):
+        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line()}).items()}
+        data.update({"supplier": self.supplier.pk, "invoice_number": "", "invoice_date": "2026-09-01", "jeton": token})
+        return self.client.post(self.url, data)
+
+    def test_the_same_form_posted_twice_makes_one_invoice(self):
+        token = "Xq3vB0b1hJ8yQm2dKzP7cA"
+        first = self.post(token)
+        invoice = Invoice.objects.get(supplier=self.supplier)
+        self.assertRedirects(first, reverse("invoices:invoice_detail", args=[invoice.pk]))
+        second = self.post(token)
+        self.assertRedirects(second, reverse("invoices:invoice_detail", args=[invoice.pk]))
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 1)
+
+    def test_two_forms_make_two_invoices(self):
+        """Two identical tickets bought the same day are two purchases."""
+        self.post("Xq3vB0b1hJ8yQm2dKzP7cA")
+        self.post("Lr5tN9wE2uY6iO1pS4dF8g")
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 2)
+
+    def test_each_page_carries_its_own_value_and_a_busy_button(self):
+        first, second = self.client.get(self.url), self.client.get(self.url)
+        self.assertContains(first, 'data-busy-label="Création…"')
+        token = first.context["jeton"]
+        self.assertContains(first, f'<input type="hidden" name="jeton" value="{token}">', html=True)
+        self.assertNotEqual(token, second.context["jeton"])

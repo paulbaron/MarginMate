@@ -10,6 +10,7 @@
     <div class="card">
         <form method="post" enctype="multipart/form-data">
             {% csrf_token %}
+            <input type="hidden" name="jeton" value="{{ jeton }}">
             {% include "_form_fields.html" %}
 
             <h3>Produits</h3>
@@ -47,7 +48,7 @@
             </p>
 
             <p style="margin-top:1rem;">
-                <button class="btn" type="submit">Créer la facture</button>
+                <button class="btn" type="submit" data-busy-label="Création…">Créer la facture</button>
                 <a class="btn btn-secondary" href="{% url 'invoices:invoice_list' %}">Annuler</a>
             </p>
         </form>
