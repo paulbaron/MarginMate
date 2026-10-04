@@ -291,6 +291,13 @@ MIN_RENDER_SCALE = 100 / 72
 #: Pixels of one image taken as it is - a photo file, or a scan's embedded
 #: photo: Pillow's own bomb threshold (89 Mpx), above a 48 Mpx phone photo.
 IMAGE_MAX_PIXELS = 89_478_485
+#: What the content streams of one PDF may inflate together (one bound per
+#: stream holds for the whole process: returnables.reading.MAX_INFLATE_STAGE).
+#: Weighed before any page is read or rendered (`_weigh_contents`), and
+#: shared by the readers (`bounded_reading`): pdfminer keeps what it decoded
+#: until the file is closed, and PDFium decodes it all again. The heaviest
+#: of 1 374 real invoices inflates 1,1 MB, its fonts included.
+MAX_INFLATE_TOTAL = 64 * 1024 * 1024
 
 TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
 PAGE_TOO_LARGE = (
@@ -298,6 +305,7 @@ PAGE_TOO_LARGE = (
 )
 IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
 TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères sur une page."
+TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
 
 
 class DocumentTooBig(ValueError):
@@ -396,6 +404,7 @@ def page_images(path: str):
                 yield ImageOps.exif_transpose(frame).convert("RGB")
         return
 
+    _weigh_contents(path)
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
 
@@ -485,6 +494,9 @@ def check_page_count(path: str) -> None:
     half a second and 1,8 MB, where pdfplumber's own count (`len(pdf.pages)`,
     every page made) took 4,5 s and 25 MB.
 
+    Then its pages' content streams are weighed (`_weigh_contents`): past
+    MAX_INFLATE_TOTAL inflated, DocumentTooBig too.
+
     Not a PDF (by its name: a photo is `page_images`' to weigh), or one
     pdfminer cannot open or walk: it passes - what is wrong with it is said
     by what reads it next, as before."""
@@ -500,6 +512,80 @@ def _refuse_past_the_cap(path: str) -> None:
     if counted > MAX_PAGES:
         said = declared if isinstance(declared, int) and declared > MAX_PAGES else f"plus de {MAX_PAGES}"
         raise DocumentTooBig(TOO_MANY_PAGES.format(pages=said, limit=MAX_PAGES))
+    _weigh_contents(path)
+
+
+def _too_heavy() -> DocumentTooBig:
+    from common import weight
+
+    return DocumentTooBig(TOO_HEAVY_CONTENT.format(weight=weight(MAX_INFLATE_TOTAL)))
+
+
+def _weigh_contents(path: str) -> None:
+    """Refuse (DocumentTooBig) a PDF whose pages' content streams, and the
+    forms they draw, inflate past MAX_INFLATE_TOTAL together - before
+    pdfplumber or PDFium decodes one (security audit: a 718 KB file listing
+    twelve 60 MB streams on its one page took 842 MB in the text layer, then
+    PDFium decoded them all again). Each is decoded through pdfminer's
+    bounded decoders as often as a page lists it, from a copy dropped at
+    once (the object itself stays cached undecoded: uncached, an object
+    stream was parsed again for every object it holds - 200 ms on a Free
+    invoice). A file pdfminer cannot open or walk, or a stream it cannot decode,
+    passes: what is wrong with it is said by what reads it next."""
+    import itertools
+
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfpage import PDFPage
+    from pdfminer.pdfparser import PDFParser
+
+    from returnables import reading
+
+    with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
+        try:
+            with open(path, "rb") as handle:
+                document = PDFDocument(PDFParser(handle))
+                for page in itertools.islice(PDFPage.create_pages(document), MAX_PAGES + 1):
+                    _decode_drawn(page, budget)
+        except DocumentTooBig:
+            raise
+        except Exception as error:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            return
+        if budget[0] < 0:
+            raise _too_heavy()
+
+
+def _decode_drawn(page, budget: list) -> None:
+    """Decode every content stream `page` draws: its /Contents, and the
+    forms its resources hold, theirs too (each form once a page)."""
+    import copy
+
+    from pdfminer.pdftypes import PDFStream, dict_value, resolve1
+    from pdfminer.psparser import LIT
+
+    from returnables import reading
+
+    pending, seen = [(page.contents, page.resources)], set()
+    while pending:
+        streams, resources = pending.pop()
+        for item in streams:
+            stream = resolve1(item)
+            if not isinstance(stream, PDFStream):
+                continue
+            try:
+                copy.copy(stream).get_data()
+            except Exception as error:  # noqa: BLE001 - a damaged stream is the reader's to say
+                if budget[0] < 0 or reading.inflate_refused(error):
+                    raise _too_heavy() from None
+        for item in dict_value(dict_value(resources).get("XObject")).values():
+            objid = getattr(item, "objid", None)
+            if objid is not None and objid in seen:
+                continue
+            seen.add(objid)
+            form = resolve1(item)
+            if isinstance(form, PDFStream) and form.get("Subtype") is LIT("Form"):
+                pending.append(([form], form.get("Resources")))
 
 
 def pdf_pages(path: str):
@@ -526,25 +612,33 @@ def pdf_pages(path: str):
 
 @contextmanager
 def bounded_reading():
-    """Around a reader walking `pdf_pages`: what pdfminer stopped (a page
-    past returnables.reading.MAX_PAGE_GLYPHS glyphs, the bound
-    reading.bound_pdf_glyphs puts on every pdfminer reader) is
-    DocumentTooBig, said on the file's line - not the PdfminerException
-    pdfplumber wraps it in, which a reader's caller takes for a broken
-    file. Entered by the caller, not inside `pdf_pages`: the page is read
-    in the caller's loop, never in the generator."""
+    """Around a reader walking `pdf_pages`: its decodes share
+    MAX_INFLATE_TOTAL (returnables.reading.inflate_budget - should a stream
+    escape `_weigh_contents`), and what pdfminer stopped (that budget, a
+    page past reading.MAX_PAGE_GLYPHS glyphs) is DocumentTooBig, said on the
+    file's line - not the PdfminerException pdfplumber wraps it in, which a
+    reader's caller takes for a broken file. Entered by the caller, not
+    inside `pdf_pages`: the page is read in the caller's loop, never in the
+    generator, and a ContextVar set across a generator's yields lives in
+    whichever context resumes it."""
     from common import group_thousands
     from returnables import reading
 
-    try:
-        yield
-    except DocumentTooBig:
-        raise
-    except Exception as error:
-        if reading.glyphs_refused(error):
-            limit = group_thousands(reading.MAX_PAGE_GLYPHS)
-            raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
-        raise
+    with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
+        try:
+            yield
+        except DocumentTooBig:
+            raise
+        except Exception as error:
+            if reading.glyphs_refused(error):
+                limit = group_thousands(reading.MAX_PAGE_GLYPHS)
+                raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
+            if budget[0] < 0 or reading.inflate_refused(error):
+                raise _too_heavy() from None
+            raise
+        # pdfminer may swallow a refused decode and carry on without it.
+        if budget[0] < 0:
+            raise _too_heavy()
 
 
 def document_text(path: str) -> str:

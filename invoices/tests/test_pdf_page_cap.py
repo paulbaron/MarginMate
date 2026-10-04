@@ -22,6 +22,7 @@ past a cap patched down to 2; nothing is rendered."""
 import os
 import shutil
 import tempfile
+import zlib
 from unittest import mock
 
 import pdfplumber
@@ -491,3 +492,102 @@ class TooManyGlyphsTests(TestCase):
         with open(path, "wb") as handle:
             handle.write(pdf_of_pages(2))
         self.assertEqual(ocr.document_text(path).count("ARTICLE EXEMPLE"), 2)
+
+
+def drawn_line(text: str, top: int, size: int) -> bytes:
+    """A content stream printing `text` at `top`, padded with spaces to
+    `size` bytes."""
+    return f"BT /F1 10 Tf 40 {top} Td ({text}) Tj ET\n".encode().ljust(size)
+
+
+HEAVY = "Document trop lourd pour être lu : plus de 6 Ko une fois décompressé."
+
+
+class InflatedContentTests(TestCase):
+    """Only a bon's reading shared one inflate budget: Achats' readers gave
+    every stream the 64 MB of the per-stream bound, with no total, and
+    pdfminer keeps what it decoded until the file closes - a 718 KB PDF
+    listing twelve 60 MB content streams took 842 MB in the text layer,
+    then PDFium decoded them all again to render (120 MB a stream). Now a
+    PDF's content streams are weighed under `ocr.MAX_INFLATE_TOTAL` before
+    any page is read or rendered, and the readers share that budget too.
+    Machine safety: the bounds are patched down to a few KB."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import pdf_with_streams
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "lourd.pdf")
+        streams = [(["FlateDecode"], zlib.compress(drawn_line(LINE, top, 4_000))) for top in (700, 600)]
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_with_streams(streams))
+
+    def test_every_reader_refuses_before_reading_a_page(self):
+        from invoices.parsers import llm_fallback
+
+        readers = {
+            "check_page_count": ocr.check_page_count,
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+            "llm_fallback": llm_fallback._extract_text,
+            "page_images": lambda path: list(ocr.page_images(path)),
+        }
+        for name, reader in readers.items():
+            with (
+                self.subTest(reader=name),
+                mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+                mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")),
+                mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")),
+                mock.patch("pypdfium2.PdfDocument", never("PDFium")),
+            ):
+                with self.assertRaises(ocr.DocumentTooBig) as refused:
+                    reader(self.path)
+                self.assertEqual(str(refused.exception), HEAVY)
+
+    def test_within_the_budget_the_document_reads(self):
+        with mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 9_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.document_text(self.path).count("ARTICLE EXEMPLE"), 2)
+
+    def test_a_stream_listed_again_is_weighed_again(self):
+        """pdfminer decodes a stream once, however often /Contents lists
+        it; PDFium and the interpreter go through it every time."""
+        from returnables.tests.test_reading import pdf_with_streams
+
+        streams = [(["FlateDecode"], zlib.compress(drawn_line(LINE, 700, 4_000)))] * 3
+        content = pdf_with_streams(streams).replace(b"/Contents [4 0 R 5 0 R 6 0 R]", b"/Contents [4 0 R 4 0 R 4 0 R]")
+        self.assertIn(b"/Contents [4 0 R 4 0 R 4 0 R]", content)
+        with open(self.path, "wb") as handle:
+            handle.write(content)
+        with mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 9_000):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.check_page_count(self.path)
+        self.assertEqual(str(refused.exception), HEAVY.replace("6 Ko", "9 Ko"))
+
+    def test_the_readers_share_the_budget_too(self):
+        """Should a stream escape the weighing (a form a page draws, a
+        stream pdfminer decodes for itself), the reading is bounded all the
+        same - and never « no text layer », which sent it on to PDFium."""
+        with (
+            mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+            mock.patch.object(ocr, "_weigh_contents", lambda path: None),
+        ):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.text_layer_pages(self.path)
+        self.assertEqual(str(refused.exception), HEAVY)
+
+    def test_a_stream_past_the_per_stream_bound_is_refused_not_unread(self):
+        with mock.patch.object(reading, "MAX_INFLATE_STAGE", 1_000):
+            with self.assertRaises(ocr.DocumentTooBig):
+                ocr.text_layer_pages(self.path)
+
+    def test_the_one_import_files_nothing(self):
+        with (
+            mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
+            mock.patch("invoices.receipts.page_images", never("page_images")),
+        ):
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                import_document(self.path, display_filename="lourd.pdf")
+        self.assertEqual(str(refused.exception), HEAVY)
+        self.assertFalse(Invoice.objects.exists())

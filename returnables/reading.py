@@ -15,7 +15,8 @@
   streams share MAX_INFLATE_TOTAL (`inflate_budget`). Past it,
   `InflateLimit` - never a zlib.error, which pdfminer would retry without a
   bound - and the slip is « trop long ». Achats' own pdfplumber pass gets
-  the per-stream bound as well.
+  the per-stream bound as well, and a document total of its own
+  (invoices.ocr.MAX_INFLATE_TOTAL, through `inflate_budget`).
 - **And what it draws** (`bound_pdf_glyphs`, process-wide too): a character
   object of about 2 KB for every glyph, so one compressed Tj of 600 000
   « A » - a 1 KB file - took 1,4 GB. A page stops at MAX_PAGE_GLYPHS
