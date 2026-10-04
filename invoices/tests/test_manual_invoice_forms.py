@@ -418,6 +418,99 @@ class FiguresWiderThanTheirColumnTests(TestCase):
         stored = [name for _root, _dirs, names in os.walk(paths.media_root()) for name in names]
         self.assertNotIn("loyer-trop-large.pdf", stored)
 
+    def herb(self):
+        """A classified product bought by the gram: 1 per kg is 0.02 kg, so a
+        line's cost is divided by 0.02 into its movement's unit cost."""
+        from inventory.models import UnitChoices
+        from tests.factories import make_product, make_stock_type
+
+        return make_product(
+            supplier=self.supplier,
+            raw_name="HERBES EXEMPLE 20G",
+            stock_type=make_stock_type(unit=UnitChoices.KILOGRAM),
+            unit=UnitChoices.KILOGRAM,
+            stock_equivalent="0.02",
+        )
+
+    def test_a_movement_no_column_holds_is_refused_on_the_hand_typed_invoice(self):
+        """25 000 EUR for one unit fits the line's own columns, but 25 000 over
+        0.02 kg is 1 250 000 EUR a kilo in StockMovement.unit_cost_ht (10,4):
+        stored, the home page and Marges answered 500 for the whole bar."""
+        from inventory.models import StockMovement
+
+        self.herb()
+        before = Invoice.objects.count()
+        response = self.create(name="HERBES EXEMPLE 20G", quantity="1", total_ht="25000", vat_rate="5.5")
+        self.assertEqual(response.status_code, 200)
+        said = " ".join(str(message) for message in response.context["messages"])
+        self.assertIn("« HERBES EXEMPLE 20G » (facteur 0.02) mettrait l'unité de stock à", said)
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertFalse(StockMovement.objects.exists())
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get(reverse("margins:margins_home")).status_code, 200)
+
+    def test_the_correction_page_refuses_a_movement_too_wide(self):
+        from inventory.models import StockMovement
+
+        self.herb()
+        invoice = make_invoice(supplier=self.supplier)
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
+            "form-0-product_name": "HERBES EXEMPLE 20G",
+            "form-0-quantity": "1",
+            "form-0-total_ht": "25000",
+            "form-0-vat_rate": "5.5",
+        }
+        response = self.client.post(reverse("invoices:invoice_edit_lines", args=[invoice.pk]), data, follow=True)
+        said = " ".join(str(message) for message in response.context["messages"])
+        self.assertIn("mettrait l'unité de stock à", said)
+        self.assertEqual(invoice.lines.count(), 0)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_a_movement_too_wide_leaves_no_file_behind(self):
+        """Refused before the source file is copied, as a line too wide is."""
+        import shutil
+        import tempfile
+
+        from accounts import paths
+        from common import group_thousands
+        from inventory.models import StockMovement
+        from invoices.importing import LineTooWideError, import_parsed_invoice
+        from invoices.parsers.base import ParsedInvoice, ParsedLine
+
+        self.herb()
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        source = os.path.join(folder, "aneth-trop-cher.pdf")
+        with open(source, "wb") as handle:
+            handle.write(b"%PDF-1.4 aneth")
+        parsed = ParsedInvoice(
+            supplier_code=self.supplier.code,
+            invoice_number="",
+            invoice_date=date(2026, 9, 1),
+            lines=[
+                ParsedLine(
+                    raw_name="HERBES EXEMPLE 20G",
+                    quantity=Decimal("1"),
+                    total_volume=Decimal("0"),
+                    unit_cost_ht=Decimal("25000"),
+                    total_ht=Decimal("25000.00"),
+                    vat_rate=Decimal("0.055"),
+                )
+            ],
+        )
+        figure = f"mettrait l'unité de stock à {group_thousands('1250000.00')} €"
+        with self.assertRaisesMessage(LineTooWideError, figure):
+            import_parsed_invoice(self.supplier, parsed, source)
+        stored = [name for _root, _dirs, names in os.walk(paths.media_root()) for name in names]
+        self.assertNotIn("aneth-trop-cher.pdf", stored)
+        self.assertFalse(Invoice.objects.filter(supplier=self.supplier).exists())
+        self.assertFalse(StockMovement.objects.exists())
+
 
 class ManualInvoicePostedTwiceTests(TestCase):
     """Most paper invoices typed in have no number, and the number was the

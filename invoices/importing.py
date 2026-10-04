@@ -11,7 +11,7 @@ from django.utils import timezone
 from common import group_thousands
 from inventory.matching import resolve_products
 from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
-from inventory.services import create_stock_movement_for_line, expense_product
+from inventory.services import create_stock_movement_for_line, expense_product, movement_refusal
 
 from .charges import read_charge
 from .deletion import remove_orphan_products
@@ -67,6 +67,19 @@ def import_parsed_invoice(
     # included (_fitting says why).
     for parsed_line in lines:
         _line_values(parsed_line)
+    if not supplier.expenses_only:
+        # A delivery typed on the hand-entry page arrives here rather than
+        # through replace_invoice_lines, and its share has to be on the lines
+        # before the movements below are booked from them.
+        spread_charges(lines)
+        resolved = resolve_products(
+            supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
+        )
+        flag_products(supplier, lines, resolved)
+        # And the movements they book, before the source file is copied too.
+        for parsed_line, (product, _created) in zip(lines, resolved):
+            if not product.needs_review:
+                _refuse_wide_movement(InvoiceLine(product=product, **_line_values(parsed_line)))
 
     invoice = Invoice(
         supplier=supplier,
@@ -89,14 +102,6 @@ def import_parsed_invoice(
         for parsed_line in lines:
             _create_line(invoice, expense_product(supplier, parsed_line.raw_name), parsed_line)
     else:
-        # A delivery typed on the hand-entry page arrives here rather than
-        # through replace_invoice_lines, and its share has to be on the lines
-        # before the movements below are booked from them.
-        spread_charges(lines)
-        resolved = resolve_products(
-            supplier, [(line.raw_name, line.ean) for line in lines], ocr_tolerant=parsed.from_ocr
-        )
-        flag_products(supplier, lines, resolved)
         for parsed_line, (product, _created) in zip(lines, resolved):
             line = _create_line(invoice, product, parsed_line)
             if product.needs_review:
@@ -625,6 +630,16 @@ def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceL
     return InvoiceLine.objects.create(invoice=invoice, product=product, **_line_values(parsed_line))
 
 
+def _refuse_wide_movement(line) -> None:
+    """_fitting's guard for the movement a line books: a line whose own
+    figures fit can still divide, by a small factor, into a unit cost
+    StockMovement.unit_cost_ht (10,4) cannot hold - stored, the home page and
+    Marges answered 500 for the whole bar (inventory.services.movement_refusal)."""
+    refusal = movement_refusal(line)
+    if refusal:
+        raise LineTooWideError(refusal)
+
+
 class InvoiceLinesInUseError(Exception):
     """Lines a stock take was priced from can be corrected, not removed."""
 
@@ -851,6 +866,8 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
         if product.needs_review:
             needs_review = True
         else:
+            # In this function's transaction: refused, nothing above stays.
+            _refuse_wide_movement(line)
             create_stock_movement_for_line(line)
     remove_orphan_products(previous_products)
 

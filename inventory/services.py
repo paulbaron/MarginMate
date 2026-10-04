@@ -173,17 +173,43 @@ def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal, r
     probe.stock_equivalent = stock_equivalent
     for line in product.invoice_lines.filter(is_spread_charge=False):
         line.product = probe
-        quantity, unit_cost_ht = compute_movement_amounts(line)
-        # Only the figure that overflows is named: a tiny factor's quantity
-        # printed « 0.000 unités » next to a unit cost of millions.
-        if abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
-            figure = f"mettrait l'unité de stock à {format_money(unit_cost_ht)} €"
-        elif abs(quantity) >= MOVEMENT_QUANTITY_LIMIT:
-            figure = f"ferait {format_money(quantity, '.3f')} unités de stock"
-        else:
+        figure = _movement_overflow(line)
+        if not figure:
             continue
         refused = refused or f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé"
         return f"{refused} : un achat de « {product.raw_name} » {figure}, plus que MarginMate ne peut enregistrer."
+    return ""
+
+
+def movement_refusal(invoice_line) -> str:
+    """Why the movement `invoice_line` books (create_stock_movement_for_line)
+    would not fit its columns - a French sentence naming the line and its
+    product's factor - or "". conversion_refusal's question asked from the
+    other side: a line that fits its own columns still overflows the
+    movement's once divided by a small factor (25 000 EUR for one tray of
+    0.02 kg is 1 250 000 EUR a kilo), so every path writing lines asks it
+    before the movement is booked."""
+    if invoice_line.is_spread_charge or invoice_line.product.stock_type_id is None:
+        return ""
+    figure = _movement_overflow(invoice_line)
+    if not figure:
+        return ""
+    factor = format(invoice_line.product.stock_equivalent.normalize(), "f")
+    return (
+        f"« {invoice_line.raw_name} » (facteur {factor}) {figure}, plus que MarginMate ne peut enregistrer - "
+        "vérifiez la quantité et le montant de la ligne."
+    )
+
+
+def _movement_overflow(invoice_line) -> str:
+    """The figure of the line's movement no column holds, said in French, or
+    "". Only the figure that overflows is named: a tiny factor's quantity
+    printed « 0.000 unités » next to a unit cost of millions."""
+    quantity, unit_cost_ht = compute_movement_amounts(invoice_line)
+    if abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
+        return f"mettrait l'unité de stock à {format_money(unit_cost_ht)} €"
+    if abs(quantity) >= MOVEMENT_QUANTITY_LIMIT:
+        return f"ferait {format_money(quantity, '.3f')} unités de stock"
     return ""
 
 
