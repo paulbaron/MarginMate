@@ -52,7 +52,7 @@
                 <th class="num">Quantité habituelle</th>
                 <th>Tendance</th>
                 <th class="num">Caisse / semaine</th>
-                <th></th>
+                {% if may_tune %}<th></th>{% endif %}
             </tr>
         </thead>
         <tbody>
@@ -68,6 +68,7 @@
                 <td class="num" data-label="Quantité habituelle" data-sort="{{ drawn.row.usual_qty }}">{{ drawn.usual }}</td>
                 <td data-label="Tendance">{{ drawn.row.trend|default_if_none:"" }}</td>
                 <td class="num" data-label="Caisse / semaine" data-sort="{{ drawn.row.till_per_week|default_if_none:'' }}">{{ drawn.till }}</td>
+                {% if may_tune %}
                 <td class="row-actions">
                     {% if drawn.row.excluded %}<span class="muted small">jamais proposé</span>{% else %}
                     <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer « {{ drawn.row.name }} » dans aucune enseigne ?">
@@ -79,6 +80,7 @@
                     </form>
                     {% endif %}
                 </td>
+                {% endif %}
             </tr>
             {% endfor %}
         </tbody>

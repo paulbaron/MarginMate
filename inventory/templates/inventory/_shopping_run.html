@@ -1,0 +1,44 @@
+{% comment %}
+The tick block of a store's list (`?mode=courses`), swapped whole by every
+tick (htmx: hx-target="#courses", outerHTML); without JavaScript the same
+form posts and the page comes back here. Each form names the state WANTED
+(`pris`: « 1 » bought, « 0 » not), never a toggle: two phones each ticking
+an item both land. views._run_context gives `items` (unticked first),
+`ticked`, `total`, `notices` (what the last tick could not do), `store` and
+`shopping_list` (the store's open list as it stands).
+« Courses terminées » stays outside the block: a swap never resets its box.
+So a tick's answer (`oob`) carries, out of band, what that form must post:
+the list the block shows (#shopping-finish-list), or - no item left to
+tick, another phone finished it - the form taken out (#shopping-finish).
+htmx lifts it out of the block; a page drawn whole carries none.
+{% endcomment %}
+<div class="shopping-run" id="courses">
+    {% if oob %}{% if items %}<input type="hidden" name="{{ list_param }}" value="{{ shopping_list.pk }}" id="shopping-finish-list" hx-swap-oob="true">{% else %}<div id="shopping-finish" hx-swap-oob="true"></div>{% endif %}{% endif %}
+    {% for notice in notices %}<p class="message message-warning">{{ notice }}</p>{% endfor %}
+    {% if items %}
+    <p class="shopping-progress"><strong>{{ ticked }} / {{ total }}</strong> pris</p>
+    <ul class="shopping-ticks">
+        {% for row in items %}
+        <li class="shopping-tick{% if row.item.checked_at %} is-ticked{% endif %}">
+            <form method="post" action="{% url 'inventory:shopping_list_item_tick' %}" hx-post="{% url 'inventory:shopping_list_item_tick' %}" hx-target="#courses" hx-swap="outerHTML">
+                {% csrf_token %}
+                <input type="hidden" name="{{ item_param }}" value="{{ row.item.pk }}">
+                <input type="hidden" name="{{ store_param }}" value="{{ store.pk }}">
+                <input type="hidden" name="{{ ticked_param }}" value="{% if row.item.checked_at %}0{% else %}1{% endif %}">
+                <button type="submit" class="shopping-tick-button" aria-pressed="{% if row.item.checked_at %}true{% else %}false{% endif %}">
+                    <span class="shopping-tick-box" aria-hidden="true"></span>
+                    <span class="shopping-tick-text">
+                        <span class="shopping-tick-name">{{ row.item.name }}</span>
+                        <span class="shopping-tick-quantity">{{ row.quantity }}</span>
+                        {% if row.item.product_name %}<span class="muted small">{{ row.item.product_name }}{% if row.packs %} · {{ row.packs }}{% endif %}</span>{% endif %}
+                        {% if row.item.note %}<span class="muted small">{{ row.item.note }}</span>{% endif %}
+                    </span>
+                </button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state"><p>Liste vide.</p><a class="btn" href="{{ edit_url }}">Ajouter des articles</a></div>
+    {% endif %}
+</div>

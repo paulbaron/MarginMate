@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class UnitChoices(models.TextChoices):
@@ -525,6 +526,93 @@ class ShoppingExclusion(models.Model):
         if self.supplier_id is None:
             return str(self.stock_type)
         return f"{self.stock_type} (chez {self.supplier})"
+
+
+class ShoppingList(models.Model):
+    """One store's shopping list (« Liste de courses »), shared by every login
+    of the espace: OPEN while `finished_at` is empty - at most one per store -
+    then kept as it was, read-only. Made by the first item added (a page drawn
+    writes nothing: inventory/shopping_lists.py). Who: usernames, like
+    ReceiptBatch.sent_by. Never exported by « Données ». CASCADE with its
+    store: a supplier deleted (its page, « Données ») takes its lists."""
+
+    supplier = models.ForeignKey("invoices.Supplier", on_delete=models.CASCADE, related_name="shopping_lists")
+    created_at = models.DateTimeField(default=timezone.now)
+    created_by = models.CharField(max_length=150, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    finished_by = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["supplier"],
+                condition=models.Q(finished_at__isnull=True),
+                name="shopping_list_one_open_per_store",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Liste {self.supplier}"
+
+    @property
+    def is_open(self) -> bool:
+        return self.finished_at is None
+
+
+class ShoppingListItem(models.Model):
+    """One line of a ShoppingList: an article (`stock_type`) or a free text
+    (`label` only).
+
+    `label` is the article's name when it was added (refreshed by a merge),
+    shown once the article is gone (SET_NULL). `quantity` counts
+    `product_name` when `unit` is "" (« 24 » of « BIERE … X24 ») - or, with no
+    product, whatever the label names (a free text) - and the article's own
+    unit otherwise (L, KG, UNIT: « 2 L »). `pack_size` is the product's
+    colisage when the forecast knew it (« 1 colis de 24 », a hint). Ticked
+    (bought) when `checked_at` is set. `added_at` is a default, not
+    auto_now_add: a carry-over to the next list copies it.
+
+    One item per article per list; free texts are kept apart by the page
+    (their search_key), never by the database - an article deleted turns its
+    items into free texts, which must never trip a constraint. No ordering:
+    every query says (`added_at`, `pk`)."""
+
+    shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name="items")
+    stock_type = models.ForeignKey(
+        StockType, null=True, blank=True, on_delete=models.SET_NULL, related_name="shopping_list_items"
+    )
+    label = models.CharField(max_length=255)
+    product_name = models.CharField(max_length=255, blank=True)
+    pack_size = models.PositiveIntegerField(null=True, blank=True)
+    quantity = models.DecimalField(max_digits=10, decimal_places=3)
+    unit = models.CharField(max_length=4, choices=UnitChoices.choices, blank=True)
+    note = models.CharField(max_length=200, blank=True)
+    added_at = models.DateTimeField(default=timezone.now)
+    added_by = models.CharField(max_length=150, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    checked_by = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="shopping_list_item_quantity_positive"),
+            models.CheckConstraint(condition=~models.Q(label=""), name="shopping_list_item_has_a_label"),
+            models.CheckConstraint(
+                condition=models.Q(unit__in=["", *UnitChoices.values]), name="shopping_list_item_unit_known"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(pack_size__isnull=True) | models.Q(pack_size__gt=1),
+                name="shopping_list_item_pack_of_several",
+            ),
+            models.UniqueConstraint(fields=["shopping_list", "stock_type"], name="shopping_list_item_article_once"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def name(self) -> str:
+        """The article's live name (a rename shows), else the label kept."""
+        return self.stock_type.name if self.stock_type_id is not None else self.label
 
 
 class StockTakeLine(models.Model):

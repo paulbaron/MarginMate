@@ -1520,6 +1520,66 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 /* « Valeurs par défaut » is a form of its own under the settings' (one busy
    button each): a gap between the two rows of buttons. */
 .shopping-defaults { margin-top: var(--s2); }
+/* « Listes de courses ». The forecast's « Liste » cell: the quantity to add,
+   its unit and « Ajouter » on one line while they fit. */
+.shopping-add-line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--s1); }
+.shopping-add-line input[type="text"] { width: 4.5rem; }
+.shopping-add input[name="quantite"], .shopping-item-edit input[name="quantite"] { width: 6rem; }
+.shopping-item-edit { margin-bottom: var(--s4); }
+/* The tick page is read in a store, a phone in one hand: each item is one
+   button as wide as the page and a thumb tall, its box ticked green, its
+   name struck through once bought. No `all: unset` (the focus ring,
+   FocusRingTests). « Courses terminées » stays at the foot of the screen. */
+.shopping-progress { font-size: 1.25rem; margin: 0 0 var(--s3); }
+.shopping-ticks { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.shopping-tick form { margin: 0; }
+.shopping-tick-button {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    width: 100%;
+    min-height: 56px;
+    padding: var(--s2) var(--s3);
+    text-align: left;
+    color: var(--text);
+    font: inherit;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.shopping-tick-box {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--muted);
+    border-radius: var(--radius-sm);
+    display: grid;
+    place-items: center;
+}
+.shopping-tick.is-ticked .shopping-tick-box { background: var(--green); border-color: var(--green); }
+.shopping-tick.is-ticked .shopping-tick-box::after { content: "\2713"; color: var(--bg); font-weight: 700; }
+.shopping-tick-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.shopping-tick-quantity { font-weight: 700; }
+.shopping-tick.is-ticked .shopping-tick-button { opacity: 0.6; }
+.shopping-tick.is-ticked .shopping-tick-name { text-decoration: line-through; }
+.shopping-finish {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2) var(--s3);
+    margin-top: var(--s4);
+    padding: var(--s3) 0 calc(var(--s3) + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+}
+/* Phone first at every width, as .returnables-page: fields at 16 px (iOS
+   zooms in under it), buttons a thumb tall. */
+.shopping-run-page :is(input, select, textarea) { font-size: 1rem; }
+.shopping-run-page .btn { min-height: 44px; }
 .sub-table-wrap { overflow-x: auto; }
 
 /* A charge item is a row under its supplier's, and sorting keeps the two

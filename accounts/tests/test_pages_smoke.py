@@ -16,6 +16,7 @@ from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from accounts.tests.test_middleware import routes
 from bank.models import BankTransaction
+from inventory.models import ShoppingList, ShoppingListItem
 from returnables.tests.support import make_pickup
 from staff.tests.support import employee
 from tests.factories import (
@@ -114,6 +115,16 @@ class EveryPageSmokeTests(TwoTenantsTestCase):
             person = employee(last_name=word, first_name="Essai")
             # A pickup the bar's supplier took back, with a note of its own.
             pickup = make_pickup(supplier=supplier, counts={"Fûts": 4}, note=f"Vides {word}")
+            # The bar's shopping list at its supplier: its article and a free
+            # text named after the bar.
+            shopping_list = ShoppingList.objects.create(supplier=supplier)
+            ShoppingListItem.objects.create(
+                shopping_list=shopping_list, stock_type=article, label=article.name, quantity=Decimal("2")
+            )
+            ShoppingListItem.objects.create(
+                shopping_list=shopping_list, label=f"Serviettes {word}", quantity=Decimal("1")
+            )
+        lists = reverse("inventory:shopping_list_page")
         return [
             reverse("invoices:invoice_detail", args=[invoice.pk]),
             reverse("recipes:recipe_detail", args=[recipe.pk]),
@@ -123,6 +134,9 @@ class EveryPageSmokeTests(TwoTenantsTestCase):
             reverse("bank:invoice_search", args=[line.pk]) + f"?recherche={word}",
             reverse("staff:month", args=[person.pk, date(2026, 6, 1)]),
             reverse("returnables:pickup_detail", args=[pickup.pk]),
+            # The store's list, to prepare and to tick in the store.
+            f"{lists}?fournisseur={supplier.pk}",
+            f"{lists}?fournisseur={supplier.pk}&mode=courses",
         ]
 
     def test_every_plain_route_and_one_page_per_app_is_its_own_bar_s(self):
