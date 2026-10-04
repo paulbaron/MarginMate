@@ -28,7 +28,7 @@ from bank.models import BankTransaction
 from bank.statements import parse_statement
 from bank.tests.camt_files import ENTRIES, IBAN, V02, Detail, changed, statement_block, v02, v08
 from bank.tests.camt_files import camt as camt_file
-from bank.tests.support import make_format, rule, rules_of
+from bank.tests.support import SEEDED_FORMAT, make_format, rule, rules_of
 
 CAMT_FORMAT = SimpleNamespace(
     name="Relevé CAMT.053",
@@ -46,6 +46,10 @@ CAMT_FORMAT = SimpleNamespace(
     bank_type_column=None,
     account_pattern="",
 )
+
+
+def ofx_format() -> SimpleNamespace:
+    return SimpleNamespace(**{**vars(CAMT_FORMAT), "name": "Relevé OFX", "file_type": "ofx"})
 
 
 def read(content: bytes, rules=None):
@@ -145,6 +149,27 @@ class ReadingTests(SimpleTestCase):
         self.assertEqual(len(line.bank_type), statements.BANK_TYPE_MAX)
         self.assertTrue(line.bank_type.startswith("PMNT/CCRD/POSD XXX"))
 
+    def test_zeros_past_the_cents_change_nothing(self):
+        """The standard allows five decimals; the euro has two."""
+        self.assertEqual(str(read(v02((changed(amount="8.50000"),))).lines[0].amount), "-8.50000")
+        self.assertEqual(str(read(v02((changed(amount="8.5"),))).lines[0].amount), "-8.5")
+
+    def test_the_label_is_cut_to_what_the_rules_read(self):
+        """A batch's label joins every detail's payee and remittance - a
+        payroll of fifty is past `LABEL_MAX`, and is read, cut; so is an
+        `AddtlNtryInf` of a megabyte."""
+        payroll = changed(
+            ENTRIES[4],
+            details=tuple(
+                Detail(creditor=f"SALARIE {number:02d} EXEMPLE", remittance=("SALAIRE AOUT",)) for number in range(50)
+            ),
+        )
+        (line,) = read(v02((payroll,))).lines
+        self.assertEqual(len(line.label), statements.LABEL_MAX - 1)
+        self.assertTrue(line.label.startswith("SALARIE 00 EXEMPLE SALAIRE AOUT SALARIE 01 EXEMPLE"))
+        (line,) = read(v02((changed(information="I" * 1_000_000),))).lines
+        self.assertEqual(line.label, "I" * statements.LABEL_MAX)
+
 
 class GuardTests(SimpleTestCase):
     """Refused before any parser sees the file."""
@@ -180,6 +205,18 @@ class GuardTests(SimpleTestCase):
         with mock.patch.object(statements, "STRUCTURED_MAX_BYTES", 1000):
             self.assertRefusedUnparsed(v02(), "Ce relevé dépasse 1 Ko : exportez une période plus courte.")
 
+    def test_a_flood_of_attributes(self):
+        """expat builds all of an element's attributes at once - 700 000 on
+        the root held 226 MB - and `MAX_ELEMENTS` counts elements: every
+        attribute has its « = », counted on the bytes first."""
+        flood = " ".join(f'a{number}=""' for number in range(camt.MAX_ATTRIBUTES + 1)).encode()
+        content = v02().replace(b"<Document", b"<Document " + flood, 1)
+        self.assertLess(len(content), statements.STRUCTURED_MAX_BYTES)
+        self.assertRefusedUnparsed(content, camt.TOO_MANY_ATTRIBUTES)
+        # A statement's own attributes - its amounts' currencies - are far
+        # from it.
+        self.assertLess(v02().count(b"="), 100)
+
 
 class RefusalTests(SimpleTestCase):
     def test_what_the_parser_raises_is_said_in_french(self):
@@ -199,7 +236,22 @@ class RefusalTests(SimpleTestCase):
                 with mock.patch.object(ElementTree, "XMLPullParser", Raising):
                     self.assertEqual(refusal(v02()), camt.BROKEN_XML)
         self.assertEqual(refusal(v02()[:-40]), camt.BROKEN_XML)
-        self.assertEqual(refusal(b"Date;Montant\n03/08/2026;-4,10\n"), camt.BROKEN_XML)
+        self.assertEqual(refusal(b"<<>>"), camt.BROKEN_XML)
+
+    def test_a_file_that_is_no_xml_at_all_points_to_a_csv_format(self):
+        """Most often a CSV, the usual export, under a CAMT.053 format: told
+        where a CSV is read, before any parser sees it."""
+        said = (
+            "Ce fichier n'est pas un relevé CAMT.053 (XML ISO 20022) : un relevé exporté en CSV se lit avec un "
+            "format CSV - choisissez-en un à l'import, ou ajoutez-en un sur « Format du relevé » (« Partir d'un "
+            "modèle »)."
+        )
+        for content in (b"", b"Date;Montant\n03/08/2026;-4,10\n", b"\xef\xbb\xbfDate;Montant\n", b"  \n"):
+            with self.subTest(content=content):
+                with mock.patch.object(ElementTree, "XMLPullParser", NeverParse):
+                    self.assertEqual(refusal(content), said)
+        # XML behind a byte order mark is still XML.
+        self.assertEqual(len(read(b"\xef\xbb\xbf" + v02()).lines), len(ENTRIES))
 
     def test_another_camt_message_or_another_xml(self):
         report = v02().replace(b"camt.053.001.02", b"camt.052.001.02")
@@ -210,6 +262,17 @@ class RefusalTests(SimpleTestCase):
         )
         notifications = v02().replace(b"camt.053.001.02", b"camt.054.001.08")
         self.assertTrue(refusal(notifications).startswith("Ce fichier est un message camt.054 :"))
+        # Whatever the format it is imported with: called a CAMT.053 by the
+        # sniffing, it was sent to a CAMT.053 format that then refused it as
+        # a camt.052 - two sentences saying two things.
+        for fmt in (CAMT_FORMAT, ofx_format(), SEEDED_FORMAT):
+            with self.subTest(format=fmt.name):
+                try:
+                    parse_statement(report, rules_of(), fmt)
+                except ValueError as error:
+                    self.assertEqual(str(error), statements.other_camt("camt.052"))
+                else:
+                    raise AssertionError("the file was read")
         invoice = b'<?xml version="1.0"?><Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"/>'
         self.assertEqual(refusal(invoice), camt.NOT_CAMT)
         self.assertEqual(
@@ -244,6 +307,11 @@ class RefusalTests(SimpleTestCase):
             (changed(amount="1,234.56"), "Montant illisible dans le relevé : '1,234.56'"),
             (changed(amount="-4.10"), "Montant illisible dans le relevé : '-4.10'"),
             (changed(amount="4.123456"), "Montant illisible dans le relevé : '4.123456'"),
+            # A third decimal is no amount in euros: the column rounded
+            # « 8.505 » while the fingerprint kept it (review, 04/10/2026).
+            (changed(amount="8.505"), "Montant illisible dans le relevé : '8.505'"),
+            (changed(amount="8.50001"), "Montant illisible dans le relevé : '8.50001'"),
+            (changed(amount="8.500000"), "Montant illisible dans le relevé : '8.500000'"),
             (changed(amount="10000000000.00"), "Montant illisible dans le relevé : '10000000000.00'"),
             (changed(direction="DEBIT"), "Sens de l'opération illisible dans le relevé : 'DEBIT'"),
             (changed(booked="2026-02-30"), "Date illisible dans le relevé : '2026-02-30'"),
@@ -263,6 +331,12 @@ class RefusalTests(SimpleTestCase):
             refusal(v02(())), "Aucune opération trouvée dans ce relevé CAMT.053 (format « Relevé CAMT.053 »)."
         )
 
+    def test_an_account_wider_than_its_column(self):
+        """Its own sentence: a CAMT.053 format has no account pattern to
+        tighten, which the CSV's sentence tells a person to do."""
+        self.assertEqual(refusal(v02(iban="F" * 41)), camt.ACCOUNT_TOO_LONG)
+        self.assertNotIn("(?P<compte>", camt.ACCOUNT_TOO_LONG)
+
     def test_too_many_elements_or_too_deep(self):
         with mock.patch.object(camt, "MAX_ELEMENTS", 50):
             self.assertEqual(refusal(v02()), camt.TOO_MANY_ELEMENTS)
@@ -277,14 +351,53 @@ class MemoryTests(SimpleTestCase):
         entries = [changed(reference=f"R{number:05d}", amount=f"{number}.00") for number in range(1, 3001)]
         layout = statements.check_format(CAMT_FORMAT)
         reading = camt.CamtReading(v02(entries), layout)
-        widest = 0
+        widest = read_lines = 0
         for _line in reading.lines():
-            statement = reading.root[0][0]
-            widest = max(widest, len(statement))
-        self.assertEqual(statement.tag, f"{{{V02}}}Stmt")
-        # What one chunk of the parser holds ahead, never the whole file.
+            read_lines += 1
+            widest = max(widest, sum(1 for _element in reading.root.iter()))
+        self.assertEqual(read_lines, 3000)
+        # What one chunk of the parser holds ahead at most, never the whole
+        # file - the root, its statement and the entry being read.
         self.assertLess(widest, 300)
         self.assertEqual(len(reading.root), 0)
+
+    def test_a_finished_element_leaves_its_parent_empty(self):
+        """Once an element ends, its parent holds no child: those before it
+        were let go of, and those after it - built ahead by the parser - are
+        still reached through their events. Taken out one `remove` at a
+        time, every sibling the chunk built ahead was moved for each: a
+        flood of them inside one entry took twenty seconds."""
+        real = camt._events
+        left = []
+
+        def watching(content):
+            stack = []
+            for event, element in real(content):
+                if event == "start":
+                    stack.append(element)
+                else:
+                    stack.pop()
+                yield event, element
+                # Asked for the next event: the reader has handled this one,
+                # and the parser has built nothing more yet.
+                if event == "end" and stack:
+                    left.append(len(stack[-1]))
+
+        content = v02(ENTRIES[:1]).replace(b"<AddtlNtryInf>", b"<a/>" * 5_000 + b"<AddtlNtryInf>", 1)
+        with mock.patch.object(camt, "_events", watching):
+            self.assertEqual(len(read(content).lines), 1)
+        self.assertGreater(len(left), 5_000)
+        self.assertEqual(max(left), 0)
+
+    def test_a_flood_of_siblings_is_read_in_seconds(self):
+        """Nearly a million empty elements inside one entry - 4 Mo, under
+        `MAX_ELEMENTS`: twenty-two seconds of a request thread when each was
+        taken out of its parent one at a time."""
+        content = v02(ENTRIES[:1]).replace(b"<AddtlNtryInf>", b"<a/>" * 990_000 + b"<AddtlNtryInf>", 1)
+        self.assertLess(len(content), statements.STRUCTURED_MAX_BYTES)
+        started = time.perf_counter()
+        self.assertEqual(len(read(content).lines), 1)
+        self.assertLess(time.perf_counter() - started, 10)
 
     def test_ten_thousand_entries_are_read_in_seconds(self):
         entries = [

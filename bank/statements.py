@@ -36,8 +36,8 @@ its fingerprint. A reader keeps no list of the file's rows: a CSV is read row
 by row (`_CsvReading`), after one pass that only checks the csv module can
 split all of it, so a file it cannot split is refused before any row is, as
 when the whole list was built first. Every file is bounded - `MAX_ROWS` rows,
-`MAX_OPERATIONS` operations - and a refusal echoes `ECHO_MAX` characters of
-it at most (`echoed`).
+`MAX_ROW_CHARS` characters a row, `MAX_OPERATIONS` operations - and a
+refusal echoes `ECHO_MAX` characters of it at most (`echoed`).
 """
 
 from __future__ import annotations
@@ -98,6 +98,16 @@ MAX_LABEL_COLUMNS = 5
 #: memory for the time it takes to read - one POST may carry 100 MB of files.
 MAX_OPERATIONS = 50_000
 MAX_ROWS = 200_000
+#: The most characters one row of a CSV may hold, over every line it spans
+#: (a quoted cell may hold a line break): a statement's row is a few hundred.
+#: The csv module builds a whole row before anything can count its cells,
+#: and one row of 9 MB held 231 MB (review, 04/10/2026) - refused
+#: (`NOT_A_CSV`) before the module reads past it.
+MAX_ROW_CHARS = 64 * 1024
+#: The longest label an OFX or a CAMT.053 line keeps (`cut_label`): what the
+#: recognition rules read of it (`recognition.TEXT_LIMIT`). A CSV's label is
+#: as printed (each cell bounded by the csv module).
+LABEL_MAX = 1000
 #: The most of a file a refusal says back (`echoed`): a cell, an amount, a
 #: code can be the whole file, and a message goes through the session and
 #: onto the page.
@@ -124,9 +134,13 @@ WIDER_THAN_HEADER = (
 
 
 #: How a file of another kind than its format's is refused
-#: (`_refuse_another_kind`).
+#: (`refuse_another_kind`), another camt message than the statement
+#: (`other_camt`), and a file with nothing of its format's kind
+#: (`not_this_kind`).
 ANOTHER_KIND = "Ce fichier est un relevé"
 NOT_A_STATEMENT_XML = "Ce fichier XML n'est pas un relevé de compte"
+ANOTHER_MESSAGE = "Ce fichier est un message"
+NOT_THIS_KIND = "Ce fichier n'est pas un relevé"
 #: What a refusal of the pipeline itself begins with, whatever the kind of
 #: file - beside each reader's own (`ofx.REFUSALS`, `camt.REFUSALS`): the
 #: readers' mutation tests find nothing else.
@@ -141,6 +155,8 @@ REFUSALS = (
     "Ce fichier n'est pas en ",
     ANOTHER_KIND,
     NOT_A_STATEMENT_XML,
+    ANOTHER_MESSAGE,
+    NOT_THIS_KIND,
 )
 
 
@@ -169,11 +185,45 @@ def not_euros(currency: str) -> str:
     return f"Ce relevé est en {echoed(currency)} : seuls les relevés en euros s'importent."
 
 
+def other_camt(message: str) -> str:
+    """Another camt message than the end-of-day statement (« camt.052 », the
+    day's report; « camt.054 », the notifications) - whatever the format it
+    is imported with: `sniff` tells it apart, and the CAMT.053 reader says
+    the same of its root."""
+    return (
+        f"{ANOTHER_MESSAGE} {echoed(message)} : seul le relevé de fin de journée (camt.053) s'importe ; "
+        "exportez le relevé de compte."
+    )
+
+
+def not_this_kind(layout: Layout) -> str:
+    """A file holding nothing of the kind its OFX or CAMT.053 format reads -
+    no `<OFX>`, no XML: most often a CSV, the usual export, under such a
+    format (a new espace reads OFX by default). Said with the way to a CSV
+    format; never read as one in silence."""
+    kind = StatementFormat.FileType(layout.file_type).label
+    return (
+        f"{NOT_THIS_KIND} {kind} : un relevé exporté en CSV se lit avec un format CSV - choisissez-en un à "
+        "l'import, ou ajoutez-en un sur « Format du relevé » (« Partir d'un modèle »)."
+    )
+
+
 def echoed(text) -> str:
     """What a refusal says back of the file: `ECHO_MAX` characters of
     `text` at most - the whole of every cell, date and amount a statement
     really prints."""
     return str(text)[:ECHO_MAX]
+
+
+def cut_label(label: str) -> str:
+    """An OFX or a CAMT.053 line's label, cut to `LABEL_MAX` characters, the
+    spaces the cut leaves at its end dropped - before the rules read it, as
+    a type is cut to its column. Cut, never refused: a CAMT.053 batch's
+    label joins every detail's payee and remittance (a payroll of fifty is
+    well past it), and its first characters are what the rules read; an
+    8 Mo `<NAME>` was stored whole, shown on Banque and read by every rule.
+    The same file cuts the same: its fingerprints stay."""
+    return label[:LABEL_MAX].rstrip()
 
 
 #: The byte order marks a single-byte encoding never begins with.
@@ -187,7 +237,9 @@ ACCEPT_ATTRIBUTE = ",".join((*ACCEPTED_EXTENSIONS, "text/csv"))
 OTHER_XML = "xml"
 #: How much of a file `sniff` reads.
 SNIFF_BYTES = 4096
-_CAMT_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:camt."
+#: A camt message's namespace, and the message it names (« 053 »…).
+_CAMT_PREFIX = "camt."
+_CAMT_MESSAGE = re.compile(r"urn:iso:std:iso:20022:tech:xsd:camt\.([0-9]{3})\.")
 
 #: The fields a refusal of `check_format` names - the form's own.
 FILE_TYPE = "file_type"
@@ -433,10 +485,13 @@ class Statement:
     lines: list[StatementLine] = field(default_factory=list)
 
 
-def parse_statement(content: bytes, rules: recognition.Rules, fmt) -> Statement:
+def parse_statement(content: bytes, rules: recognition.Rules, fmt, *, text: str | None = None) -> Statement:
     """Every operation of the file, laid out as `fmt` says (a
     StatementFormat, or a `Layout` already checked) and described by `rules`
-    (one `recognition.load()`, read by the caller). Refused - ValueError, a
+    (one `recognition.load()`, read by the caller); `text`, for a CSV, is
+    `csv_text(content, layout)` the caller worked out already (« Tester »,
+    which numbers the file's rows first): the file is then not split a third
+    time. Refused - ValueError, a
     French sentence - for a format that cannot read a statement, a file that
     is no statement of that format, a row cut short (or wider than its
     header, where the separator can be printed in an amount), a date or an
@@ -453,7 +508,7 @@ def parse_statement(content: bytes, rules: recognition.Rules, fmt) -> Statement:
     refused row no longer refuses the next file. The file refused is
     refused with the same sentence."""
     layout = fmt if isinstance(fmt, Layout) else check_format(fmt)
-    reading = _reading(content, layout)
+    reading = _reading(content, layout, text)
     lines: list[StatementLine] = []
     for raw in reading.lines():
         if len(lines) >= MAX_OPERATIONS:
@@ -471,23 +526,30 @@ def parse_statement(content: bytes, rules: recognition.Rules, fmt) -> Statement:
                 card_date=described.card_date,
             )
         )
-    return finish(reading.account, lines, rules, reading.no_operation)
+    return finish(reading.account, lines, rules, reading.no_operation, reading.account_too_long)
 
 
-def finish(account: str, lines: list[StatementLine], rules: recognition.Rules, no_operation: str) -> Statement:
+def finish(
+    account: str,
+    lines: list[StatementLine],
+    rules: recognition.Rules,
+    no_operation: str,
+    account_too_long: str = ACCOUNT_TOO_LONG,
+) -> Statement:
     """The statement every reader's lines make - the one place a file is
     refused for what only its last line can tell, in this order: no
     operation (`no_operation`, the reader's own sentence), an account wider
-    than its column (`ACCOUNT_TOO_LONG`), then any rule that could not be
-    applied (`rules.refusal`, after the last line: a rule found slow on it
-    counts). Then each line gets its fingerprint."""
+    than its column (`account_too_long`, the reader's own sentence too: only
+    a CSV's format has an account pattern to tighten), then any rule that
+    could not be applied (`rules.refusal`, after the last line: a rule found
+    slow on it counts). Then each line gets its fingerprint."""
     if not lines:
         raise ValueError(no_operation)
     if len(account) > ACCOUNT_MAX:
         # Never cut: it is in every fingerprint, and a cut one is no account
         # - the pattern tightened later reads another, and every operation
         # of an export imported again would be new.
-        raise ValueError(ACCOUNT_TOO_LONG)
+        raise ValueError(account_too_long)
     # After every row: a rule found too slow on the last one counts too.
     if rules.refusal:
         raise ValueError(rules.refusal)
@@ -498,8 +560,10 @@ def finish(account: str, lines: list[StatementLine], rules: recognition.Rules, n
 def sniff(content: bytes) -> str | None:
     """What the file plainly is, by its first `SNIFF_BYTES` (a byte order
     mark aside): « ofx » for an OFX file (its SGML header, or `<OFX>`, or
-    XML declaring `<?OFX`), « camt053 » for a document in a camt namespace
-    (another camt message included: its reader then says which), `OTHER_XML`
+    XML declaring `<?OFX`), « camt053 » for a document in the camt.053
+    namespace, « camt.052 » (the message's name) for another camt message -
+    refused under any format (`other_camt`): called a CAMT.053, it was sent
+    to a CAMT.053 format that then refused it as a camt.052 -, `OTHER_XML`
     for any other XML document - and None for anything else, a CSV among
     them: a CSV has no mark of its own, so a file is never refused for not
     looking like one."""
@@ -518,21 +582,27 @@ def sniff(content: bytes) -> str | None:
         return None
     if upper.startswith("<?XML") and "<?OFX" in upper:
         return StatementFormat.FileType.OFX.value
-    if _CAMT_NAMESPACE in text:
-        return StatementFormat.FileType.CAMT053.value
+    message = _CAMT_MESSAGE.search(text)
+    if message is not None:
+        number = message.group(1)
+        return StatementFormat.FileType.CAMT053.value if number == "053" else f"camt.{number}"
     if upper.startswith("<?XML"):
         return OTHER_XML
     return None
 
 
-def _refuse_another_kind(content: bytes, layout: Layout) -> None:
+def refuse_another_kind(content: bytes, layout: Layout) -> None:
     """A file plainly of another kind than its format reads, refused in
-    French - the import and « Tester » alike - naming both kinds: never
-    read with another format in silence, which would put it in with another
-    account, label and fingerprint than the person chose."""
+    French - the import and « Tester » alike, « Tester » before it numbers a
+    row - naming both kinds: never read with another format in silence,
+    which would put it in with another account, label and fingerprint than
+    the person chose. Another camt message than the statement is refused
+    whatever the format."""
     found = sniff(content)
     if found is None or found == layout.file_type:
         return
+    if found.startswith(_CAMT_PREFIX):
+        raise WrongFileType(other_camt(found))
     labels = StatementFormat.FileType
     expected = labels(layout.file_type).label
     if found == OTHER_XML:
@@ -546,14 +616,16 @@ def _refuse_another_kind(content: bytes, layout: Layout) -> None:
     )
 
 
-def _reading(content: bytes, layout: Layout):
+def _reading(content: bytes, layout: Layout, text: str | None = None):
     """The reader of `content` for `layout`: an object whose `lines()`
     yields `RawLine`s, whose `account` is final once they are all read, and
-    whose `no_operation` is the sentence a file of none is refused with -
-    once the file is not plainly of another kind (`_refuse_another_kind`)."""
-    _refuse_another_kind(content, layout)
+    whose `no_operation` and `account_too_long` are the sentences a file of
+    none, or of too long an account, is refused with - once the file is not
+    plainly of another kind (`refuse_another_kind`). `text`: a CSV's
+    `csv_text`, worked out already."""
+    refuse_another_kind(content, layout)
     if layout.file_type == StatementFormat.FileType.CSV:
-        return _CsvReading(content, layout)
+        return _CsvReading(content, layout, text)
     if layout.file_type == StatementFormat.FileType.OFX:
         # Imported here: bank.ofx reads this module's bounds and sentences.
         from .ofx import OfxReading
@@ -571,17 +643,21 @@ class _CsvReading:
     holds a date of the format, whole; the rows above the first operation
     are searched for the account; every other row is passed over. Decoded,
     checked for a NUL and split once by the csv module before any row is
-    read (`_csv_text`): a file it cannot split anywhere is refused before a
-    row's own refusal, as when every row was read into a list first."""
+    read (`csv_text` - or the caller's `text`, which it is): a file it
+    cannot split anywhere is refused before a row's own refusal, as when
+    every row was read into a list first."""
 
-    def __init__(self, content: bytes, layout: Layout):
+    #: An account pattern reads the account: the one to tighten.
+    account_too_long = ACCOUNT_TOO_LONG
+
+    def __init__(self, content: bytes, layout: Layout, text: str | None = None):
         self.layout = layout
         self.account = ""
         said = f" (format « {layout.name} »)" if layout.name else ""
         self.no_operation = (
             f"Aucune opération trouvée : ce fichier ne ressemble pas à un relevé bancaire exporté en CSV{said}."
         )
-        self._text = _csv_text(content, layout)
+        self._text = text if text is not None else csv_text(content, layout)
 
     def lines(self):
         layout = self.layout
@@ -685,34 +761,63 @@ def _amount(row, layout: Layout) -> Decimal:
     return received - paid
 
 
-def rows(content: bytes, layout: Layout, limit: int | None = None) -> list[list[str]]:
+def rows(content: bytes, layout: Layout, limit: int | None = None, *, text: str | None = None) -> list[list[str]]:
     """The file's rows that hold anything - the first `limit` of them when
     given (« Tester » shows its first rows): the reader's own decoding and
     splitting, so a column numbered on the page is the column the format
     names. A file the csv module cannot split anywhere (a cell past its
-    limit, a line ended by a lone carriage return) is refused in French,
-    never a 500 - and so is a NUL byte, which no text export holds and which
-    the csv module reads into the cell since Python 3.11: the label went into
-    the database with it - and a file of more than `MAX_ROWS` rows."""
+    limit, a row past `MAX_ROW_CHARS`, a line ended by a lone carriage
+    return) is refused in French, never a 500 - and so is a NUL byte, which
+    no text export holds and which the csv module reads into the cell since
+    Python 3.11: the label went into the database with it - and a file of
+    more than `MAX_ROWS` rows. `text`: `csv_text(content, layout)`, worked
+    out already by the caller."""
     found = []
-    for row in _split(_csv_text(content, layout), layout):
+    for row in _split(text if text is not None else csv_text(content, layout), layout):
         if limit is not None and len(found) >= limit:
             break
         found.append(row)
     return found
 
 
-def _csv_text(content: bytes, layout: Layout) -> str:
+class _RowBound:
+    """The text's lines as the csv module asks for them, the characters of
+    the row it is splitting counted: past `MAX_ROW_CHARS` the file is
+    refused (`NOT_A_CSV`, as a cell past the module's own limit) before the
+    module builds that row - every cell of it at once. The caller sets
+    `pending` back to 0 at each row the module hands over."""
+
+    def __init__(self, text: str):
+        # Split on « \n » alone, as the module was always handed the text:
+        # a line ended by a lone carriage return stays the module's to
+        # refuse.
+        self._lines = iter(io.StringIO(text))
+        self.pending = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        line = next(self._lines)
+        self.pending += len(line)
+        if self.pending > MAX_ROW_CHARS:
+            raise ValueError(NOT_A_CSV)
+        return line
+
+
+def csv_text(content: bytes, layout: Layout) -> str:
     """The file's text, once the csv module has split all of it - each row
     let go as it is counted: refused for a NUL, for what the module cannot
-    split anywhere (`NOT_A_CSV`) and for more than `MAX_ROWS` rows, before
-    any row is read."""
+    split anywhere (`NOT_A_CSV`: a row past `MAX_ROW_CHARS` among it) and
+    for more than `MAX_ROWS` rows, before any row is read."""
     text = decode(content, layout.encoding)
     if "\N{NULL}" in text:
         raise ValueError(NOT_A_CSV)
     counted = 0
+    lines = _RowBound(text)
     try:
-        for _row in csv.reader(io.StringIO(text), delimiter=layout.delimiter):
+        for _row in csv.reader(lines, delimiter=layout.delimiter):
+            lines.pending = 0
             counted += 1
             if counted > MAX_ROWS:
                 raise ValueError(too_many_rows())
@@ -723,12 +828,12 @@ def _csv_text(content: bytes, layout: Layout) -> str:
 
 def _split(text: str, layout: Layout):
     """The rows holding anything, as the csv module splits them - one at a
-    time. `_csv_text` has split the whole text already: no csv.Error here."""
+    time. `csv_text` has split the whole text already: no csv.Error here."""
     try:
         for row in csv.reader(io.StringIO(text), delimiter=layout.delimiter):
             if any(cell.strip() for cell in row):
                 yield row
-    except csv.Error:  # pragma: no cover - _csv_text split it whole first
+    except csv.Error:  # pragma: no cover - csv_text split it whole first
         raise ValueError(NOT_A_CSV) from None
 
 

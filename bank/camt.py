@@ -17,9 +17,13 @@ guards an e-invoice, with a bank's sentences and before any parser sees it
 (the guards are copied, not imported: that module's sentences are about
 invoices): at most `statements.STRUCTURED_MAX_BYTES`; a UTF-16 or UTF-32
 byte order mark, or a NUL in the first four bytes, refused (`WIDE_XML`); a
+file that is no XML at all - most often a CSV under a CAMT.053 format - said
+as such, with the way to a CSV format (`statements.not_this_kind`); a
 declared encoding outside `ENCODINGS` refused - expat raises an English
 ValueError on a multi-byte one and Python a LookupError on an unknown one,
-both of which would reach the page or make a 500; a DOCTYPE or an ENTITY
+both of which would reach the page or make a 500; more `=` than
+`MAX_ATTRIBUTES` (every attribute has one: expat builds all of an element's
+at once, and 700 000 on one element held 226 MB); a DOCTYPE or an ENTITY
 declaration anywhere refused (`UNSAFE_XML`: `ElementTree` expands internal
 entities - the billion laughs). Then `ElementTree.XMLPullParser`, fed in
 chunks, every element counted (`MAX_ELEMENTS`) and its depth bounded
@@ -41,15 +45,19 @@ current one, reads alike:
 * per `Ntry`, one line, a batch included (several `TxDtls` are one
   operation, as the account shows it): its status (`Sts`, or `Sts/Cd` from
   .08) must be BOOK - a pending entry may never be booked, or be booked
-  otherwise; its amount `Amt`, digit for digit, its `Ccy` the euro, negative
-  for a `DBIT`; its day `BookgDt/Dt` (or a `DtTm`'s day) and its value date
+  otherwise; its amount `Amt`, digit for digit, two decimals at most (a zero
+  past them aside: the euro has two, and the column would round a third
+  while the fingerprint kept it), its `Ccy` the euro, negative for a
+  `DBIT`; its day `BookgDt/Dt` (or a `DtTm`'s day) and its value date
   `ValDt` the same way, both between 2000 and 2099; its type the ISO bank
   transaction code `Domn/Cd/Fmly/Cd/SubFmlyCd` (« PMNT/CCRD/POSD »), then
   the bank's own `Prtry/Cd` after a space, cut to its column - what the
   recognition rules read in « Type d'opération »; its label `AddtlNtryInf`,
   or, where the bank printed none, each detail's counterparty (the creditor
   of a debit, the debtor of a credit, `Nm` or `Pty/Nm`) and its
-  unstructured remittance (`RmtInf/Ustrd`), each with its spaces collapsed.
+  unstructured remittance (`RmtInf/Ustrd`), each with its spaces collapsed -
+  the whole cut to `statements.LABEL_MAX` characters (`statements.
+  cut_label`: a payroll's batch joins fifty names).
 
 What each operation IS is the recognition rules' (`statements.
 parse_statement` asks them); the balances (`Bal`) are not read, nor the
@@ -73,13 +81,21 @@ REFUSED_ENCODING = "Ce relevé XML est encodé en"
 UNSAFE_XML = "Ce relevé XML déclare un DOCTYPE ou une entité : il est refusé sans être lu."
 BROKEN_XML = "Ce fichier XML ne se lit pas : exportez à nouveau le relevé CAMT.053."
 NOT_CAMT = "Ce fichier XML n'est pas un relevé CAMT.053 (ISO 20022)."
-OTHER_CAMT = "Ce fichier est un message"
+OTHER_CAMT = statements.ANOTHER_MESSAGE
 TOO_MANY_ELEMENTS = "Ce relevé XML compte trop d'éléments : exportez une période plus courte."
+TOO_MANY_ATTRIBUTES = "Ce relevé XML compte trop d'attributs : exportez une période plus courte."
 NOT_BOOKED = "Ce relevé contient des opérations non comptabilisées"
 DIRECTION = "Sens de l'opération illisible dans le relevé"
 NO_CURRENCY = "Une opération du relevé CAMT.053 ne dit pas sa devise : exportez-le à nouveau."
 INCOMPLETE = "Opération incomplète dans le relevé CAMT.053"
 NO_OPERATION = "Aucune opération trouvée dans ce relevé CAMT.053"
+#: An account no CAMT.053 statement holds (an IBAN is 34 characters at
+#: most): this reader's own sentence - there is no account pattern to
+#: tighten.
+ACCOUNT_TOO_LONG = (
+    f"Le numéro de compte de ce relevé CAMT.053 fait plus de {statements.ACCOUNT_MAX} caractères : "
+    "exportez-le à nouveau."
+)
 #: What every refusal of this reader begins with (statements' shared ones -
 #: dates, amounts, accounts, currency, bounds - apart): a test runs mutated
 #: files through it and finds nothing else.
@@ -91,11 +107,13 @@ REFUSALS = (
     NOT_CAMT,
     OTHER_CAMT,
     TOO_MANY_ELEMENTS,
+    TOO_MANY_ATTRIBUTES,
     NOT_BOOKED,
     DIRECTION,
     NO_CURRENCY,
     INCOMPLETE,
     NO_OPERATION,
+    ACCOUNT_TOO_LONG,
 )
 
 #: The encodings a statement may declare - each one byte a character, or
@@ -107,6 +125,11 @@ STATEMENT_MESSAGE = "053."
 #: real entry is a few dozen elements a dozen deep.
 MAX_ELEMENTS = 1_000_000
 MAX_DEPTH = 64
+#: The most `=` a statement holds - each attribute has one (a real entry
+#: carries a few: its amounts' `Ccy`). Counted on the bytes before any
+#: parser: expat builds all of an element's attributes at once, which
+#: `MAX_ELEMENTS` never sees.
+MAX_ATTRIBUTES = 200_000
 #: How much of the file the parser is fed at a time.
 CHUNK = 64 * 1024
 EURO = "EUR"
@@ -116,7 +139,8 @@ _WIDE_MARKS = (b"\xff\xfe", b"\xfe\xff")
 _DECLARED_ENCODING = re.compile(rb"""^\s*<\?xml[^>]*?\sencoding\s*=\s*["']([^"']*)["']""")
 _DECLARATION = re.compile(rb"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-_AMOUNT = re.compile(r"[0-9]{1,18}(?:\.[0-9]{1,5})?")
+#: Two decimals at most, then zeros up to the standard's five.
+_AMOUNT = re.compile(r"[0-9]{1,18}(?:\.[0-9]{1,2}0{0,3})?")
 #: Where each datum of an entry is, by the local names under `Ntry`.
 _ENTRY_LEAVES = {
     ("Amt",): "amount",
@@ -154,7 +178,8 @@ class CamtReading:
         self.account = ""
         said = f" (format « {layout.name} »)" if layout.name else ""
         self.no_operation = f"{NO_OPERATION}{said}."
-        _guard(content)
+        self.account_too_long = ACCOUNT_TOO_LONG
+        _guard(content, layout)
         self._content = content
         #: The document's root once read: every finished element let go of.
         self.root = None
@@ -222,27 +247,37 @@ class CamtReading:
                     self.account = statement["account"]
                 elif name == "Stmt" and len(below) == 0:
                     statement = None
-            # Let go of what is read: cleared, and out of its parent.
+            # Let go of what is read: cleared, and out of its parent - with
+            # every other child it holds: those before it are read already,
+            # and those after it, built ahead by the parser, are still
+            # reached through their events. One `remove` each moved every
+            # sibling a chunk built ahead: a flood of them inside one entry
+            # took twenty seconds (review, 04/10/2026).
             path.pop()
             elements.pop()
             element.clear()
             if elements:
-                elements[-1].remove(element)
+                del elements[-1][:]
 
 
-def _guard(content: bytes) -> None:
+def _guard(content: bytes, layout: statements.Layout) -> None:
     """What is refused before any parser sees the file: its size, a wide
-    encoding, an encoding outside `ENCODINGS`, a DOCTYPE or an entity."""
+    encoding, no XML at all, an encoding outside `ENCODINGS`, a flood of
+    attributes, a DOCTYPE or an entity."""
     if len(content) > statements.STRUCTURED_MAX_BYTES:
         raise ValueError(statements.too_big())
     if content.startswith((*_WIDE_MARKS, b"\x00\x00\xfe\xff")) or b"\x00" in content[:4]:
         raise ValueError(WIDE_XML)
     head = content[3:512] if content.startswith(b"\xef\xbb\xbf") else content[:512]
+    if head.lstrip()[:1] != b"<":
+        raise ValueError(statements.not_this_kind(layout))
     declared = _DECLARED_ENCODING.match(head)
     if declared is not None:
         encoding = declared.group(1).decode("ascii", "replace")
         if encoding.lower() not in ENCODINGS:
             raise ValueError(f"{REFUSED_ENCODING} « {echoed(encoding)} » : il est refusé sans être lu.")
+    if content.count(b"=") > MAX_ATTRIBUTES:
+        raise ValueError(TOO_MANY_ATTRIBUTES)
     if _DECLARATION.search(content):
         raise ValueError(UNSAFE_XML)
 
@@ -274,11 +309,7 @@ def _check_root(tag: str) -> None:
         raise ValueError(NOT_CAMT)
     message = namespace[len(NAMESPACE) :]
     if not message.startswith(STATEMENT_MESSAGE):
-        said = echoed(f"camt.{message.split('.', 1)[0]}")
-        raise ValueError(
-            f"{OTHER_CAMT} {said} : seul le relevé de fin de journée (camt.053) s'importe ; "
-            "exportez le relevé de compte."
-        )
+        raise ValueError(statements.other_camt(f"camt.{message.split('.', 1)[0]}"))
 
 
 def _line(entry: dict) -> RawLine:
@@ -340,12 +371,13 @@ def _bank_type(entry: dict) -> str:
 
 
 def _label(entry: dict, *, debit: bool) -> str:
-    """`AddtlNtryInf`, else each detail's counterparty and remittance."""
+    """`AddtlNtryInf`, else each detail's counterparty and remittance - cut
+    to `statements.LABEL_MAX` characters."""
     information = " ".join(entry.get("information", "").split())
     if information:
-        return information
+        return statements.cut_label(information)
     parts = []
     for detail in entry["details"]:
         parts.append(detail.get("creditor" if debit else "debtor", ""))
         parts.extend(detail["remittance"])
-    return " ".join(" ".join(part.split()) for part in parts if part.strip())
+    return statements.cut_label(" ".join(" ".join(part.split()) for part in parts if part.strip()))

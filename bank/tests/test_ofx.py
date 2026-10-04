@@ -144,6 +144,8 @@ class ReadingTests(SimpleTestCase):
             ("+7", "7"),
             ("-.50", "-0.50"),
             ("9999999999.99", "9999999999.99"),
+            # A zero past the cents changes nothing the column keeps.
+            ("-4.100", "-4.100"),
         ):
             with self.subTest(printed=printed):
                 self.assertEqual(str(read(sgml((changed(trnamt=printed),))).lines[0].amount), amount)
@@ -166,6 +168,22 @@ class ReadingTests(SimpleTestCase):
     def test_the_type_is_cut_to_its_column(self):
         (line,) = read(sgml((changed(trntype="X" * 100),))).lines
         self.assertEqual(line.bank_type, "X" * statements.BANK_TYPE_MAX)
+
+    def test_the_label_is_cut_to_what_the_rules_read(self):
+        """An 8 Mo NAME was stored whole, shown on Banque and read by every
+        rule: the label keeps `LABEL_MAX` characters, the spaces of the cut
+        dropped, and the same file cuts the same."""
+        huge = changed(name="A" * (statements.LABEL_MAX - 1) + " " + "B" * 1_000_000, memo=None)
+        first, again = read(sgml((huge,))).lines[0], read(sgml((huge,))).lines[0]
+        self.assertEqual(first.label, "A" * (statements.LABEL_MAX - 1))
+        self.assertEqual(first.fingerprint, again.fingerprint)
+        self.assertEqual(len(read(xml((changed(memo="M" * 5000),))).lines[0].label), statements.LABEL_MAX)
+
+    def test_comments_are_set_aside_wherever_they_are(self):
+        """A comment holding a tag is no element: set aside, before the
+        tokenizer reads the file."""
+        content = sgml().replace(b"<BANKTRANLIST>", b"<BANKTRANLIST><!-- <STMTTRN> --><!---->", 1)
+        self.assertEqual(brief(read(content)), READ)
 
     def test_the_rules_read_the_type(self):
         rules = rules_of(rule("Carte (OFX : POS)", "card_payment", "^POS$", searched="bank_type"))
@@ -217,6 +235,11 @@ class RefusalTests(SimpleTestCase):
             "4.",
             "NaN",
             "\N{ARABIC-INDIC DIGIT FOUR}",
+            # A third decimal is no amount in euros: the column rounded
+            # « -8.505 » while the fingerprint kept it (review, 04/10/2026).
+            "-8.505",
+            "1.234",
+            ",125",
         ):
             with self.subTest(printed=printed):
                 self.assertEqual(
@@ -261,9 +284,40 @@ class RefusalTests(SimpleTestCase):
                 self.assertEqual(refusal(content[:cut]), ofx.NOT_OFX)
 
     def test_what_is_no_ofx(self):
-        for content in (b"", b"Date;Montant\n03/08/2026;-4,10\n", b"<OFX><STMTRS <BAD>", b"<OFX>\n<A attr='1'>x"):
+        for content in (b"<OFX><STMTRS <BAD>", b"<OFX>\n<A attr='1'>x"):
             with self.subTest(content=content):
                 self.assertEqual(refusal(content), ofx.NOT_OFX)
+
+    def test_a_file_with_no_ofx_at_all_points_to_a_csv_format(self):
+        """A new espace reads OFX by default, and CSV is the usual French
+        export: a file holding no `<OFX>` at all - a CSV - is told where a
+        CSV is read, never only to export it as OFX again."""
+        said = (
+            "Ce fichier n'est pas un relevé OFX / QFX (Money) : un relevé exporté en CSV se lit avec un format "
+            "CSV - choisissez-en un à l'import, ou ajoutez-en un sur « Format du relevé » (« Partir d'un modèle »)."
+        )
+        for content in (b"", b"Date;Montant\n03/08/2026;-4,10\n", b"Compte;****0042;;;;\n"):
+            with self.subTest(content=content):
+                self.assertEqual(refusal(content), said)
+
+    def test_comments_never_closed_are_refused_in_linear_time(self):
+        """`<!--.*?-->` scanned to the end of the file for every comment
+        left open: 160 KB took a minute, an 8 Mo file some forty hours of a
+        request thread (review, 04/10/2026)."""
+        for content in (b"<OFX>" + b"<!--" * 75_000, sgml() + b"<!-- " + b"x" * 300_000, b"<OFX><!-- -->" * 30_000):
+            with self.subTest(content=content[:20]):
+                started = time.perf_counter()
+                self.assertEqual(refusal(content), ofx.NOT_OFX)
+                self.assertLess(time.perf_counter() - started, 1)
+
+    def test_operations_under_unknown_elements_are_read_each_leaf_at_once(self):
+        """A leaf looks up its nearest known aggregates - kept apart, never
+        searched for among every element open: that pass, a leaf, took five
+        seconds on an 8 Mo file of leaves sixty unknown elements deep."""
+        content = sgml().replace(b"<BANKTRANLIST>", b"<BANKTRANLIST>" + b"<A>" * 50 + b"<B>x" * 300_000, 1)
+        started = time.perf_counter()
+        self.assertEqual(brief(read(content)), READ)
+        self.assertLess(time.perf_counter() - started, 5)
 
     def test_elements_nested_past_any_statement_are_refused_at_once(self):
         content = sgml().replace(b"<BANKTRANLIST>", b"<BANKTRANLIST>" + b"<A>" * 200_000, 1)
@@ -279,7 +333,10 @@ class RefusalTests(SimpleTestCase):
             self.assertEqual(refusal(sgml()), "Ce relevé dépasse 1 Ko : exportez une période plus courte.")
 
     def test_an_account_wider_than_its_column(self):
-        self.assertEqual(refusal(sgml(account="1" * 41)), statements.ACCOUNT_TOO_LONG)
+        """Its own sentence: an OFX format has no account pattern to
+        tighten, which the CSV's sentence tells a person to do."""
+        self.assertEqual(refusal(sgml(account="1" * 41)), ofx.ACCOUNT_TOO_LONG)
+        self.assertNotIn("(?P<compte>", ofx.ACCOUNT_TOO_LONG)
 
 
 #: Every sentence a refusal of an OFX file may begin with - the reader's own

@@ -14,6 +14,7 @@ Every label, account number and amount below is invented.
 
 from __future__ import annotations
 
+import tracemalloc
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -115,6 +116,36 @@ class BoundsTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, "Montant illisible dans le relevé : '12,3x'"):
             parse_amount("12,3x")
 
+    def test_a_row_wider_than_any_statement_s_is_refused_before_the_csv_module_builds_it(self):
+        """The csv module builds a whole row before anything counts its
+        cells: one row of 9 MB held 231 MB. A row - over every line a quoted
+        cell spans - past `MAX_ROW_CHARS` is no CSV, refused first."""
+        wide = b"ab;" * 350_000 + b"\n"
+        tracemalloc.start()
+        try:
+            with self.assertRaisesMessage(ValueError, statements.NOT_A_CSV):
+                parse_statement(bnp(row()) + wide, rules_of(), SEEDED_FORMAT)
+            _now, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        # The file and its text, never its 350 000 cells (some 30 MB).
+        self.assertLess(peak, 15_000_000)
+        with mock.patch.object(statements, "MAX_ROW_CHARS", 200):
+            fits = HEADER + row(label="X" * (200 - len(row(label=""))))
+            self.assertEqual(len(fits) - len(HEADER), 200)
+            self.assertEqual(len(parse_statement(fits.encode(), rules_of(), SEEDED_FORMAT).lines), 1)
+            for content in (
+                (fits + row(label="X" * 200)).encode(),
+                # Short lines, one row: a quoted cell holding line breaks.
+                bnp(row(label='"' + "X\n" * 150 + '"')),
+            ):
+                with self.subTest(content=content[-30:]):
+                    with self.assertRaisesMessage(ValueError, statements.NOT_A_CSV):
+                        parse_statement(content, rules_of(), SEEDED_FORMAT)
+            # « Tester »'s rows are held to it too.
+            with self.assertRaisesMessage(ValueError, statements.NOT_A_CSV):
+                statements.rows(bnp(row(label="X" * 300)), statements.check_format(SEEDED_FORMAT), limit=1)
+
 
 class LayoutTests(SimpleTestCase):
     def test_a_layout_with_no_column_needs_no_cell(self):
@@ -198,7 +229,9 @@ class SniffTests(SimpleTestCase):
             (camt_files.v02(), "camt053"),
             (camt_files.v08(), "camt053"),
             (camt_files.camt(declaration=False), "camt053"),
-            (camt_files.v02().replace(b"camt.053", b"camt.052"), "camt053"),
+            # Another camt message is its own: refused under any format.
+            (camt_files.v02().replace(b"camt.053", b"camt.052"), "camt.052"),
+            (camt_files.v08().replace(b"camt.053", b"camt.054"), "camt.054"),
             (b'<?xml version="1.0"?><Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"/>', "xml"),
             (bnp(row()), None),
             (b"", None),

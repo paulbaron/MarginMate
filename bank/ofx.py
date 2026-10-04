@@ -14,9 +14,12 @@ Both versions read alike, by one tokenizer and never by an XML parser: OFX
 1.x is SGML whose leaf elements are left open (above), OFX 2.x is XML whose
 leaves are closed (`<TRNAMT>-4.10</TRNAMT>`) behind an `<?xml ?>` and an
 `<?OFX ?>` declaration. The file is decoded with the format's encoding
-(`statements.decode`), read from its first `<OFX>`, its comments set aside;
-a DOCTYPE or an ENTITY declaration, a NUL, or anything that is no tag
-followed by its text refuses it. The five XML entities and the numeric
+(`statements.decode`), read from its first `<OFX>`, its comments set aside
+in one pass (`_without_comments`: a comment never closed refuses it); a
+DOCTYPE or an ENTITY declaration, a NUL, or anything that is no tag
+followed by its text refuses it, and a file holding no `<OFX>` at all is
+said to be no OFX file, with the way to a CSV format - the usual export
+(`statements.not_this_kind`). The five XML entities and the numeric
 character references are decoded - a reference only to a character a label
 may hold (no control but the tab, no surrogate, nothing past U+10FFFF, seven
 decimal digits or six hexadecimal ones at most), anything else refused; any
@@ -36,12 +39,15 @@ transparent):
   (YYYYMMDD; the time and the zone after them are not read), its value date
   `DTAVAIL`'s, both between 2000 and 2099; its amount `TRNAMT`, read digit
   for digit (« -12.50 », « -12,5 »; one decimal mark, never a thousands
-  one, no exponent), bounded by `statements.MAX_AMOUNT`; a `CURRENCY` other
+  one, no exponent; two decimals at most, a zero past them aside - a third
+  digit is no amount in euros, and the column would round it while the
+  fingerprint kept it), bounded by `statements.MAX_AMOUNT`; a `CURRENCY` other
   than the euro refuses it (an `ORIGCURRENCY` only says what it was before
   the bank converted it); its label `NAME` (else `PAYEE/NAME`) then `MEMO`,
-  each with its spaces collapsed; its type `TRNTYPE` (POS, DIRECTDEBIT,
-  XFER…), cut to its column - what the recognition rules read in « Type
-  d'opération ».
+  each with its spaces collapsed, the whole cut to `statements.LABEL_MAX`
+  characters (`statements.cut_label`); its type `TRNTYPE` (POS,
+  DIRECTDEBIT, XFER…), cut to its column - what the recognition rules read
+  in « Type d'opération ».
 
 What each operation IS is the recognition rules' (`statements.
 parse_statement` asks them), as for a CSV; `DTUSER` (the day a card was
@@ -71,10 +77,16 @@ BAD_REFERENCE = "Caractère illisible dans le relevé OFX"
 NO_CURRENCY = "Ce relevé OFX ne dit pas sa devise (CURDEF) : exportez-le à nouveau au format OFX (Money)."
 INCOMPLETE = "Opération incomplète dans le relevé OFX"
 NO_OPERATION = "Aucune opération trouvée dans ce relevé OFX"
+#: An account no OFX statement holds (an ACCTID is 22 characters at most):
+#: this reader's own sentence - there is no account pattern to tighten.
+ACCOUNT_TOO_LONG = (
+    f"Le numéro de compte de ce relevé OFX fait plus de {statements.ACCOUNT_MAX} caractères : "
+    "exportez-le à nouveau au format OFX (Money)."
+)
 #: What every refusal of this reader begins with (statements' shared ones -
 #: dates, amounts, accounts, currency, bounds - apart): a test runs mutated
 #: files through it and finds nothing else.
-REFUSALS = (NOT_OFX, UNSAFE, BAD_REFERENCE, NO_CURRENCY, INCOMPLETE, NO_OPERATION)
+REFUSALS = (NOT_OFX, UNSAFE, BAD_REFERENCE, NO_CURRENCY, INCOMPLETE, NO_OPERATION, ACCOUNT_TOO_LONG)
 
 #: The aggregates whose structure is read - an element with text after its
 #: tag is a leaf, one without is an aggregate (or an empty leaf, `LEAVES`).
@@ -120,7 +132,7 @@ EURO = "EUR"
 
 _OFX_START = re.compile(r"<OFX>", re.IGNORECASE)
 _DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
-_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_COMMENT_OPEN, _COMMENT_CLOSE = "<!--", "-->"
 #: A tag and the text up to the next one: the whole file after <OFX> is
 #: made of these, or it is no OFX. An XML 2.x file may write an empty
 #: element `<MEMO/>`.
@@ -130,7 +142,10 @@ _NAMED = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
 #: The widest reference read: past U+10FFFF either way is no character.
 _DECIMAL_DIGITS, _HEX_DIGITS = 7, 6
 _DAY = re.compile(r"[0-9]{8}")
-_AMOUNT = re.compile(r"[+-]?(?:[0-9]+(?:[.,][0-9]+)?|[.,][0-9]+)")
+#: Two decimals at most, a zero past them aside (« -4.100 » is -4.10 to the
+#: cent): a third digit is no amount in euros, and the column would round it
+#: while the fingerprint kept it.
+_AMOUNT = re.compile(r"[+-]?(?:[0-9]+(?:[.,][0-9]{1,2}0*)?|[.,][0-9]{1,2}0*)")
 #: An amount longer than this is none (`MAX_AMOUNT` has ten digits before
 #: its decimals): refused before `Decimal` reads a whole file of digits.
 _AMOUNT_MAX_LENGTH = 40
@@ -147,6 +162,7 @@ class OfxReading:
         self.account = ""
         said = f" (format « {layout.name} »)" if layout.name else ""
         self.no_operation = f"{NO_OPERATION}{said}."
+        self.account_too_long = ACCOUNT_TOO_LONG
         if len(content) > statements.STRUCTURED_MAX_BYTES:
             raise ValueError(statements.too_big())
         text = statements.decode(content, layout.encoding)
@@ -156,14 +172,19 @@ class OfxReading:
             raise ValueError(UNSAFE)
         start = _OFX_START.search(text)
         if start is None:
-            raise ValueError(NOT_OFX)
-        self._text = _COMMENT.sub("", text[start.start() :])
+            # No OFX at all: most often a CSV, the usual export, under a
+            # format of this kind - a new espace reads OFX by default.
+            raise ValueError(statements.not_this_kind(layout))
+        self._text = _without_comments(text[start.start() :])
 
     def lines(self):
         accounts: set[str] = set()
         statement = None  # [currency, account] of the STMTRS being read
         operation = None  # the leaves of the STMTTRN being read
         stack: list[str] = []
+        #: The known aggregates of `stack`, in its order: a leaf's nearest
+        #: two read at once, however deep unknown elements nest around it.
+        known: list[str] = []
         last_leaf = None
         for closing, name, empty, text in _tokens(self._text):
             if empty:
@@ -186,6 +207,8 @@ class OfxReading:
                 last_leaf = None
                 while stack:
                     ended = stack.pop()
+                    if ended in AGGREGATES:
+                        known.pop()
                     if ended == "STMTTRN" and operation is not None:
                         yield _line(operation, statement)
                         operation = None
@@ -197,7 +220,7 @@ class OfxReading:
             value = _unescape(text)
             if name in LEAVES or value.strip():
                 last_leaf = name
-                parent, grandparent = _known(stack, 2)
+                parent, grandparent = _nearest(known, 2)
                 if operation is not None and parent == "STMTTRN":
                     operation.setdefault(name, value.strip())
                 elif operation is not None and parent == "PAYEE" and name == "NAME":
@@ -220,9 +243,11 @@ class OfxReading:
                 raise ValueError(NOT_OFX)
             if name in STATEMENTS:
                 statement = [None, ""]
-            elif name == "STMTTRN" and statement is not None and _known(stack, 1)[0] == "BANKTRANLIST":
+            elif name == "STMTTRN" and statement is not None and _nearest(known, 1)[0] == "BANKTRANLIST":
                 operation = {}
             stack.append(name)
+            if name in AGGREGATES:
+                known.append(name)
         if stack:
             # An aggregate left open at the end: the file was cut short, and
             # its last operation, never ended, would be lost in silence.
@@ -241,10 +266,31 @@ def _tokens(text: str):
         position = token.end()
 
 
-def _known(stack: list[str], count: int) -> list[str | None]:
-    """The `count` nearest known aggregates open, innermost first."""
-    found: list[str | None] = [name for name in reversed(stack) if name in AGGREGATES][:count]
+def _nearest(known: list[str], count: int) -> list[str | None]:
+    """The `count` nearest known aggregates open, innermost first - `known`
+    holds them outermost first. Looked for among every element open, it was
+    a pass over the stack a leaf: two million leaves under sixty unknown
+    elements took five seconds."""
+    found: list[str | None] = list(reversed(known[-count:]))
     return found + [None] * (count - len(found))
+
+
+def _without_comments(text: str) -> str:
+    """`text` with its comments (`<!-- … -->`) set aside, in one pass - a
+    comment never closed refuses the file. A regular expression's lazy
+    `<!--.*?-->` scanned to the end of the file for every `<!--` left open:
+    160 KB of them took a minute, the 8 Mo a file may weigh some forty hours
+    of a request thread (review, 04/10/2026)."""
+    parts = []
+    position = 0
+    while (opening := text.find(_COMMENT_OPEN, position)) != -1:
+        closing = text.find(_COMMENT_CLOSE, opening + len(_COMMENT_OPEN))
+        if closing == -1:
+            raise ValueError(NOT_OFX)
+        parts.append(text[position:opening])
+        position = closing + len(_COMMENT_CLOSE)
+    parts.append(text[position:])
+    return "".join(parts)
 
 
 def _unescape(text: str) -> str:
@@ -291,7 +337,7 @@ def _line(operation: dict, statement) -> RawLine:
         operation_date=_day(operation["DTPOSTED"]),
         value_date=_day(value_date) if value_date else None,
         bank_type=operation.get("TRNTYPE", "").strip()[:BANK_TYPE_MAX].rstrip(),
-        label=label,
+        label=statements.cut_label(label),
         amount=_amount(operation["TRNAMT"]),
     )
 
@@ -314,8 +360,10 @@ def _day(printed: str) -> date:
 
 def _amount(printed: str) -> Decimal:
     """`TRNAMT` digit for digit: a sign, digits, one decimal mark (« . » as
-    the standard says, « , » as some banks print it) - never a thousands
-    mark, an exponent or anything past `MAX_AMOUNT`."""
+    the standard says, « , » as some banks print it), two decimals at most -
+    never a thousands mark, an exponent, a third decimal that is not a zero
+    (« -8.505 », which the column would round) or anything past
+    `MAX_AMOUNT`."""
     refused = ValueError(f"Montant illisible dans le relevé : {echoed(printed)!r}")
     if len(printed) > _AMOUNT_MAX_LENGTH or _AMOUNT.fullmatch(printed) is None:
         raise refused
