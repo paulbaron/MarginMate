@@ -22,6 +22,7 @@ import re
 from datetime import date
 from decimal import Decimal
 from html import unescape
+from unittest import mock
 
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -455,7 +456,11 @@ class StalePageTests(LinkPage, TestCase):
         self.act(self.debit, "unlink", **self.drawn_unlink(self.debit))
         self.drawn_with("reopen")
         self.act(self.debit, "link", invoice=[self.first.pk, self.second.pk])
-        answer = self.act(self.debit, "reopen")
+        # Refused before the automatic pass, not only before the reopen: the
+        # pass leaves this line alone either way, so only the mock tells.
+        with mock.patch("bank.reconcile.reconcile") as automatic_pass:
+            answer = self.act(self.debit, "reopen")
+        automatic_pass.assert_not_called()
         self.debit.refresh_from_db()
         self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002"})
         self.assertEqual(set(self.debit.payments.values_list("method", flat=True)), {InvoicePayment.Method.MANUAL})
