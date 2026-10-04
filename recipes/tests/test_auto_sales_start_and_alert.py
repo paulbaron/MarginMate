@@ -24,6 +24,7 @@ from recipes import auto_sales, importing
 from recipes.models import AutoSalesImport, SalesImportJob
 from recipes.pos.laddition_download import DownloadCancelled
 from recipes.tasks import import_laddition_sales_task
+from recipes.tests.till_support import LADDITION_ACCOUNT
 
 JUNE = (date(2026, 6, 1), date(2026, 6, 30))
 
@@ -94,6 +95,9 @@ class StartTests(TestCase):
         job, _thread = self.start(notes=["Début ramené au 01/06/2026."])
         self.assertIn("Début ramené au 01/06/2026.", job.log)
 
+    # The tab's fetch card and its POST need L'Addition's account ready
+    # (recipes/pos/connectors.py): the test settings blank it.
+    @LADDITION_ACCOUNT
     def test_the_tab_refuses_while_an_automatic_import_runs(self):
         running = SalesImportJob.objects.create(
             status=SalesImportJob.Status.RUNNING, trigger=SalesImportJob.Trigger.AUTOMATIC
@@ -111,6 +115,7 @@ class StartTests(TestCase):
         self.assertContains(response, "Lancé automatiquement")
         self.assertContains(response, 'data-job-control="sales-import-status" disabled')
 
+    @LADDITION_ACCOUNT
     def test_the_tab_refuses_an_import_started_between_its_check_and_its_start(self):
         with (
             mock.patch("recipes.views.start_sales_import", return_value=None),
@@ -124,6 +129,7 @@ class StartTests(TestCase):
         thread.assert_not_called()
         self.assertContains(response, "Une récupération est déjà en cours.")
 
+    @LADDITION_ACCOUNT
     def test_the_tab_links_to_the_settings(self):
         self.assertContains(
             self.client.get(reverse("recipes:sales_list")),

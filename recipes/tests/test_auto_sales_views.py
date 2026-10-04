@@ -23,6 +23,7 @@ from recipes.auto_sales_views import AUTO_SALES_CAP, OWNER_ONLY_SETTINGS
 from recipes.forms import AUTO_SALES_NO_DAY, AUTO_SALES_NUL_REFUSED, AUTO_SALES_TOO_MANY_TIMES
 from recipes.integration import refusal
 from recipes.models import AutoSalesImport, SalesImportJob
+from recipes.tests.till_support import LADDITION_ACCOUNT
 from staff.tests.page_forms import as_post, form_posting_to, page_forms_of
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
 
@@ -152,6 +153,9 @@ class SmokeTests(PageCase):
         with mock.patch("notifications.webpush.sending_enabled", return_value=True):
             self.assertNotIn("Serveur de développement", self.html())
 
+    # The link sits in L'Addition's card on the Ventes tab, drawn only where
+    # its account is ready (recipes/pos/connectors.py).
+    @LADDITION_ACCOUNT
     def test_reached_from_the_sales_tab_the_gathers_and_notifications(self):
         for url in (reverse("recipes:sales_list"), reverse("invoices:auto_gathers"), reverse("notifications:home")):
             with self.subTest(url=url):
