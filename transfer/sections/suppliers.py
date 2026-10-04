@@ -509,9 +509,12 @@ class SuppliersSection(Section):
             # Field by field, what a replace does not take is said « À
             # savoir »; « Gardés — encore utilisés » is for whole records.
             if bound:
-                there = f"« {value} »" if value else "aucun"
+                from invoices.parsers import reader_label
+
+                # By name, as the source form lists the readers.
+                there = f"« {reader_label(value)} »" if value else "le lecteur générique"
                 report.note(
-                    f"Fournisseur « {supplier.name} » : garde son lecteur « {supplier.parser_key} » "
+                    f"Fournisseur « {supplier.name} » : garde son lecteur « {reader_label(supplier.parser_key)} » "
                     f"({there} dans l'archive) — {KEPT_BOUND}"
                 )
             elif not known_parser(value):

@@ -2217,9 +2217,14 @@ lists « — Lecteur générique — », then the readers of a PDF layout by the
 settings one shop's tickets: every bar saw the original bar's local shops'
 codes there) nor the AI reader. A key saved before (a till's, one since
 removed) stays offered under its name, so no source becomes invalid. The
-sources table and an import's « Le lecteur X n'a trouvé aucune ligne » name
-a reader the same way (`parsers.reader_label`, `InvoiceType.reader_name`); a
-new reader needs a `label` (`test_parser_contract`).
+sources table, an import's « Le lecteur X n'a trouvé aucune ligne » and the
+« Données » import's « garde son lecteur » note name a reader the same way
+(`parsers.reader_label`, `InvoiceType.reader_name`; the AI reader is
+« Analyse IA », `AI_READER_LABEL`, as the PDF import's select names its
+group); a new reader needs a `label` (`test_parser_contract`). The hand PDF
+import reads with the SUPPLIER's reader alone (`parse_and_import(supplier)`):
+its card names the select's group (« Si son fournisseur est dans le groupe
+« Lecteur dédié »… »), never a source's « Lecteur ».
 
 A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
 of the day: it comes round, so it is stored with the date, or a later ticket

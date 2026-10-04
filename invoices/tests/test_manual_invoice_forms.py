@@ -185,6 +185,11 @@ class SourceReaderChoicesTests(TestCase):
         source.parser_key = "PLUS_LA"
         source.save()
         self.assertIn(("PLUS_LA", "PLUS_LA"), self.choices(InvoiceTypeForm(instance=source)))
+        source.parser_key = "LLM"
+        source.save()
+        self.assertIn(("LLM", "Analyse IA"), self.choices(InvoiceTypeForm(instance=source)))
+        source.parser_key = "PLUS_LA"
+        source.save()
         form = InvoiceTypeForm(
             instance=source,
             data={
