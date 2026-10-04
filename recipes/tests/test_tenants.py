@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import unittest
 from datetime import date
 from decimal import Decimal
 from io import StringIO
@@ -68,6 +69,19 @@ class SalesTabTests(TwoTenantsTestCase):
         page = self.tab(self.user_b)
         self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("à configurer", page)
+
+    # MERGE NOTE for the till axis: this branch may not edit
+    # recipes/templates/recipes/_tab_sales.html, whose import form still says
+    # « Nécessite LADDITION_EMAIL et LADDITION_PASSWORD dans le fichier .env »
+    # - shown to every bar now that each fetches its own sales. The till
+    # axis rewrites that paragraph: once merged, this test passes and
+    # unittest reports an UNEXPECTED SUCCESS, which fails the run - take the
+    # decorator off then. Never ship the branch with it still failing.
+    @unittest.expectedFailure
+    def test_another_bar_s_tab_names_no_server_variable(self):
+        page = self.tab(self.user_b)
+        self.assertNotIn("LADDITION_EMAIL", page)
+        self.assertNotIn(".env", page)
 
     def test_the_owner_s_tenant_keeps_the_form(self):
         page = self.tab(self.user_a)
@@ -234,14 +248,35 @@ class SessionTests(TwoTenantsTestCase):
                 session_module.log_in(driver, log=lambda *args: None)
         self.assertEqual(typed, ["caisse-beta@example.invalid", "secret-beta"])
 
-    def test_another_bar_opens_one(self):
+    def test_another_bar_opens_one_with_its_own_account(self):
+        from accounts import vault
+
         with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
             with (
                 mock.patch.object(session_module, "build_driver") as build,
                 mock.patch.object(session_module, "open_report"),
             ):
                 with session_module.laddition_session(tempfile.mkdtemp()) as driver:
                     self.assertIs(driver, build.return_value)
+
+    def test_no_browser_starts_for_another_bar_with_no_account(self):
+        """Its « Identifiants » holds no L'Addition login: said before one of
+        the server's browsers is started for nothing - the .env's values in
+        the settings change nothing."""
+        with (
+            bound_tenant(self.bar_b),
+            override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch.object(session_module, "open_report") as open_report,
+            self.assertRaises(session_module.LadditionAuthError) as caught,
+        ):
+            with session_module.laddition_session(tempfile.mkdtemp()):
+                pass
+        build.assert_not_called()
+        open_report.assert_not_called()
+        self.assertIn("page Identifiants", str(caught.exception))
+        self.assertNotIn("LADDITION", str(caught.exception))
 
     def test_the_owner_s_tenant_opens_one(self):
         with bound_tenant(self.bar_a):

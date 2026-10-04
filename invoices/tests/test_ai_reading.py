@@ -16,6 +16,7 @@ names. Data invented.
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from unittest import mock
 
@@ -31,6 +32,24 @@ from invoices.integrations import AiReadingRefused
 from invoices.models import Invoice, Supplier
 from invoices.parsers import LLM_PARSER_KEY, llm_fallback
 from invoices.parsers.llm_fallback import LLMFallbackParser
+
+
+def in_another_thread(work) -> None:
+    """`work()` in a thread of its own, as another request is: one thread
+    binds one espace at a time. Its exception, if any, is raised here."""
+    failed = []
+
+    def run():
+        try:
+            work()
+        except BaseException as exc:  # noqa: BLE001 - handed back to the test
+            failed.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    if failed:
+        raise failed[0]
 
 
 def fake_anthropic(raised=None):
@@ -190,6 +209,58 @@ class HostedUploadTests(TwoTenantsTestCase):
     """Bar Beta, another bar: « Analyse IA » once its key is on its page."""
 
     owner_a = True
+
+    def parse(self, tenant, module):
+        with (
+            bound_tenant(tenant),
+            mock.patch.dict(sys.modules, {"anthropic": module}),
+            mock.patch("invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI"),
+        ):
+            return LLMFallbackParser().parse("facture.pdf")
+
+    def test_one_reading_at_a_time_for_another_bar_never_both_slots(self):
+        """Two uploads of one bar took both of the server's slots, and every
+        other bar was told the server was busy."""
+        self.bar_c = self.make_tenant("Bar Gamma")
+        for tenant, key in ((self.bar_b, "cle-beta"), (self.bar_c, "cle-gamma")):
+            with bound_tenant(tenant):
+                vault.save({"ANTHROPIC_API_KEY": key})
+        inner = {}
+
+        def readings():
+            try:
+                self.parse(self.bar_b, fake_anthropic())
+            except AiReadingRefused as refused:
+                inner["beta"] = str(refused)
+            inner["gamma"] = self.parse(self.bar_c, fake_anthropic()).invoice_number
+
+        def second_reading_inside(module):
+            # While Beta's first reading runs, from other request threads:
+            # Beta's second is refused, Gamma's goes through.
+            in_another_thread(readings)
+            return module.RateLimitError("x")
+
+        with self.assertRaises(AiReadingRefused):
+            self.parse(self.bar_b, fake_anthropic(second_reading_inside))
+        self.assertEqual(inner, {"beta": integrations.AI_BUSY_HERE, "gamma": "F-1"})
+        # Every slot is given back, refused or not.
+        self.assertEqual(llm_fallback._RUNNING, {})
+        self.assertEqual(llm_fallback._SLOTS._value, llm_fallback.AI_SLOTS)
+        self.assertEqual(self.parse(self.bar_b, fake_anthropic()).invoice_number, "F-1")
+
+    def test_the_owner_s_readings_are_not_counted_per_espace(self):
+        inner = {}
+
+        def reading():
+            inner["owner"] = self.parse(self.bar_a, fake_anthropic()).invoice_number
+
+        def second_reading_inside(module):
+            in_another_thread(reading)
+            return module.RateLimitError("x")
+
+        with override_settings(ANTHROPIC_API_KEY="cle-essai"), self.assertRaises(AiReadingRefused):
+            self.parse(self.bar_a, fake_anthropic(second_reading_inside))
+        self.assertEqual(inner, {"owner": "F-1"})
 
     def test_offered_once_a_key_is_typed_and_refused_before_the_upload_without(self):
         with bound_tenant(self.bar_b):

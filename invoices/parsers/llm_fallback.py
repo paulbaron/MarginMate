@@ -10,6 +10,7 @@ same structured shape a hand-written parser would.
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -26,6 +27,46 @@ TIMEOUT_SECONDS = 60.0
 #: third is refused at once, never queued (`integrations.AI_BUSY`).
 AI_SLOTS = 2
 _SLOTS = threading.BoundedSemaphore(AI_SLOTS)
+#: How many of them one espace that is not the platform owner's may hold:
+#: one bar's two uploads must not refuse every other bar
+#: (`integrations.AI_BUSY_HERE`). The owner's readings are not counted.
+AI_PER_ESPACE = 1
+_RUNNING_LOCK = threading.Lock()
+#: tenant_key() -> readings running.
+_RUNNING: dict[str, int] = {}
+
+
+@contextmanager
+def _ai_slot():
+    """One of the server's AI slots for the bound espace while the block
+    runs, never waited for: AiReadingRefused(AI_BUSY_HERE) when this espace
+    - another bar's - already reads one, AiReadingRefused(AI_BUSY) when the
+    server reads AI_SLOTS."""
+    from accounts.tenancy import server_accounts_allowed, tenant_key
+    from invoices import integrations
+
+    key = None if server_accounts_allowed() else tenant_key()
+    if key is not None:
+        with _RUNNING_LOCK:
+            if _RUNNING.get(key, 0) >= AI_PER_ESPACE:
+                raise integrations.AiReadingRefused(integrations.AI_BUSY_HERE)
+            _RUNNING[key] = _RUNNING.get(key, 0) + 1
+    try:
+        if not _SLOTS.acquire(blocking=False):
+            raise integrations.AiReadingRefused(integrations.AI_BUSY)
+        try:
+            yield
+        finally:
+            _SLOTS.release()
+    finally:
+        if key is not None:
+            with _RUNNING_LOCK:
+                left = _RUNNING.get(key, 1) - 1
+                if left > 0:
+                    _RUNNING[key] = left
+                else:
+                    _RUNNING.pop(key, None)
+
 
 EXTRACTION_TOOL = {
     "name": "record_invoice",
@@ -125,11 +166,10 @@ class LLMFallbackParser(InvoiceParser):
         import anthropic
 
         text = _extract_text(pdf_path)
-        # Two at a time on the server, never waited for: a request thread
-        # waiting on another bar's reading is a thread nobody else gets.
-        if not _SLOTS.acquire(blocking=False):
-            raise integrations.AiReadingRefused(integrations.AI_BUSY)
-        try:
+        # Two at a time on the server, one for another bar, never waited
+        # for: a request thread waiting on another bar's reading is a thread
+        # nobody else gets.
+        with _ai_slot():
             client = anthropic.Anthropic(api_key=api_key, timeout=TIMEOUT_SECONDS, max_retries=0)
             try:
                 response = client.messages.create(
@@ -152,8 +192,6 @@ class LLMFallbackParser(InvoiceParser):
                 if sentence is None:
                     raise
                 raise integrations.AiReadingRefused(sentence) from exc
-        finally:
-            _SLOTS.release()
 
         tool_use = next(block for block in response.content if block.type == "tool_use")
         data = tool_use.input

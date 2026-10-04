@@ -82,6 +82,9 @@ AI_KEY_MISSING = (
 #: and what Anthropic answered - each a fixed sentence (parsers.llm_fallback
 #: maps the SDK's errors), never the SDK's English.
 AI_BUSY = "L'analyse IA lit déjà deux factures sur le serveur : réessayez dans un instant."
+#: Another bar's second reading while its first runs (one each: one bar's
+#: uploads must not take both of the server's slots).
+AI_BUSY_HERE = "L'analyse IA lit déjà une facture pour votre espace : réessayez dans un instant."
 AI_KEY_REFUSED = "La clé d'API Anthropic a été refusée : vérifiez-la sur la page Identifiants."
 AI_RATE_LIMITED = "Le compte Anthropic de la clé a atteint sa limite : réessayez dans quelques minutes."
 AI_BAD_REQUEST = (

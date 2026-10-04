@@ -33,7 +33,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
 from invoices.scrapers import chrome
-from recipes.integration import refusal, till_allowed
+from recipes.integration import TILL_LOGIN_MISSING, refusal, till_allowed, till_login_missing
 
 REPORTING_ROOT = "https://reporting.laddition.com"
 AUTH_URL = "https://auth.laddition.com/"
@@ -279,6 +279,10 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
     Refused (LadditionNotAllowed) unbound, before the browser starts.
     """
     _refuse_unless_allowed()
+    # Another bar with no L'Addition account on its « Identifiants »: said
+    # before one of the server's browsers is started for nothing.
+    if till_login_missing():
+        raise LadditionAuthError(TILL_LOGIN_MISSING)
     # One of the server's browsers, or a refusal at once (scrapers/chrome.py).
     with chrome.browser_slot(refused=LadditionAuthError):
         driver = build_driver(download_dir)

@@ -49,6 +49,23 @@ TILL_TO_CONFIGURE = (
 TILL_REIMPORT = "récupérez ou importez de nouveau les ventes de la caisse sur ces jours (Recettes & ventes › Ventes)"
 
 
+#: Another bar's sign-in asked for with no L'Addition account on its
+#: « Identifiants »: said before the server's Chrome starts.
+TILL_LOGIN_MISSING = "L'identifiant ou le mot de passe de L'Addition manque : renseignez-les sur la page Identifiants."
+#: The names L'Addition signs in with (accounts/credentials.py).
+TILL_LOGIN_NAMES = ("LADDITION_EMAIL", "LADDITION_PASSWORD")
+
+
+def till_login_missing() -> bool:
+    """Whether a session would start a browser only to find no account to
+    type: outside the platform owner's espace (whose .env or page stands, as
+    before), its « Identifiants » holds no L'Addition login and password
+    (`vault.ready`, one reading of the store)."""
+    from accounts import vault
+
+    return not server_accounts_allowed() and not vault.ready(*TILL_LOGIN_NAMES)
+
+
 def till_allowed() -> bool:
     """Whether the bound tenant may fetch its sales from L'Addition, with its
     own « Identifiants » (`integrations_allowed`: any bound tenant)."""

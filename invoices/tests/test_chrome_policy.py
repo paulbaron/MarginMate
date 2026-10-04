@@ -91,7 +91,10 @@ class ChromePolicyTests(TwoTenantsTestCase):
         self.assertNotIn("--headless=new", self.built_options(self.bar_a))
 
     def test_l_addition_s_session_takes_a_browser_or_says_why(self):
+        from accounts import vault
+
         with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
             with (
                 mock.patch.object(session_module, "build_driver") as build,
                 mock.patch.object(session_module, "open_report"),

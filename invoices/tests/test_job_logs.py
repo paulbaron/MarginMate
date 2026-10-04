@@ -85,6 +85,48 @@ class JobLineTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b), self.assertNoLogs("marginmate.jobs"):
             self.assertEqual(job_line(line), line)
 
+    def test_a_quote_inside_a_folder_s_name_does_not_leave_the_rest_of_the_path(self):
+        with bound_tenant(self.bar_b):
+            self.assertEqual(
+                job_line("Erreur dans C:\\Users\\O'Brien\\AppData\\Local\\x.py ici"), f"Erreur dans {SERVER_FILE} ici"
+            )
+            self.assertEqual(job_line("Erreur dans /home/o'brien/app/x.py ici"), f"Erreur dans {SERVER_FILE} ici")
+            # A path quoted whole keeps its closing quote (PIL's message).
+            self.assertEqual(
+                job_line("cannot identify image file 'C:\\Serveur\\imports\\photo.jpg'"),
+                f"cannot identify image file '{SERVER_FILE}'",
+            )
+
+    def test_a_till_s_page_and_an_invoice_s_number_are_no_file_of_the_server(self):
+        """Only a POSIX path starting at a folder a server has (common.
+        POSIX_ROOTS, and the first folder of the server's own) is one: the
+        till's « /v2/shift-details » and « N° /FA/2026/001 » were replaced."""
+        with bound_tenant(self.bar_b), self.assertNoLogs("marginmate.jobs"):
+            for line in (
+                "Ouverture de /v2/shift-details",
+                "Facture N° /FA/2026/001 importée",
+                "Page /mon-compte/factures lue",
+            ):
+                with self.subTest(line=line):
+                    self.assertEqual(job_line(line), line)
+        with bound_tenant(self.bar_b):
+            for path in ("/home/exemple/app/x.py", "/srv/marginmate/x.py", "/tmp/abc/f.pdf", "/opt/app"):
+                with self.subTest(path=path):
+                    self.assertEqual(job_line(f"Erreur dans {path} ici"), f"Erreur dans {SERVER_FILE} ici")
+
+    def test_the_server_s_own_first_folder_is_a_root_wherever_it_is(self):
+        from django.test import override_settings
+
+        with bound_tenant(self.bar_b), override_settings(BASE_DIR="/marginmate-exemple/app"):
+            self.assertEqual(
+                job_line("Erreur dans /marginmate-exemple/app/invoices/x.py ici"), f"Erreur dans {SERVER_FILE} ici"
+            )
+
+    def test_a_line_that_is_no_text_is_read_as_text(self):
+        with bound_tenant(self.bar_b):
+            self.assertEqual(job_line(12), "12")
+            self.assertEqual(job_line(ValueError("Erreur dans C:\\Serveur\\x.py")), f"Erreur dans {SERVER_FILE}")
+
     def test_the_owner_s_paths_stay_and_unbound_nothing_changes(self):
         line = "Échec de l'import de C:\\Serveur\\donnees\\facture.pdf : x"
         with bound_tenant(self.bar_a):

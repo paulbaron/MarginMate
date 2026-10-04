@@ -4,6 +4,7 @@ Project-level rather than per-app because the problem below has now bitten
 three different formsets across three different apps.
 """
 
+import functools
 import logging
 import re
 import unicodedata
@@ -320,17 +321,84 @@ SERVER_FILE = "[fichier du serveur]"
 #: Where a line stops being the person's: Python's traceback, and the native
 #: stack Selenium appends to a chromedriver error (with Chrome's own path).
 _TRACE_MARKERS = ("Traceback (most recent call last):", "Stacktrace:")
-#: A path's component: no space, no quote, nothing Windows refuses in a name.
-_PART = r"[^\s\"'<>|*?\\/]"
+#: A path's character once it has started: no space, no double quote,
+#: nothing Windows refuses in a name - and a quote only inside a word
+#: (« C:\Users\O'Brien\… »: stopped at it, the rest of the path was left).
+_CHAR = r"(?:[^\s\"'<>|*?]|'(?=\w))"
+#: A path's component: the same, and no separator.
+_PART = r"(?:[^\s\"'<>|*?\\/]|'(?=\w))"
 #: Words with spaces between two separators (« Bar application gestion 2 »),
 #: so a folder name holding a space does not leave its end in the line.
-_MORE = rf"(?:(?: {_PART}+)+[\\/][^\s\"'<>|*?]*)*"
-_WINDOWS_PATH = re.compile(rf"(?<![\w])[A-Za-z]:[\\/][^\s\"'<>|*?]*{_MORE}")
-_UNC_PATH = re.compile(rf"\\\\{_PART}+\\[^\s\"'<>|*?]*{_MORE}")
-#: Two components at least, never inside a URL (« https://x.fr/a/b ») nor a
-#: date (« 01/02/2026 »): a slash after a letter, a digit, a colon, a dot or
-#: another slash starts no path.
-_POSIX_PATH = re.compile(r"(?<![\w.:/~\-\]])/(?:[^\s\"'<>|*?/]+/)+[^\s\"'<>|*?]*")
+_MORE = rf"(?:(?: {_PART}+)+[\\/]{_CHAR}*)*"
+_WINDOWS_PATH = re.compile(rf"(?<![\w])[A-Za-z]:[\\/]{_CHAR}*{_MORE}")
+_UNC_PATH = re.compile(rf"\\\\{_PART}+\\{_CHAR}*{_MORE}")
+#: The first folders of a POSIX path on a server: only a path starting at
+#: one of them is the server's - « /v2/shift-details » (a page of the till's
+#: site) and « N° /FA/2026/001 » (an invoice's number) are no file. The
+#: server's own folders' first parts are added at the call (`_posix_path`).
+POSIX_ROOTS = (
+    "Library",
+    "System",
+    "Users",
+    "Volumes",
+    "app",
+    "bin",
+    "code",
+    "data",
+    "dev",
+    "etc",
+    "home",
+    "lib",
+    "lib64",
+    "media",
+    "mnt",
+    "nix",
+    "opt",
+    "private",
+    "proc",
+    "root",
+    "run",
+    "sbin",
+    "snap",
+    "srv",
+    "tmp",
+    "usr",
+    "var",
+    "workspace",
+)
+
+
+@functools.lru_cache(maxsize=8)
+def _posix_path_for(roots: tuple) -> re.Pattern:
+    """A POSIX path starting at one of `roots`, never inside a URL
+    (« https://x.fr/a/b ») nor a date (« 01/02/2026 »): a slash after a
+    letter, a digit, a colon, a dot or another slash starts no path."""
+    alternatives = "|".join(re.escape(root) for root in sorted(roots, key=len, reverse=True))
+    return re.compile(rf"(?<![\w.:/~\-\]])/(?:{alternatives})(?=[/\s]|$){_CHAR}*{_MORE}")
+
+
+def _posix_path() -> re.Pattern:
+    """POSIX_ROOTS and the first folder of each of the server's own folders
+    (the code, TENANTS_ROOT, the temporary folder, Python's) where it runs
+    on a POSIX system: a server installed under « /marginmate » is caught
+    too."""
+    import sys
+    import tempfile
+
+    from django.conf import settings
+
+    roots = set(POSIX_ROOTS)
+    for folder in (
+        getattr(settings, "BASE_DIR", ""),
+        getattr(settings, "TENANTS_ROOT", ""),
+        tempfile.gettempdir(),
+        sys.prefix,
+        sys.base_prefix,
+    ):
+        parts = str(folder or "").replace("\\", "/").split("/")
+        if len(parts) > 1 and parts[0] == "" and parts[1]:
+            roots.add(parts[1])
+    return _posix_path_for(tuple(sorted(roots)))
 
 
 def _own_folders(tenant) -> re.Pattern | None:
@@ -368,6 +436,7 @@ def job_line(message: str) -> str:
     tenant = current_tenant()
     if tenant is None or server_accounts_allowed() or not message:
         return message
+    message = str(message)
     cleaned = message
     cut = min((cleaned.find(marker) for marker in _TRACE_MARKERS if marker in cleaned), default=-1)
     if cut >= 0:
@@ -375,7 +444,7 @@ def job_line(message: str) -> str:
     own = _own_folders(tenant)
     if own is not None:
         cleaned = own.sub("", cleaned)
-    for pattern in (_UNC_PATH, _WINDOWS_PATH, _POSIX_PATH):
+    for pattern in (_UNC_PATH, _WINDOWS_PATH, _posix_path()):
         cleaned = pattern.sub(SERVER_FILE, cleaned)
     cleaned = cleaned.rstrip()
     if cleaned != message:
