@@ -60,6 +60,7 @@ from .forms import (
     ShopItemPriceForm,
     VatTableFormSet,
     WebsiteInvoiceSourceForm,
+    gather_range_problem,
     line_initial,
 )
 from .importing import (
@@ -395,6 +396,12 @@ def trigger_gather(request):
     else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
+        problem = gather_range_problem(start_date, end_date)
+        if problem:
+            # Before any job or thread: Metro would be searched window by
+            # window over the whole period, every mailbox from that day.
+            messages.error(request, problem)
+            return redirect(back)
         active_job = ScrapeJob.objects.create(range_start=start_date, range_end=end_date)
         # bound(): the thread works in this request's tenant - a new thread
         # starts with nothing bound (accounts/tenancy.py).
@@ -662,6 +669,10 @@ def _test_website(request, type_form, website_form):
         return None
     start = _parse_date(request.POST.get("test_start_date")) or (timezone.localdate() - timedelta(days=90))
     end = _parse_date(request.POST.get("test_end_date")) or timezone.localdate()
+    problem = gather_range_problem(start, end)
+    if problem:
+        messages.error(request, problem)
+        return None
     site = website_form.save(commit=False)
     name = (type_form.data.get("name") or "").strip() or "Site"
     supplier_id = type_form.data.get("supplier") or ""

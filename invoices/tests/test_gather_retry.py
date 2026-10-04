@@ -157,6 +157,63 @@ class GatherRequestTests(TestCase):
         self.assertContains(response, "déjà en cours")
 
 
+class GatherPeriodBoundsTests(TestCase):
+    """A year typed as « 26 » is 0026 in a date box: Metro was searched in
+    8 028 windows of 91 days from 0026-09-01, in one signed-in session, and
+    every mailbox from its first mail - for hours, blocking every other
+    gather and the deploy. A period starts in 2000 at the earliest (the
+    rule for a document's date, forms.EARLIEST_DOCUMENT_DATE), ends today
+    at the latest, and starts before it ends."""
+
+    def post(self, start, end):
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            response = self.client.post(
+                reverse("invoices:gather"), {"start_date": start, "end_date": end, "sources": ["METRO"]}, follow=True
+            )
+        return response, thread
+
+    def test_a_year_typed_as_two_digits_starts_nothing(self):
+        response, thread = self.post("0026-09-01", timezone.localdate().isoformat())
+        self.assertFalse(ScrapeJob.objects.exists())
+        thread.assert_not_called()
+        self.assertContains(response, "Période impossible")
+
+    def test_an_end_in_the_future_starts_nothing(self):
+        response, _thread = self.post("2026-09-01", "9999-12-31")
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_start_after_the_end_starts_nothing(self):
+        response, _thread = self.post("2026-09-18", "2026-09-01")
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_period_left_blank_and_one_that_holds_still_start(self):
+        self.post("", "")
+        self.post("2000-01-01", timezone.localdate().isoformat())
+        self.assertEqual(ScrapeJob.objects.count(), 1)
+
+    def test_the_boxes_say_so_to_the_browser(self):
+        page = self.client.get(reverse("invoices:invoice_list"))
+        today = timezone.localdate().isoformat()
+        self.assertContains(page, f'name="start_date" min="2000-01-01" max="{today}"')
+        self.assertContains(page, f'name="end_date" min="2000-01-01" max="{today}"')
+
+    def test_a_source_test_takes_the_same_rule(self):
+        from invoices.forms import EmailInvoiceSourceForm, gather_range_problem
+
+        self.assertTrue(gather_range_problem(date(26, 9, 1), None))
+        self.assertTrue(gather_range_problem(None, timezone.localdate() + timedelta(days=1)))
+        self.assertTrue(gather_range_problem(date(2026, 9, 2), date(2026, 9, 1)))
+        self.assertEqual(gather_range_problem(None, None), "")
+        self.assertEqual(gather_range_problem(date(2000, 1, 1), timezone.localdate()), "")
+        form = EmailInvoiceSourceForm(
+            {"sender_pattern": "factures@", "test_start_date": "0026-09-01", "test_end_date": "2026-09-01"}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("test_start_date", form.errors)
+
+
 class MetroPauseOnThePageTests(TestCase):
     """Metro left alone after its firewall refused: said on the gather card,
     its box out of reach - the browser re-ticked a box it remembered - and

@@ -50,6 +50,24 @@ def check_document_date(value: date | None) -> date:
     return value
 
 
+def gather_range_problem(start: date | None, end: date | None) -> str:
+    """What is wrong with a period to search for documents, "" when nothing
+    (a blank end is left to the search's own defaults).
+
+    The documents' own rule, 2000 to today (check_document_date), and the
+    start before the end. A year typed as « 26 » is 0026 in a date box:
+    Metro was searched from 0026-09-01 in 8 028 windows of 91 days, in one
+    signed-in session, and every mailbox from its first mail."""
+    today = timezone.localdate()
+    given = [day for day in (start, end) if day is not None]
+    if any(not EARLIEST_DOCUMENT_DATE <= day <= today for day in given) or (len(given) == 2 and start > end):
+        return (
+            f"Période impossible : entre le {EARLIEST_DOCUMENT_DATE:%d/%m/%Y} et aujourd'hui ({today:%d/%m/%Y}), "
+            "et le début avant la fin."
+        )
+    return ""
+
+
 #: A line's rate, in percent: never above 100, as the VAT table's own field
 #: says (VatRowForm). %% - the validator's message is formatted with its limit.
 RATE_ERRORS = {"max_value": "Un taux ne dépasse pas 100 %%."}
@@ -769,6 +787,13 @@ class EmailInvoiceSourceForm(forms.ModelForm):
             "body_pattern": "Contenu (regex)",
             "attachment_pattern": "Pièce jointe (regex)",
         }
+
+    def clean(self):
+        cleaned = super().clean()
+        problem = gather_range_problem(cleaned.get("test_start_date"), cleaned.get("test_end_date"))
+        if problem:
+            self.add_error("test_start_date", problem)
+        return cleaned
 
 
 from .ocr import IMAGE_EXTENSIONS
