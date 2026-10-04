@@ -404,8 +404,15 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
     already moved, leaving the merge half done. A count that measured both
     items directly becomes one line holding both: same unit, so the amounts
     and their frozen values simply add up.
+
+    The shopping lists' items of `source` move over list by list, finished
+    lists included (shopping_lists.carry_on_merge): one item where both count
+    the same thing, a free text holding the source's name where they count
+    something else - never a line lost.
     """
     from recipes.models import RecipeIngredient, SaleDocumentLine
+
+    from .shopping_lists import carry_on_merge
 
     StockMovement.objects.filter(stock_type=source).update(stock_type=target)
     Product.objects.filter(stock_type=source).update(stock_type=target)
@@ -424,6 +431,7 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
         twin.save(update_fields=["counted_quantity", "value_ht", "shortfall_quantity", "has_shortfall"])
         line.sources.update(stock_take_line=twin)
         line.delete()
+    carry_on_merge(source, target)
     source.delete()
 
 

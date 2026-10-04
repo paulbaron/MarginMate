@@ -28,6 +28,8 @@ from inventory.models import (
     GapFillEntry,
     GapFillSetting,
     ShoppingExclusion,
+    ShoppingList,
+    ShoppingListItem,
     ShoppingSetting,
     StockMovement,
     StockType,
@@ -178,6 +180,74 @@ def make_shopping_history() -> SimpleNamespace:
         buy(wholesaler, made.keg, days_ago, "-1", "-90.00", units=-1)
     buy(market, made.strawberries, 30, "2", "33.00")
     return made
+
+
+#: Who finished make_shopping_lists' list at the grocer's: a login nobody
+#: made (gone, or never there) - the lists say « un ancien membre », never
+#: this address.
+SHOPPING_LIST_FINISHER = "employe-exemple@example.invalid"
+
+
+def make_shopping_lists(made) -> SimpleNamespace:
+    """« Listes de courses » on top of make_shopping_history(): an open list
+    at the wholesaler's - the beer as the forecast adds it (24 of its
+    product, packs of 24), the syrup (2 L) ticked, a free text « Pain
+    exemple » (2) - and a list finished yesterday at the grocer's by an
+    employee, its lemons ticked and its coffee not. Invented data. Returns
+    the lists and the items."""
+    now = timezone.now()
+    lists = SimpleNamespace(
+        open=ShoppingList.objects.create(supplier=made.wholesaler, created_at=now - timedelta(hours=2)),
+        finished=ShoppingList.objects.create(
+            supplier=made.grocer,
+            created_at=now - timedelta(days=2),
+            finished_at=now - timedelta(days=1),
+            finished_by=SHOPPING_LIST_FINISHER,
+        ),
+    )
+
+    def item(shopping_list, minutes_ago, label, quantity, stock_type=None, **fields):
+        return ShoppingListItem.objects.create(
+            shopping_list=shopping_list,
+            stock_type=stock_type,
+            label=label,
+            quantity=Decimal(quantity),
+            added_at=now - timedelta(minutes=minutes_ago),
+            **fields,
+        )
+
+    lists.beer = item(
+        lists.open,
+        30,
+        made.beer.name,
+        "24",
+        made.beer,
+        product_name=SHOPPING_BEER_PRODUCT,
+        pack_size=24,
+    )
+    lists.syrup = item(
+        lists.open,
+        20,
+        made.syrup.name,
+        "2",
+        made.syrup,
+        unit=UnitChoices.LITRE,
+        checked_at=now - timedelta(minutes=5),
+        checked_by=SHOPPING_LIST_FINISHER,
+    )
+    lists.bread = item(lists.open, 10, "Pain exemple", "2")
+    lists.lemon = item(
+        lists.finished,
+        3000,
+        made.lemon.name,
+        "1",
+        made.lemon,
+        unit=UnitChoices.KILOGRAM,
+        checked_at=now - timedelta(days=1, minutes=10),
+        checked_by=SHOPPING_LIST_FINISHER,
+    )
+    lists.coffee = item(lists.finished, 2990, made.coffee.name, "1", made.coffee, unit=UnitChoices.KILOGRAM)
+    return lists
 
 
 def assertNoUnrenderedTemplateSyntax(test, response, label=""):
@@ -625,6 +695,92 @@ class PageSmokeTests(TestCase):
         self.assertFalse(ShoppingExclusion.objects.exists())
         self.assertFalse(ShoppingSetting.objects.exists())
 
+    def test_shopping_lists(self):
+        """« Listes de courses »: the lists' page, a store's list to prepare -
+        an item's card open -, to tick, an htmx tick's block, an empty list
+        both ways, and a finished list read as it was. « Prévoir les
+        courses » leads there."""
+        made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        page = reverse("inventory:shopping_list_page")
+        response = self.assertPageOK("inventory:shopping_lists")
+        self.assertContains(response, 'data-table-label="listes en cours"')
+        self.assertContains(response, 'data-table-label="listes terminées"')
+        for query, said in (
+            ({"fournisseur": made.wholesaler.pk}, 'data-table-label="articles"'),
+            ({"fournisseur": made.wholesaler.pk, "ligne": lists.beer.pk}, 'id="modifier"'),
+            ({"fournisseur": made.wholesaler.pk, "mode": "courses"}, '<div class="shopping-run" id="courses">'),
+            ({"fournisseur": made.market.pk}, "Liste vide."),
+            ({"fournisseur": made.market.pk, "mode": "courses"}, "Liste vide."),
+            ({"liste": lists.finished.pk}, 'data-table-label="courses terminées"'),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get(page, query)
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{page} {query}")
+                self.assertContains(response, said)
+        response = self.client.post(
+            reverse("inventory:shopping_list_item_tick"),
+            {"fournisseur": made.wholesaler.pk, "ligne": lists.bread.pk, "pris": "1"},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "an htmx tick")
+        self.assertContains(response, '<div class="shopping-run" id="courses">')
+        forecast = self.client.get(reverse("inventory:shopping_list"), {"fournisseur": made.wholesaler.pk})
+        self.assertContains(forecast, f'href="{page}?fournisseur={made.wholesaler.pk}"')
+
+    def test_shopping_list_forms(self):
+        """Each form of « Listes de courses » POSTed: one redirect to where
+        it lands, that page drawn whole. A GET to any of their routes goes to
+        the lists' page, and does nothing."""
+        made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        index = reverse("inventory:shopping_lists")
+        store = made.wholesaler.pk
+        page = f"{reverse('inventory:shopping_list_page')}?fournisseur={store}"
+        forecast = f"{reverse('inventory:shopping_list')}?fournisseur={store}"
+        routes = (
+            "inventory:shopping_list_add",
+            "inventory:shopping_list_add_all",
+            "inventory:shopping_list_item_edit",
+            "inventory:shopping_list_item_delete",
+            "inventory:shopping_list_item_tick",
+            "inventory:shopping_list_finish",
+        )
+        for name in routes:
+            with self.subTest(get=name):
+                self.assertRedirectsOnGet(name)
+                self.assertEqual(self.client.get(reverse(name))["Location"], index)
+        self.assertEqual(ShoppingListItem.objects.count(), 5)
+        bread = lists.bread.pk
+        for name, data, landing in (
+            ("inventory:shopping_list_add", {"nom": "Serviettes exemple", "quantite": ""}, page),
+            (
+                "inventory:shopping_list_add",
+                {"article": made.olives.pk, "quantite": "1", "retour": "peut-etre"},
+                f"{forecast}#peut-etre",
+            ),
+            (
+                "inventory:shopping_list_add",
+                {"article": made.crisps.pk, "quantite": "2", "retour": "nouveaux", "dans": "30"},
+                f"{forecast}&dans=30#nouveaux-ici",
+            ),
+            ("inventory:shopping_list_add_all", {"dans": "30"}, f"{forecast}&dans=30#a-acheter"),
+            ("inventory:shopping_list_item_edit", {"ligne": bread, "quantite": "3", "note": "Complet"}, page),
+            ("inventory:shopping_list_item_edit", {"ligne": bread, "quantite": "0"}, f"{page}&ligne={bread}#modifier"),
+            ("inventory:shopping_list_item_tick", {"ligne": bread, "pris": "1"}, f"{page}&mode=courses#courses"),
+            ("inventory:shopping_list_item_delete", {"ligne": bread}, page),
+            ("inventory:shopping_list_finish", {"liste": lists.open.pk, "garder": "1"}, index),
+        ):
+            with self.subTest(name=name, data=data):
+                response = self.client.post(reverse(name), {"fournisseur": store, **data})
+                self.assertEqual((response.status_code, response["Location"]), (302, landing))
+                followed = self.client.get(response["Location"])
+                self.assertEqual(followed.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, followed, f"after {name} {data}")
+        self.assertTrue(ShoppingList.objects.filter(supplier=made.wholesaler, finished_at__isnull=True).exists())
+
     # --- invoices --------------------------------------------------------
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
@@ -992,6 +1148,50 @@ class EmptyDatabasePageSmokeTests(TestCase):
         # The message of a form said with no list to say it beside: at the top.
         response = self.client.post(reverse("inventory:shopping_exclude"), {"article": "1"}, follow=True)
         self.assertContains(response, "Article introuvable : rien n&#x27;a été exclu.")
+
+    def test_shopping_lists(self):
+        """Nothing bought, no list: the lists' page says where lists come
+        from and offers to add invoices; no store's list is to be had; every
+        form, whatever it posts, is one redirect - and nothing is written."""
+        index = reverse("inventory:shopping_lists")
+        response = self.client.get(index)
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, index)
+        self.assertContains(response, "empty-state")
+        self.assertContains(response, reverse("invoices:invoice_add"))
+        page = reverse("inventory:shopping_list_page")
+        for query in ({}, {"fournisseur": "1"}, {"fournisseur": "1", "mode": "courses"}, {"liste": "1"}):
+            with self.subTest(query=query):
+                response = self.client.get(page, query)
+                self.assertEqual((response.status_code, response["Location"]), (302, index))
+        everything = {
+            "fournisseur": "1",
+            "liste": "1",
+            "ligne": "1",
+            "article": "1",
+            "produit": "1",
+            "nom": "Pain exemple",
+            "quantite": "1",
+            "pris": "1",
+            "garder": "1",
+        }
+        for name in (
+            "inventory:shopping_list_add",
+            "inventory:shopping_list_add_all",
+            "inventory:shopping_list_item_edit",
+            "inventory:shopping_list_item_delete",
+            "inventory:shopping_list_item_tick",
+            "inventory:shopping_list_finish",
+        ):
+            for data in (everything, {**everything, "retour": "liste"}, {}):
+                with self.subTest(action=name, data=data):
+                    response = self.client.post(reverse(name), data)
+                    self.assertEqual(response.status_code, 302)
+                    followed = self.client.get(response["Location"])
+                    self.assertEqual(followed.status_code, 200)
+                    assertNoUnrenderedTemplateSyntax(self, followed, f"after {name} {data}")
+        self.assertFalse(ShoppingList.objects.exists())
+        self.assertFalse(ShoppingListItem.objects.exists())
 
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
@@ -2438,3 +2638,155 @@ class ShoppingParameterSmokeTests(TestCase):
                 response = self.client.get(reverse("inventory:shopping_settings"), {"seuil": "40", "memoire": "9"})
                 self.assertEqual((response.status_code, response["Location"]), (302, self.url))
                 self.assertEqual(ShoppingSetting.current().threshold_percent, 30)
+
+
+class ShoppingListParameterSmokeTests(TestCase):
+    """« Listes de courses » under every value each of its parameters can
+    carry - none, a word, a digit Python reads and the pages must not
+    (« ² »), a sign, an id nothing has, thirty digits, markup, a NUL, three
+    hundred characters -, the others as a page drew them. Never a 500; a
+    form is one redirect to a page drawn whole; what is written is what its
+    message says was (nothing on a refusal); nothing is echoed unescaped.
+    Invented data (make_shopping_history, make_shopping_lists)."""
+
+    VALUES = ("", "abc", "\N{SUPERSCRIPT TWO}", "-1", "999999", "1" * 30, '"><i>courses</i>', "\x00", "x" * 300)
+    MARKUP = "<i>courses</i>"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.made = make_shopping_history()
+        cls.lists = make_shopping_lists(cls.made)
+        cls.store = str(cls.made.wholesaler.pk)
+
+    def snapshot(self) -> list:
+        return [
+            *ShoppingList.objects.order_by("pk").values_list("pk", "finished_at", "finished_by"),
+            *ShoppingListItem.objects.order_by("pk").values_list(
+                "pk", "shopping_list", "label", "quantity", "unit", "note", "checked_at", "checked_by"
+            ),
+        ]
+
+    def whole(self, response, label) -> str:
+        assertNoUnrenderedTemplateSyntax(self, response, label)
+        content = response.content.decode()
+        self.assertNotIn(self.MARKUP, content)
+        return content
+
+    def act(self, name, data) -> str:
+        """POST and follow: one redirect, then a page drawn whole."""
+        response = self.client.post(reverse(name), data, follow=True)
+        self.assertEqual(response.status_code, 200, data)
+        self.assertEqual([status for _url, status in response.redirect_chain], [302], data)
+        return self.whole(response, f"after {name} {data}")
+
+    def test_the_pages(self):
+        page = reverse("inventory:shopping_list_page")
+        for field in ("fournisseur", "liste", "ligne", "mode"):
+            for value in self.VALUES:
+                with self.subTest(field=field, value=value[:20]):
+                    before = self.snapshot()
+                    response = self.client.get(page, {"fournisseur": self.store, field: value}, follow=True)
+                    self.assertEqual(response.status_code, 200)
+                    self.whole(response, f"{page} {field}={value[:20]!r}")
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_the_add_form(self):
+        """From the list page (a name) and from the forecast (a line): each
+        written item is the one its message says was added."""
+        olives = str(self.made.olives.products.get().pk)
+        written = refused = 0
+        for baseline in (
+            {"fournisseur": self.store, "nom": "Pain neuf exemple", "quantite": "2", "note": ""},
+            {
+                "fournisseur": self.store,
+                "article": str(self.made.olives.pk),
+                "produit": olives,
+                "colis": "",
+                "quantite": "1",
+                "retour": "peut-etre",
+                "dans": "",
+                "note": "",
+            },
+        ):
+            for field in dict.fromkeys((*baseline, "retour", "dans")):
+                for value in self.VALUES:
+                    with self.subTest(path="nom" in baseline, field=field, value=value[:20]):
+                        known = set(ShoppingListItem.objects.values_list("pk", flat=True))
+                        content = self.act("inventory:shopping_list_add", {**baseline, field: value})
+                        made = ShoppingListItem.objects.exclude(pk__in=known)
+                        self.assertEqual(made.exists(), "» ajouté à la liste (" in content)
+                        self.assertLessEqual(made.count(), 1)
+                        written, refused = (written + 1, refused) if made.exists() else (written, refused + 1)
+                        made.delete()
+        # Not a guard of nothing: both happened, many times.
+        self.assertGreater(written, 20)
+        self.assertGreater(refused, 20)
+
+    def test_the_edit_and_delete_forms(self):
+        bread = str(self.lists.bread.pk)
+        baseline = {"fournisseur": self.store, "ligne": bread, "quantite": "3", "note": ""}
+        for field in baseline:
+            for value in self.VALUES:
+                with self.subTest(edit=field, value=value[:20]):
+                    ShoppingListItem.objects.filter(pk=self.lists.bread.pk).update(quantity=Decimal("2"), note="")
+                    before = self.snapshot()
+                    content = self.act("inventory:shopping_list_item_edit", {**baseline, field: value})
+                    self.assertEqual(self.snapshot() != before, "Modifié : " in content)
+        for field in ("fournisseur", "ligne"):
+            for value in self.VALUES:
+                with self.subTest(delete=field, value=value[:20]):
+                    before = self.snapshot()
+                    content = self.act(
+                        "inventory:shopping_list_item_delete", {"fournisseur": self.store, "ligne": bread, field: value}
+                    )
+                    self.assertNotIn("retiré de la liste", content)
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_the_tick(self):
+        baseline = {"fournisseur": self.store, "ligne": str(self.lists.bread.pk), "pris": "1"}
+        for field in baseline:
+            for value in self.VALUES:
+                with self.subTest(field=field, value=value[:20]):
+                    before = self.snapshot()
+                    self.act("inventory:shopping_list_item_tick", {**baseline, field: value})
+                    response = self.client.post(
+                        reverse("inventory:shopping_list_item_tick"), {**baseline, field: value}, HTTP_HX_REQUEST="true"
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    self.whole(response, f"an htmx tick {field}={value[:20]!r}")
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_add_all_and_finish(self):
+        """« Tout ajouter »: what is written is what its message says was -
+        the fixture's ticked syrup put back to buy once, by the first
+        submit whose store reads; then everything « À acheter » holds is on
+        the list."""
+        written = 0
+        for field in ("fournisseur", "dans"):
+            for value in self.VALUES:
+                with self.subTest(add_all=field, value=value[:20]):
+                    before = self.snapshot()
+                    content = self.act("inventory:shopping_list_add_all", {"fournisseur": self.store, field: value})
+                    said = "1 article ajouté à la liste" in content
+                    self.assertEqual(self.snapshot() != before, said)
+                    written += said
+        self.assertEqual(written, 1)
+        for value in self.VALUES:
+            with self.subTest(liste=value[:20]):
+                before = self.snapshot()
+                content = self.act("inventory:shopping_list_finish", {"liste": value, "garder": "1"})
+                self.assertIn("Liste introuvable.", content)
+                self.assertEqual(self.snapshot(), before)
+        market = self.made.market
+        for value in self.VALUES:
+            with self.subTest(garder=value[:20]):
+                shopping_list = ShoppingList.objects.create(supplier=market)
+                ShoppingListItem.objects.create(
+                    shopping_list=shopping_list, label="Fraises exemple", quantity=Decimal("1")
+                )
+                self.act("inventory:shopping_list_finish", {"liste": shopping_list.pk, "garder": value})
+                shopping_list.refresh_from_db()
+                self.assertFalse(shopping_list.is_open)
+                carried = ShoppingList.objects.filter(supplier=market, finished_at__isnull=True).exists()
+                self.assertEqual(carried, bool(value))
+                ShoppingList.objects.filter(supplier=market).delete()

@@ -20,7 +20,11 @@ up at the bar, were tables two to three times as wide as the screen.
   a cash deposit and a payer retained - each credit's « En caisse » menu
   beside it - and the card balance's chart. « Trésorerie » (02/10) with
   three balances typed and a gap's card: its adjustment form, its points'
-  « Corriger » and « Supprimer », its adjustments' table.
+  « Corriger » and « Supprimer », its adjustments' table. « Listes de
+  courses » (04/10): the lists' page and its store menu, a list to prepare
+  holding a free text printed as one word and a note of 60 letters with no
+  space, its « Modifier » card, the tick page - a ticked item, the sticky
+  « Courses terminées » - and a finished list.
 * **A table's search box sits before the box it scrolls in**, never inside
   it, where it scrolled away with the columns (static/js/datatable.js).
 * **A ticket's photo is part of the page** once stacked above its lines:
@@ -59,7 +63,7 @@ from django.test import tag
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory.models import GapFillEntry, UnitChoices
+from inventory.models import GapFillEntry, ShoppingListItem, UnitChoices
 from invoices.scrapers import website
 from tests.factories import (
     make_ingredient,
@@ -75,7 +79,7 @@ from tests.factories import (
     make_supplier,
 )
 from tests.runner import log_in_the_browser
-from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, make_shopping_history
+from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, make_shopping_history, make_shopping_lists
 
 #: The widths of the review: a small phone, the owner's, a large one.
 WIDTHS = (320, 375, 430)
@@ -92,6 +96,9 @@ LONG_PAYER = "COMITEDESFETESDUQUARTIEREXEMPLEASSOCIATION"
 #: A payment terminal whose payouts print no gross, its payer retained as
 #: « Carte » on « Entrées d'argent ».
 TERMINAL = "TERMINAL EXEMPLE ENCAISSEMENTS"
+#: A shopping list item's note typed as one word of 60 letters: in its cell,
+#: under its tick in the store.
+LIST_NOTE = f"{ONE_WORD}{ONE_WORD[:20]}"
 
 
 def credit_row(day, bank_type, label, amount):
@@ -432,6 +439,19 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         shopping = make_shopping_history()
         self.shopping = f"{reverse('inventory:shopping_list')}?fournisseur={shopping.wholesaler.pk}"
         self.rhythm = f"{reverse('inventory:shopping_rhythm')}?fournisseur={shopping.wholesaler.pk}"
+        # « Listes de courses » (04/10): the wholesaler's open list - its
+        # syrup ticked, so a struck-through tick and a plain one are drawn -
+        # with a free text printed as one word and a note of 60 letters with
+        # no space, and the grocer's list finished (all invented).
+        self.shopping_lists = lists = make_shopping_lists(shopping)
+        ShoppingListItem.objects.create(shopping_list=lists.open, label=ONE_WORD, quantity=Decimal("1"), note=LIST_NOTE)
+        list_page = reverse("inventory:shopping_list_page")
+        self.lists_index = reverse("inventory:shopping_lists")
+        self.list_edit = f"{list_page}?fournisseur={shopping.wholesaler.pk}"
+        self.list_card = f"{self.list_edit}&ligne={lists.beer.pk}#modifier"
+        self.list_run = f"{self.list_edit}&mode=courses"
+        self.list_finished = f"{list_page}?liste={lists.finished.pk}"
+        self.wholesaler_name = shopping.wholesaler.name
 
     def test_no_page_is_wider_than_the_phone(self):
         """Measured on the code of 29/09 with this data, every page but
@@ -461,6 +481,11 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "la trésorerie": self.treasury,
             "Prévoir les courses": self.shopping,
             "le rythme d'achat": self.rhythm,
+            "les listes de courses": self.lists_index,
+            "une liste à préparer": self.list_edit,
+            "une ligne à modifier": self.list_card,
+            "les courses à cocher": self.list_run,
+            "une liste terminée": self.list_finished,
         }
         problems = []
         for width in WIDTHS:
@@ -528,6 +553,14 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             (self.shopping, "table[data-table-label='à acheter']", SHOPPING_BEER_PRODUCT),
             (self.shopping, "#exclusions", "Exclure la catégorie « Consignes exemple »"),
             (self.rhythm, 'table[data-table-label="rythme d\'achat"]', "Habitude ici"),
+            (self.lists_index, "form.inline-form select", self.wholesaler_name),
+            (self.list_edit, "table[data-table-label='articles']", LIST_NOTE),
+            (self.list_edit, "table[data-table-label='articles']", ONE_WORD),
+            (self.list_card, "#modifier", "Bière exemple"),
+            (self.list_run, "#courses .shopping-tick-name", ONE_WORD),
+            (self.list_run, "#courses .shopping-tick.is-ticked", "Sirop exemple"),
+            (self.list_run, "form.shopping-finish", "Garder les articles non pris"),
+            (self.list_finished, "table[data-table-label='courses terminées']", "Citron exemple"),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)

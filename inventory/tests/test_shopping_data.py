@@ -15,7 +15,9 @@ What the page promises at that level, pinned on worked examples:
 * the till's first day is the first day its import recorded a sale: a sale
   typed by hand or a sale document older than that is consumption, never
   the till's start;
-* and a small history read from the database plans the expected list.
+* a small history read from the database plans the expected list;
+* and one article's usual purchase at one store (`usual_purchase_at`, the
+  scan narrowed to them) is the page's own, in two queries at most.
 
 Invented data throughout: every store, article, product, recipe, price and
 quantity is made up for these tests, and the days are fixed invented days.
@@ -31,6 +33,7 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from inventory import shopping, shopping_data
 from inventory.models import MovementKind, ShoppingExclusion, ShoppingSetting, UnitChoices
 from inventory.shopping import (
     CALENDAR_CLOCK,
@@ -74,6 +77,7 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
+from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, make_shopping_history
 
 #: The page's day, and a moment of it past the night's end (06:00 by
 #: default): the last complete till day is the day before.
@@ -232,6 +236,55 @@ class PurchaseScanTests(TestCase):
         self.assertEqual(prepared.returned[self.beer.pk].days, (D2,))
         self.assertEqual(prepared.returned[self.beer.pk].cum[-1], Decimal("12"))
         self.assertEqual(prepared.visits[self.store.pk], (D1,))
+
+
+class PurchaseFilterTests(TestCase):
+    """`purchase_rows`' two filters - one store, one article - narrow the
+    same scan; with neither, the scan is the page's, query for query."""
+
+    def setUp(self):
+        self.shop = make_supplier(name="Grossiste exemple")
+        self.grocer = make_supplier(name="Épicerie exemple")
+        self.beer = article("Bière exemple", unit=UnitChoices.UNIT)
+        self.syrup = article("Sirop exemple")
+        for at in (self.shop, self.grocer):
+            bought(at, self.beer, D1, "24")
+            bought(at, self.syrup, D2, "2")
+        # Never read, filtered or not: tomorrow, and undated.
+        bought(self.shop, self.beer, TODAY + DAY, "24")
+        bought(self.shop, self.beer, D3, "24", invoice_date=None)
+
+    def pairs(self, **filters) -> list[tuple[int, int, date | None]]:
+        return sorted((row.store_id, row.article_id, row.day) for row in purchase_rows(TODAY, **filters))
+
+    def sql(self, **filters) -> list[str]:
+        with CaptureQueriesContext(connection) as captured:
+            purchase_rows(TODAY, **filters)
+        return [query["sql"] for query in captured]
+
+    def test_with_no_filter_the_scan_is_unchanged(self):
+        self.assertEqual(len(self.pairs()), 4)
+        self.assertEqual(self.sql(), self.sql(store_id=None, article_id=None))
+        self.assertEqual(len(self.sql()), 1)
+
+    def test_one_store(self):
+        self.assertEqual(
+            self.pairs(store_id=self.shop.pk),
+            sorted([(self.shop.pk, self.beer.pk, D1), (self.shop.pk, self.syrup.pk, D2)]),
+        )
+
+    def test_one_article(self):
+        self.assertEqual(
+            self.pairs(article_id=self.syrup.pk),
+            sorted([(self.shop.pk, self.syrup.pk, D2), (self.grocer.pk, self.syrup.pk, D2)]),
+        )
+
+    def test_one_article_at_one_store_in_one_query(self):
+        self.assertEqual(
+            self.pairs(store_id=self.grocer.pk, article_id=self.beer.pk), [(self.grocer.pk, self.beer.pk, D1)]
+        )
+        self.assertEqual(len(self.sql(store_id=self.grocer.pk, article_id=self.beer.pk)), 1)
+        self.assertEqual(self.pairs(store_id=self.grocer.pk, article_id=0), [])
 
 
 class OfferedStoresTests(TestCase):
@@ -714,3 +767,75 @@ class PlanFromTheDatabaseTests(TestCase):
         self.assertAlmostEqual(line.need, 2.0, places=9)
         self.assertIn(" ; la caisse a ", line.sentence)
         self.assertEqual(line.product_name, "SIROP EXEMPLE 1L")
+
+
+# ---------------------------------------------------------------------------
+# One article's usual purchase at one store
+# ---------------------------------------------------------------------------
+
+
+class UsualPurchaseAtTests(TestCase):
+    """`usual_purchase_at(today, store, article)`: the usual purchase the
+    forecast's line shows (`shopping.usual_purchase` over the whole
+    `prepare()`), read for one article at one store - two queries at most,
+    whatever the history. make_shopping_history's every article at each of
+    its stores (invented data)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.made = make_shopping_history()
+
+    def articles(self):
+        made = self.made
+        return (
+            made.beer,
+            made.syrup,
+            made.olives,
+            made.crisps,
+            made.rum,
+            made.coffee,
+            made.lemon,
+            made.keg,
+            made.strawberries,
+        )
+
+    def test_it_equals_the_whole_page_s_reading_for_every_article_at_every_store(self):
+        today = timezone.localdate()
+        whole = prepare(today, TILL_OFF, timezone.now())
+        found = 0
+        for store in (self.made.wholesaler, self.made.grocer, self.made.market):
+            for what in self.articles():
+                with self.subTest(store=store.name, article=what.name):
+                    expected = shopping.usual_purchase(whole, store.pk, what.pk)
+                    with CaptureQueriesContext(connection) as captured:
+                        got = shopping_data.usual_purchase_at(today, store.pk, what)
+                    self.assertEqual(got, expected)
+                    self.assertLessEqual(len(captured), 2)
+                    found += got is not None
+        # The beer, syrup, olives, crisps, rum, coffee and keg at the
+        # wholesaler's, the coffee and lemons at the grocer's, the
+        # strawberries at the market.
+        self.assertEqual(found, 10)
+
+    def test_the_beer_in_its_store_s_product(self):
+        usual = shopping_data.usual_purchase_at(timezone.localdate(), self.made.wholesaler.pk, self.made.beer)
+        self.assertEqual(usual.qty, Decimal("24"))
+        self.assertEqual((usual.product_name, usual.product_units), (SHOPPING_BEER_PRODUCT, Decimal("24")))
+        self.assertEqual(usual.packs, (1, Decimal("24")))
+
+    def test_never_bought_there_is_one_query_and_none(self):
+        with self.assertNumQueries(1):
+            self.assertIsNone(
+                shopping_data.usual_purchase_at(timezone.localdate(), self.made.grocer.pk, self.made.beer)
+            )
+
+    def test_returns_alone_are_no_usual_purchase(self):
+        # The keg, given back at the market and never bought there.
+        bought(self.made.market, self.made.keg, timezone.localdate() - 3 * DAY, "-1", "-90.00")
+        self.assertIsNone(shopping_data.usual_purchase_at(timezone.localdate(), self.made.market.pk, self.made.keg))
+
+    def test_a_purchase_after_today_waits(self):
+        tomorrow = timezone.localdate() + DAY
+        bought(self.made.market, self.made.olives, tomorrow, "3", "35.00")
+        self.assertIsNone(shopping_data.usual_purchase_at(timezone.localdate(), self.made.market.pk, self.made.olives))
+        self.assertEqual(shopping_data.usual_purchase_at(tomorrow, self.made.market.pk, self.made.olives).qty, 3)

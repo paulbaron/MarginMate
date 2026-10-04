@@ -16,12 +16,13 @@ accounts/tests/test_topbar_browser.py.
 import re
 from types import SimpleNamespace
 
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.urls import resolve, reverse
 from django.utils.html import escape
 
+from accounts.access import Access
 from config import navigation
-from inventory.models import GapExclusion, GapFillEntry, ShoppingExclusion, StockType
+from inventory.models import GapExclusion, GapFillEntry, ShoppingExclusion, ShoppingList, StockType
 from recipes.models import PosProduct
 from staff.models import Employee
 from tests.factories import (
@@ -33,7 +34,7 @@ from tests.factories import (
     make_supplier,
 )
 from tests.runner import employee_of_the_test_tenant
-from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history
+from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history, make_shopping_lists
 
 LABELS = [
     "Produits &amp; charges",
@@ -55,6 +56,65 @@ LABELS = [
     "Données",
     # « Admin » follows for a superuser only (accounts/tests/test_admin.py).
 ]
+#: The words of links no owner's bar draws: « Courses », an employee's given
+#: « Liste de courses » without « Produits & charges », in that link's place
+#: (config/navigation.py SHOPPING_SECTION).
+EMPLOYEE_LABELS = ["Courses"]
+#: The routes of « Listes de courses », « Produits & charges »' pages.
+SHOPPING_LIST_ROUTES = (
+    "shopping_lists",
+    "shopping_list_page",
+    "shopping_list_add",
+    "shopping_list_add_all",
+    "shopping_list_item_edit",
+    "shopping_list_item_delete",
+    "shopping_list_item_tick",
+    "shopping_list_finish",
+)
+
+
+def shopping_list_landings(client, made, lists) -> list:
+    """Every page the shopping lists' forms land on, followed - each form
+    posted as its page posts it, refused or not - with the pages themselves:
+    the lists, a store's list to prepare, to tick, an item's card, a list
+    finished. `made`, `lists`: tests/test_views_smoke.py's invented data."""
+    store = made.wholesaler.pk
+    page = reverse("inventory:shopping_list_page")
+    add = reverse("inventory:shopping_list_add")
+    edit = reverse("inventory:shopping_list_item_edit")
+    landed = [
+        client.get(reverse("inventory:shopping_lists")),
+        client.get(page, {"fournisseur": store}),
+        client.get(page, {"fournisseur": store, "mode": "courses"}),
+        client.get(page, {"fournisseur": store, "ligne": lists.bread.pk}),
+        client.get(page, {"liste": lists.finished.pk}),
+        client.get(page, {"liste": lists.open.pk}, follow=True),
+        client.get(page, {"fournisseur": "abc"}, follow=True),
+        client.post(add, {"fournisseur": store, "nom": "Serviettes exemple"}, follow=True),
+        client.post(add, {"fournisseur": store, "nom": ""}, follow=True),
+        client.post(add, {"fournisseur": "abc", "nom": "Serviettes exemple"}, follow=True),
+        client.post(
+            add,
+            {"fournisseur": store, "article": made.olives.pk, "quantite": "1", "retour": "peut-etre", "dans": "30"},
+            follow=True,
+        ),
+        client.post(reverse("inventory:shopping_list_add_all"), {"fournisseur": store}, follow=True),
+        client.post(edit, {"fournisseur": store, "ligne": lists.bread.pk, "quantite": "3", "note": ""}, follow=True),
+        client.post(edit, {"fournisseur": store, "ligne": lists.bread.pk, "quantite": "abc"}, follow=True),
+        client.post(
+            reverse("inventory:shopping_list_item_tick"),
+            {"fournisseur": store, "ligne": lists.beer.pk, "pris": "1"},
+            follow=True,
+        ),
+        client.post(
+            reverse("inventory:shopping_list_item_delete"), {"fournisseur": store, "ligne": lists.bread.pk}, follow=True
+        ),
+        client.post(reverse("inventory:shopping_list_finish"), {"liste": lists.open.pk, "garder": "1"}, follow=True),
+        client.post(reverse("inventory:shopping_list_finish"), {"liste": "abc"}, follow=True),
+        client.get(add, follow=True),
+    ]
+    assert ShoppingList.objects.filter(pk=lists.open.pk, finished_at__isnull=False).exists()
+    return landed
 
 
 def nav_links(response):
@@ -126,6 +186,10 @@ class NavigationTests(TestCase):
         shopping = make_shopping_history()
         shopping_list = reverse("inventory:shopping_list")
         shopping_rhythm = reverse("inventory:shopping_rhythm")
+        # « Listes de courses »: the lists, a store's to prepare and to tick,
+        # an item's card, a list finished.
+        lists = make_shopping_lists(shopping)
+        list_page = reverse("inventory:shopping_list_page")
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
@@ -136,6 +200,11 @@ class NavigationTests(TestCase):
                 f"{shopping_list}?fournisseur=abc&dans=abc",
                 shopping_rhythm,
                 f"{shopping_rhythm}?fournisseur={shopping.wholesaler.pk}",
+                reverse("inventory:shopping_lists"),
+                f"{list_page}?fournisseur={shopping.wholesaler.pk}",
+                f"{list_page}?fournisseur={shopping.wholesaler.pk}&mode=courses",
+                f"{list_page}?fournisseur={shopping.wholesaler.pk}&ligne={lists.bread.pk}",
+                f"{list_page}?liste={lists.finished.pk}",
             ],
             "Factures": [
                 reverse("invoices:invoice_list"),
@@ -271,10 +340,21 @@ class NavigationTests(TestCase):
     def test_the_shopping_forms_land_on_produits_et_charges(self):
         """« Prévoir les courses »' forms - « Réglages », « Pas ici », « Ne
         plus proposer », « Ne jamais proposer la catégorie », « Réinclure »,
-        refused or not - and « Rythme d'achat »'s own: every page they land
-        on is « Produits & charges », the folded bar saying so, and so is
-        each of their routes. None is an « Inventaires » page."""
+        refused or not - « Rythme d'achat »'s own and the shopping lists':
+        every page they land on is « Produits & charges », the folded bar
+        saying so, and so is each of their routes. None is an
+        « Inventaires » page."""
         made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        for number, response in enumerate(shopping_list_landings(self.client, made, lists)):
+            with self.subTest(list_page=number):
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(active_labels(response), ["Produits &amp; charges"])
+                self.assertEqual(section_shown(response), "Produits &amp; charges")
+        for name in SHOPPING_LIST_ROUTES:
+            with self.subTest(route=name):
+                self.assertNotIn(name, navigation.STOCK_TAKE_VIEWS)
+                self.assertEqual(navigation.section_of(resolve(reverse(f"inventory:{name}"))), "products")
         store = made.wholesaler.pk
         settings = reverse("inventory:shopping_settings")
         exclude = reverse("inventory:shopping_exclude")
@@ -311,12 +391,18 @@ class NavigationTests(TestCase):
         """A section navigation can light with no words in SECTION_LABELS
         draws a folded bar saying nothing (base.html's `{% if %}`): a new
         app added to SECTION_BY_APP needs its words too. And the words are
-        a link's own, one link per section, nothing else."""
+        a link's own, one link per section, nothing else - « Courses » an
+        employee's, lit where « Produits & charges » would be
+        (`navigation()`, not `section_of`)."""
         pages = [("inventory", url_name) for url_name in ("stock_list", *navigation.STOCK_TAKE_VIEWS)]
         pages += [(app, "any_view") for app in navigation.SECTION_BY_APP]
         can_light = {navigation.section_of(SimpleNamespace(app_name=app, url_name=view)) for app, view in pages}
-        self.assertEqual(set(navigation.SECTION_LABELS), can_light)
-        self.assertEqual(sorted(escape(words) for words in navigation.SECTION_LABELS.values()), sorted(LABELS))
+        self.assertNotIn(navigation.SHOPPING_SECTION, can_light)
+        self.assertEqual(set(navigation.SECTION_LABELS), can_light | {navigation.SHOPPING_SECTION})
+        self.assertEqual(navigation.SECTION_LABELS[navigation.SHOPPING_SECTION], "Courses")
+        self.assertEqual(
+            sorted(escape(words) for words in navigation.SECTION_LABELS.values()), sorted(LABELS + EMPLOYEE_LABELS)
+        )
 
     def test_each_workspace_counts_what_waits_there(self):
         supplier = make_supplier(code="SABBH", name="Sabbh")
@@ -383,6 +469,77 @@ class EmployeeNavigationTests(TestCase):
                 self.assertEqual([label_of(link) for link in nav_links(response)], ["Factures", "Personnel"])
                 self.assertEqual(active_labels(response), [])
                 self.assertIsNone(section_shown(response))
+
+    def test_the_lists_alone_light_courses(self):
+        """Given « Liste de courses » without « Produits & charges », his
+        one link is « Courses », lit - and said by the folded bar - on the
+        lists, a store's list to prepare and to tick, « Prévoir les
+        courses », « Rythme d'achat » and every page a list's form lands
+        on."""
+        self.log_in_an_employee("shopping")
+        made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        landed = [
+            self.client.get(reverse("inventory:shopping_list")),
+            self.client.get(reverse("inventory:shopping_list"), {"fournisseur": made.grocer.pk, "dans": "30"}),
+            self.client.get(reverse("inventory:shopping_rhythm")),
+            self.client.get(reverse("inventory:shopping_rhythm"), {"fournisseur": made.wholesaler.pk}),
+            *shopping_list_landings(self.client, made, lists),
+        ]
+        for number, response in enumerate(landed):
+            with self.subTest(page=number):
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual([label_of(link) for link in nav_links(response)], ["Courses"])
+                self.assertEqual(active_labels(response), ["Courses"])
+                self.assertEqual(section_shown(response), "Courses")
+        links = {label_of(link): link for link in nav_links(landed[0])}
+        self.assertIn(f'href="{reverse("inventory:shopping_lists")}"', links["Courses"])
+
+    def test_a_refused_page_of_the_products_lights_nothing_for_the_lists_alone(self):
+        """« Produits & charges »' other pages, and the forecast's settings
+        and exclusions, are not his: refused, nothing lit - « Courses » is
+        not the page asked for."""
+        self.log_in_an_employee("shopping")
+        for method, url in (
+            ("get", reverse("inventory:stock_type_create")),
+            ("get", reverse("inventory:review_queue")),
+            ("post", reverse("inventory:shopping_settings")),
+            ("post", reverse("inventory:shopping_exclude")),
+        ):
+            with self.subTest(url=url):
+                response = getattr(self.client, method)(url)
+                self.assertContains(response, "Page non accessible", status_code=403)
+                self.assertEqual([label_of(link) for link in nav_links(response)], ["Courses"])
+                self.assertEqual(active_labels(response), [])
+                self.assertIsNone(section_shown(response))
+
+    def test_a_page_of_the_products_lights_courses_only_for_one_given_the_lists(self):
+        """`navigation()` alone, on a « Produits & charges » route: « Courses »
+        for one given « Liste de courses » without the products; the products
+        for one given them, and for the owner; nothing for one given
+        neither - no link of his names the page."""
+        url = reverse("inventory:shopping_lists")
+        request = RequestFactory().get(url)
+        request.resolver_match = resolve(url)
+        for given, section in (
+            (Access(owner=True), "products"),
+            (Access(owner=False, areas=["shopping"]), "shopping"),
+            (Access(owner=False, areas=["products"]), "products"),
+            (Access(owner=False, areas=["shopping", "products"]), "products"),
+            (Access(owner=False, areas=["invoices"]), ""),
+        ):
+            with self.subTest(access=repr(given)):
+                request.access = given
+                drawn = navigation.navigation(request)
+                self.assertEqual(drawn["nav_section"], section)
+                self.assertEqual(drawn["nav_section_label"], navigation.SECTION_LABELS.get(section, ""))
+
+    def test_with_the_products_his_shopping_pages_are_produits_et_charges(self):
+        self.log_in_an_employee("shopping", "products")
+        response = self.client.get(reverse("inventory:shopping_lists"))
+        self.assertEqual([label_of(link) for link in nav_links(response)], ["Produits &amp; charges"])
+        self.assertEqual(active_labels(response), ["Produits &amp; charges"])
+        self.assertEqual(section_shown(response), "Produits &amp; charges")
 
     def test_no_access_lights_nothing(self):
         self.log_in_an_employee()
