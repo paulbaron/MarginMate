@@ -267,3 +267,12 @@ class ReclassifyingTests(TestCase):
             self.movements(),
             [("Rhum", "LOSS", Decimal("-0.7"), lost_line.pk), ("Gin", "PURCHASE", Decimal("12"), self.line.pk)],
         )
+
+    def test_relinking_from_a_copy_read_before_it_was_filed(self):
+        """Two « Ranger » of one product at once: both passed the view's check
+        while it was unfiled, and the second, holding that stale copy, left
+        the first's purchases on the first article."""
+        stale = Product.objects.get(pk=self.product.pk)
+        stale.stock_type = None
+        link_product_to_stock_type(stale, self.gin, unit=UnitChoices.LITRE, stock_equivalent=Decimal("2"))
+        self.assertEqual(self.movements(), [("Gin", "PURCHASE", Decimal("12"), self.line.pk)])

@@ -404,7 +404,9 @@ def link_product_to_stock_type(
     again, rebuild_purchase_movements' rule: create_stock_movement_for_line
     keeps a line's existing movement, so they stayed on the old article with
     the old factor while the product named the new one."""
-    was = (product.stock_type_id, product.unit, product.stock_equivalent)
+    # Read from the row, inside the (IMMEDIATE) transaction: the caller's
+    # copy may predate another request that filed it a moment ago.
+    was = Product.objects.values_list("stock_type_id", "unit", "stock_equivalent").get(pk=product.pk)
     if was[0] is not None and was != (stock_type.pk, unit, stock_equivalent):
         StockMovement.objects.filter(invoice_line__product=product, kind=MovementKind.PURCHASE).delete()
     product.stock_type = stock_type
