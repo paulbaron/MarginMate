@@ -463,9 +463,13 @@ def _a_date(term: str) -> dict | None:
     month_of = _A_MONTH.fullmatch(term)
     if month_of:
         month, year = (int(part) for part in month_of.groups())
-        if 1 <= month <= 12:
-            return {"invoice_date__month": month, "invoice_date__year": year}
-        return None
+        # The day's rule: a month of the year 0 (« 05/0000 ») became a year
+        # lookup the database turns into date(0, 1, 1), and raised.
+        try:
+            date(year, month, 1)
+        except ValueError:
+            return None
+        return {"invoice_date__month": month, "invoice_date__year": year}
     if _A_YEAR.fullmatch(term):
         return {"invoice_date__year": int(term)}
     return None

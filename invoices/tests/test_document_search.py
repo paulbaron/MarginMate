@@ -167,7 +167,11 @@ class DocumentSearchTests(TestCase):
     # ------------------------------------------- it is a query string, never a 500
 
     def test_a_token_shaped_like_a_date_that_is_no_date(self):
-        for query in ("13/2025", "32/07/2026", "01/01/0000", "Grossiste 32/07/2026"):
+        # « 05/0000 »: a month of the year 0, which the database's year
+        # lookup turns into date(0, 1, 1) - a ValueError, and a 500 on the
+        # documents list and on Banque's search. In Arabic-Indic digits too,
+        # which \d takes and int() reads.
+        for query in ("13/2025", "32/07/2026", "01/01/0000", "Grossiste 32/07/2026", "05/0000", "05/٠٠٠٠"):
             with self.subTest(query=query):
                 self.assertEqual(self.found(query), set())
 
