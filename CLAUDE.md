@@ -4713,18 +4713,22 @@ imports (`transfer/legacy.py`).
   facture » rules read its credits and debits on draw; required, clearing
   the rules would have taken the lines), « Consignes » requires its types
   and formats (its counts and slips name them, PROTECT). **A new espace
-  already holds rows of four configuration sections** (the seeded
-  suppliers, the UBA mailbox search, the BNP format and eight recognition
-  rules, the three types and the UBA slip format: `views.SEEDED_SECTIONS`):
+  already holds rows of up to four configuration sections** (the seeded
+  suppliers, the UBA mailbox search - the owner's espace only -, the BNP
+  format and eight recognition rules, the three types and - the owner's
+  only - the UBA slip format: `views.SEEDED_SECTIONS`):
   merged, an archive's edited copy of one is a conflict and the seeded one
   stays, so on a new database (`_fresh_database`) the Importer tab's
   « Base neuve » note names the archive's parts among them and asks for
   « Remplacer » - **each only while it holds nothing but its seeds**
   (`views.holds_only_seeds`: the seeds by the names their migrations gave
   them, read off the migrations' own literals, edited or not; no ignore
-  rule at all, none is seeded) **and holds a row at all** (`_holds_rows`: a
-  new espace that is not the owner's starts without the original bar's UBA,
-  its mailbox source and slip format, Sabbh Oriental and Wing Seng -
+  rule at all, none is seeded) **and holds a row at all** (`_holds_rows`,
+  reading the tables of `SEEDED_MODELS` - a test holds that map to each
+  section's own `count()`, so a part added to `SEEDED_SECTIONS` needs its
+  tables there: a new espace that is not the owner's starts without the
+  original bar's UBA, its mailbox source and slip format, Sabbh Oriental
+  and Wing Seng -
   `invoices/seeds.py` - so its « Sources de factures » holds nothing to
   replace; it is still a new database, holding a subset of
   `SEEDED_SUPPLIERS`). « Remplacer » deletes what the archive does
@@ -7968,11 +7972,20 @@ never provisioned: nothing reaches it. Their readers and tills stay in the
 code (a till answers only where its row is, `receipts.configured_tills`;
 `create_shop` never takes a registry key as a code: « Sabbh » is
 `SABBH_2`). The seed migrations, `SEEDED_SUPPLIERS` and `SEEDED_SOURCE` are
-unchanged: a new espace holds a subset of the seeds. In a real tenant's
+unchanged: a new espace holds a subset of the seeds. **A later data
+migration must not count on them**: `migrate_tenants` runs it in every
+espace, hosted ones included, so it looks UBA, SABBH, WINGSENG, « UBA -
+Factures » or the UBA slip format up with `.filter(...).first()` and does
+nothing where they are absent - never `.get()`, which stops the migration
+there, nor `get_or_create`, which puts back in every hosted espace what
+`forget_original_bar_suppliers` took out. In a real tenant's
 test (`TwoTenantsTestCase`), only an `owner=True` espace has UBA or its
 format: `returnables.tests.support.seeded_format()` makes the format again
 where it is absent (under a new pk - SQLite never reuses one; a test needing
-the same pk in two espaces passes `pk=` to `make_format`).
+the same pk in two espaces passes `pk=` to `make_format`), and a gate test
+needing a mailbox source in the hosted espace makes its own
+(`invoices/tests/test_tenancy.py`, `reopen_the_owners_integrations_in_b`) -
+otherwise its `assert_not_called()` on the mailbox proves nothing.
 
 ## Known data issues (not code bugs)
 
