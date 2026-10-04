@@ -24,9 +24,10 @@ or a French refusal (`RequestError` and its kinds).
    e-mail (`code_email`, staff/signature_mail.py) or shown ONCE to the owner
    who passes it on by another channel than the link (`code_remis`) - which
    the proof file says honestly. A code by e-mail never voids the one the
-   employer handed over while it can still be typed. The method recorded
-   (`identification`) is the one of the code he TYPED, set when he types it
-   - never by a code merely issued. A verified code is remembered in HIS
+   employer handed over while it can still be typed, and none is sent or
+   checked after `CODE_FAILURES_PER_LINK` wrong codes with the link. The
+   method recorded (`identification`) is the one of the code he TYPED, set
+   when he types it - never by a code merely issued. A verified code is remembered in HIS
    session, for THIS request only, for an hour (`is_identified`).
 4. **He signs** (`sign_for_employee`): the certification ticked, his drawing
    checked (`signing.clean_signature_png`), the frozen file checked against
@@ -118,6 +119,12 @@ CODE_VALIDITY = timedelta(minutes=15)
 IDENTIFICATION_VALIDITY = timedelta(hours=1)
 CODE_MAX_ATTEMPTS = 5
 CODES_PER_HOUR = 3
+#: Codes typed wrong with one link, every code together, before codes by
+#: e-mail are neither sent nor checked any more - five tries a code, a new
+#: code whenever asked, made some 300 guesses a day for the link's
+#: fortnight. « Nouveau lien » starts the count again; a code the employer
+#: hands over still works.
+CODE_FAILURES_PER_LINK = 30
 CODE_DIGITS = 6
 #: A link token is 43 characters; anything much longer is no token.
 TOKEN_MAX_LENGTH = 128
@@ -148,6 +155,8 @@ NOT_SIGNED = "La signature n'a pas pu être enregistrée : rien n'a été signé
 #: Refused to a code by e-mail while the one the employer handed over can
 #: still be typed: anyone holding the link could otherwise void it.
 HANDED_OVER_CODE_WAITING = "Votre employeur vous a donné un code : tapez-le ci-dessous (il vaut 15 minutes)."
+#: Past `CODE_FAILURES_PER_LINK`, to a code by e-mail asked for or typed.
+TOO_MANY_WRONG_CODES = "Trop de codes erronés avec ce lien : demandez le code à votre employeur, ou un nouveau lien."
 #: A file gone from the tenant's private folder, said by its name: an OS
 #: error's own words are its full path on the server (security audit LB-3),
 #: and « Vérifier » writes its verdict for good in the journal and the proof.
@@ -866,6 +875,21 @@ def _codes_in_the_last_hour(request: SignatureRequest, now, method: str) -> int:
     return sent + failed_mails
 
 
+def _wrong_codes_with_this_link(request: SignatureRequest) -> int:
+    """The codes typed wrong since the link was made or last renewed."""
+    count = 0
+    for kind, detail in (
+        SignatureEvent.objects.filter(request=request, kind__in=(Kind.CODE_FAILED, Kind.LINK_RENEWED))
+        .order_by("id")
+        .values_list("kind", "detail")
+    ):
+        if kind == Kind.LINK_RENEWED:
+            count = 0
+        elif str((detail or {}).get("reason", "")).startswith("code erroné"):
+            count += 1
+    return count
+
+
 def waiting_code_method(request: SignatureRequest, now=None) -> str:
     """The method of the code that can still be typed - issued, within its
     15 minutes, tries left - or "" when none can."""
@@ -911,6 +935,8 @@ def issue_code(request: SignatureRequest, method: str, *, now=None, ip=None, use
     request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method"])
     if method == Identification.CODE_BY_EMAIL and waiting_code_method(request, now) == Identification.CODE_HANDED_OVER:
         raise CodeError(HANDED_OVER_CODE_WAITING)
+    if method == Identification.CODE_BY_EMAIL and _wrong_codes_with_this_link(request) >= CODE_FAILURES_PER_LINK:
+        raise CodeError(TOO_MANY_WRONG_CODES)
     if _codes_in_the_last_hour(request, now, method) >= CODES_PER_HOUR:
         raise CodeError(
             f"Déjà {CODES_PER_HOUR} codes demandés dans l'heure : attendez un peu avant d'en demander un autre."
@@ -973,6 +999,7 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
     now = _now(now)
     request = _waiting(request, now)
     digits = "".join(str(typed or "").split())
+    guessed_out = _wrong_codes_with_this_link(request) >= CODE_FAILURES_PER_LINK
 
     def refuse(message, reason, *, compared=True):
         # A code compared is always an event; a refusal before any comparison
@@ -992,6 +1019,8 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
             refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré", compared=False)
         if request.code_attempts >= CODE_MAX_ATTEMPTS:
             refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais", compared=False)
+        if guessed_out and request.code_method != Identification.CODE_HANDED_OVER:
+            refuse(TOO_MANY_WRONG_CODES, "trop de codes erronés avec ce lien", compared=False)
         stored, method = request.code_hash, request.code_method
         with transaction.atomic():
             reserved = SignatureRequest.objects.filter(
