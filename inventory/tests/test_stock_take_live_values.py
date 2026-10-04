@@ -284,6 +284,16 @@ class LiveLineValueTests(TestCase):
     def test_a_quantity_that_is_not_a_number_is_refused(self):
         self.assertFalse(self.value(quantity="deux")["ok"])
 
+    def test_a_quantity_the_save_would_refuse_is_refused(self):
+        """Decimal() reads NaN, Infinity and 1e999999: the first two were a
+        500, the last a 2 MB answer of a million digits. The save's
+        counted_quantity (10,4) holds none of them, nor a negative count."""
+        for entry in (product_display_name(self.product), stock_type_entry_name(self.vodka)):
+            for quantity in ("NaN", "sNaN", "Infinity", "-Infinity", "1e100000000", "1e999999", "1000000", "-3"):
+                with self.subTest(entry=entry, quantity=quantity):
+                    self.assertEqual(self.value(entry=entry, quantity=quantity), {"ok": False, "error": "quantity"})
+        self.assertTrue(self.value(quantity="999999.9999")["ok"])
+
     def test_a_missing_date_falls_back_to_today_rather_than_erroring(self):
         self.assertTrue(self.value(as_of="")["ok"])
 

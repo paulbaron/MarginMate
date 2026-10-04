@@ -2123,6 +2123,11 @@ def value_stock_take_line(request):
         quantity = Decimal((request.GET.get("quantity") or "").replace(",", "."))
     except InvalidOperation:
         return JsonResponse({"ok": False, "error": "quantity"})
+    # What the save's counted_quantity (10,4) and StockTakeLineForm take:
+    # Decimal() also reads NaN, Infinity and 1e999999, which were a 500 or a
+    # million-digit answer here.
+    if not quantity.is_finite() or quantity < 0 or quantity >= Decimal("1000000"):
+        return JsonResponse({"ok": False, "error": "quantity"})
     as_of = parse_date(request.GET.get("as_of") or "") or timezone.localdate()
 
     if is_stock_type_entry(name):
