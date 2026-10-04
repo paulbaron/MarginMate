@@ -15,9 +15,11 @@ screen which it is (`ai_suggestion["source"]`) and why:
    (`classified_fingerprint`) and made again once they move.
 2. **rule** - the hand-written table below (a spirit, a syrup, a deposit).
    A few rules name an article of the original bar's own catalogue
-   (« Bière Du Moment » for any Corona): those answer only in an espace that
-   has that article (`MatchRule.bar_specific`, `existing_article`), and the
-   next rule or the raw name answers elsewhere.
+   (« Bière Du Moment » for any Corona): those name it only in an espace
+   that has that article (`MatchRule.bar_specific`, `existing_article`).
+   Elsewhere the rule still says what the goods are - its category, unit
+   and counting: a keg deposit is one keg, never 20 L - under the raw name
+   (`_rule_suggestion`).
 3. **fallback** - the raw name with its sizes stripped, under the category
    the word classifier learned from the classified products.
 
@@ -189,8 +191,8 @@ def existing_article(name: str) -> StockType | None:
     normalised (`_normalize_casing`), then compared case aside as the
     database compares it (`iexact` - SQLite folds ASCII letters only). The
     one lookup - a suggestion's resolution and the bar-specific rules' gate
-    (`match_stock_type`) - so a rule never answers for an article the
-    suggestion would then propose to create beside it."""
+    (`_rule_suggestion`) - so a rule never names an article the suggestion
+    would then propose to create beside it."""
     name = _normalize_casing(name or "")
     return StockType.objects.filter(name__iexact=name).first() if name else None
 
@@ -270,10 +272,15 @@ class MatchRule:
     force_unit_count: bool = False
     assume_volume_tracked: bool = False
     # Names an article of the original bar's own catalogue (« Bière Du
-    # Moment » for any Corona): answers only in an espace that has that
-    # article (`match_stock_type`) - elsewhere « Approuver les suggestions »
-    # made one of the original bar's article names for every match.
+    # Moment » for any Corona): named only in an espace that has that
+    # article - elsewhere « Approuver les suggestions » made one of the
+    # original bar's article names for every match. There the goods keep
+    # the rule's category, unit and counting under their raw name
+    # (`_rule_suggestion`), the category being `elsewhere_category` when the
+    # original bar's own is a choice of its own (foie gras among its
+    # « Consommables »).
     bar_specific: bool = False
+    elsewhere_category: str = ""
 
 
 def _rule(
@@ -284,9 +291,17 @@ def _rule(
     force_unit_count: bool = False,
     assume_volume_tracked: bool = False,
     bar_specific: bool = False,
+    elsewhere_category: str = "",
 ) -> MatchRule:
     return MatchRule(
-        re.compile(pattern), stock_type_name, category, unit, force_unit_count, assume_volume_tracked, bar_specific
+        re.compile(pattern),
+        stock_type_name,
+        category,
+        unit,
+        force_unit_count,
+        assume_volume_tracked,
+        bar_specific,
+        elsewhere_category,
     )
 
 
@@ -304,7 +319,14 @@ _DEPOSIT_RULES = [
         r"\bFUT\b.*FELSGOLD|FELSGOLD.*\bFUT\b", "Fût Felsgold", "Consignes", force_unit_count=True, bar_specific=True
     ),
     _rule(r"\bSTUB\b.*EVIAN|EVIAN.*\bSTUB\b", "Bonbonne Evian", "Consignes", force_unit_count=True),
-    _rule(r"PALETTE\s*EUROPE", "Palette Livraison", "Livraison", force_unit_count=True, bar_specific=True),
+    _rule(
+        r"PALETTE\s*EUROPE",
+        "Palette Livraison",
+        "Livraison",
+        force_unit_count=True,
+        bar_specific=True,
+        elsewhere_category="Consignes",
+    ),
 ]
 
 # --- Cleaning / consumables (MPRO = Metro's own "Metro Pro" house brand -
@@ -400,7 +422,14 @@ _FOOD_RULES = [
     _rule(r"TOMME.*SAVOIE", "Tomme de Savoie", "Epicerie", UnitChoices.KILOGRAM),
     _rule(r"TOMME.*GRISE", "Tomme grise", "Epicerie", UnitChoices.KILOGRAM),
     _rule(r"CREAM\s*CHEESE", "Cream cheese", "Epicerie", UnitChoices.KILOGRAM),
-    _rule(r"\bFOIE\s*GRAS\b|\bBLOC\s*FG\b", "Foie Gras", "Consommables", UnitChoices.KILOGRAM, bar_specific=True),
+    _rule(
+        r"\bFOIE\s*GRAS\b|\bBLOC\s*FG\b",
+        "Foie Gras",
+        "Consommables",
+        UnitChoices.KILOGRAM,
+        bar_specific=True,
+        elsewhere_category="Epicerie",
+    ),
     _rule(r"\bJB\b.*\bCRU\b|JAMBON.*CRU", "Jambon Cru", "Epicerie", UnitChoices.KILOGRAM),
     _rule(r"\bJB\b.*\bCUIT\b|JAMBON.*CUIT", "Jambon cuit", "Epicerie", UnitChoices.KILOGRAM),
     _rule(r"^JB\b", "Jambon", "Epicerie", UnitChoices.KILOGRAM),  # fallback for other JB SUP/... variants
@@ -449,21 +478,15 @@ RULES: list[MatchRule] = [
 ]
 
 
-def match_stock_type(raw_name: str, has_article: Callable[[str], bool] | None = None) -> MatchRule | None:
-    """The first rule matching `raw_name`. A bar-specific rule is passed
-    over unless this espace has its article (`has_article`, by default
-    `existing_article`): the next rule, or the raw name, answers instead."""
-    if has_article is None:
-
-        def has_article(article: str) -> bool:
-            return existing_article(article) is not None
-
+def match_stock_type(raw_name: str) -> MatchRule | None:
+    """The first rule matching `raw_name` - a bar-specific one too: it
+    keeps its place before the rules further down (a foie gras with pepper
+    is no « Poivre noir »), whether or not its article exists here
+    (`_rule_suggestion`)."""
     name = raw_name.upper()
     for rule in RULES:
         m = rule.pattern.search(name)
         if not m:
-            continue
-        if rule.bar_specific and not has_article(rule.stock_type_name):
             continue
         if m.groups():
             # dynamic capture (e.g. stock_type_name=r"Purée \1") - fill in
@@ -478,6 +501,7 @@ def match_stock_type(raw_name: str, has_article: Callable[[str], bool] | None = 
                 rule.force_unit_count,
                 rule.assume_volume_tracked,
                 rule.bar_specific,
+                rule.elsewhere_category,
             )
         return rule
     return None
@@ -1033,7 +1057,13 @@ def _neighbour_suggestion(product, match: NeighbourMatch) -> dict:
     }
 
 
-def _rule_suggestion(product, rule: MatchRule) -> dict:
+def _rule_suggestion(product, rule: MatchRule, has_article: Callable[[str], bool]) -> dict:
+    """What `rule` says of `product`. A bar-specific rule whose article this
+    espace lacks (`has_article`) names no article of the original bar's: the
+    product keeps its raw name (`_raw_article_name`, as the fallback names
+    it) and the rule's unit and counting - a keg deposit stays one keg,
+    where the raw name's « 20L » made it 20 litres (review, 04/10/2026) -
+    under its category, or its `elsewhere_category`."""
     guess = extract_quantity_for_product(
         product,
         force_unit_count=rule.force_unit_count,
@@ -1043,16 +1073,29 @@ def _rule_suggestion(product, rule: MatchRule) -> dict:
     # owner's screen, and « \bVODKA\b|\bVDK\b » is nobody's explanation.
     hit = rule.pattern.search(product.raw_name.upper())
     matched = hit.group(0).strip() if hit and hit.group(0).strip() else rule.stock_type_name.upper()
-    article = _normalize_casing(rule.stock_type_name)
+    if rule.bar_specific and not has_article(rule.stock_type_name):
+        article = _raw_article_name(product.raw_name)
+        category = _normalize_casing(rule.elsewhere_category or rule.category)
+        named = f"rangé dans « {category} », nom de facture repris tel quel"
+    else:
+        article = _normalize_casing(rule.stock_type_name)
+        category = _normalize_casing(rule.category)
+        named = article
     return {
         "source": "rule",
         "stock_type_name": article,
-        "new_stock_type_category": _normalize_casing(rule.category),
+        "new_stock_type_category": category,
         "new_stock_type_unit": rule.unit,
         "stock_equivalent": guess.stock_equivalent,
         "confidence": least_confident(RULE_ARTICLE_CONFIDENCE, guess.confidence),
-        "reasoning": f"Règle : « {matched} » dans le nom → {article} ; {guess.note}",
+        "reasoning": f"Règle : « {matched} » dans le nom → {named} ; {guess.note}",
     }
+
+
+def _raw_article_name(raw_name: str) -> str:
+    """The article a raw invoice name is filed under as it stands: the
+    supplier's marker, the sizes and the counts set aside."""
+    return _normalize_casing(strip_size_and_count_tokens(_LEADING_JUNK_RE.sub("", raw_name)))
 
 
 def _fallback_suggestion(product, category_words: dict[str, Counter]) -> dict:
@@ -1062,7 +1105,7 @@ def _fallback_suggestion(product, category_words: dict[str, Counter]) -> dict:
     category = guess_category(clean_name, category_words) or _UNKNOWN_CATEGORY
     return {
         "source": "fallback",
-        "stock_type_name": _normalize_casing(strip_size_and_count_tokens(clean_name)),
+        "stock_type_name": _raw_article_name(product.raw_name),
         "new_stock_type_category": _normalize_casing(category),
         "new_stock_type_unit": guess.suggested_stock_unit,
         "stock_equivalent": guess.stock_equivalent,
@@ -1116,7 +1159,7 @@ class SuggestionContext:
 
     def has_article(self, name: str) -> bool:
         """Whether the article `name` exists (`existing_article`), asked
-        once a name in a pass: the bar-specific rules' gate."""
+        once a name in a pass: whether a bar-specific rule names it."""
         if name not in self._articles:
             self._articles[name] = existing_article(name) is not None
         return self._articles[name]
@@ -1152,9 +1195,9 @@ def suggest_for_product(product, context: SuggestionContext | None = None) -> di
     if match is not None:
         suggestion = _neighbour_suggestion(product, match)
     else:
-        rule = match_stock_type(product.raw_name, context.has_article)
+        rule = match_stock_type(product.raw_name)
         if rule is not None:
-            suggestion = _rule_suggestion(product, rule)
+            suggestion = _rule_suggestion(product, rule, context.has_article)
         else:
             suggestion = _fallback_suggestion(product, context.category_words)
     _resolve_stock_type_match(suggestion)

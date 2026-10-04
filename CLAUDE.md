@@ -2480,20 +2480,28 @@ suggestions » still takes everything; « Approuver les sûres » takes the
 - `least_confident` answers "low" for an unknown level - nothing unmeasured
   is ever approved in bulk. A rule's reasoning names the word matched and
   the article, in French, never the regex.
-- **A rule naming the original bar's own article answers only where that
+- **A rule naming the original bar's own article names it only where that
   article exists** (`MatchRule.bar_specific`, 04/10/2026): « Bière Du
   Moment » for any Corona or Brooklyn, « Fût Felsgold », « Palette
   Livraison », « Limoncel », « Foie Gras » under « Consommables ». A new bar
   has no articles, so « Approuver les suggestions » made one of those names
   for every match. Checked with THE lookup the suggestion is resolved with
   (`existing_article`: `_normalize_casing`, then `name__iexact` - SQLite
-  folds ASCII case only), memoised per pass (`SuggestionContext.has_article`);
-  otherwise the next rule, or the raw name, answers. A bar-specific rule
-  names a fixed article (no capture group). The generic rules (Vodka, Gin,
-  Tonic, Sirop…, « Casier verre ») are unchanged, and so is the owner's
-  espace wherever those articles exist; one he renamed now falls through to
-  the raw name (the fingerprint holds every article's name, so a stored
-  suggestion is remade).
+  folds ASCII case only), memoised per pass (`SuggestionContext.has_article`).
+  **Elsewhere the rule still answers, under the raw name**
+  (`_rule_suggestion`, the fallback's `_raw_article_name`): its unit and
+  counting stay - passed over, a « FUT 20L FELSGOLD » deposit became 20 L
+  of an unknown article, booked by « Approuver les suggestions » (review,
+  04/10/2026) - and so does its category, unless the original bar's is a
+  choice of its own (`elsewhere_category`: a pallet among « Consignes », a
+  foie gras in « Epicerie »). It keeps its place in the table, so a rule
+  further down never answers for it (a foie gras with pepper is no
+  « Poivre noir »). A bar-specific rule names a fixed article (no capture
+  group). The generic rules (Vodka, Gin, Tonic, Sirop…, « Casier verre »)
+  are unchanged, and so is the owner's espace wherever those articles
+  exist; one he renamed is now suggested under the raw name (the
+  fingerprint holds every article's name, so a stored suggestion is
+  remade).
 - **The benchmark and its counts stay out of the repository** (strict
   leave-one-out: the index rebuilt WITHOUT the judged product, its words out
   of the category classifier; the scratchpad's `loo_pipeline.py` and
