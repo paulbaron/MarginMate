@@ -173,12 +173,18 @@ def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal) -
     for line in product.invoice_lines.filter(is_spread_charge=False):
         line.product = probe
         quantity, unit_cost_ht = compute_movement_amounts(line)
-        if abs(quantity) >= MOVEMENT_QUANTITY_LIMIT or abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
-            return (
-                f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé : un achat de « {product.raw_name} » "
-                f"ferait {format_money(quantity, '.3f')} unités de stock à {format_money(unit_cost_ht, '.4f')} € "
-                "l'unité, plus que MarginMate ne peut enregistrer."
-            )
+        # Only the figure that overflows is named: a tiny factor's quantity
+        # printed « 0.000 unités » next to a unit cost of millions.
+        if abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
+            figure = f"mettrait l'unité de stock à {format_money(unit_cost_ht)} €"
+        elif abs(quantity) >= MOVEMENT_QUANTITY_LIMIT:
+            figure = f"ferait {format_money(quantity, '.3f')} unités de stock"
+        else:
+            continue
+        return (
+            f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé : un achat de « {product.raw_name} » "
+            f"{figure}, plus que MarginMate ne peut enregistrer."
+        )
     return ""
 
 

@@ -87,6 +87,9 @@ class ConversionLimitsTests(TestCase):
         self.assertRedirects(response, reverse("inventory:stock_list"), fetch_redirect_response=False)
         (message,) = messages_of(response)
         self.assertIn("PROSECCO 75CL", message)
+        # The unit cost is what does not fit; the quantity (0.0001) said nothing.
+        self.assertIn("1 835 000.00 €", message)
+        self.assertNotIn("0.000 unités", message)
         self.classified.refresh_from_db()
         self.assertEqual(self.classified.stock_equivalent, D("1"))
         self.assertEqual(self.movements(), before)
@@ -100,7 +103,9 @@ class ConversionLimitsTests(TestCase):
         self.assert_pages_open()
 
     def test_a_factor_that_fits_is_still_taken(self):
-        self.edit("0,7")
+        response = self.edit("0,7")
+        # As typed, not as the column stores it (0.7000).
+        self.assertEqual(messages_of(response), ['"PROSECCO 75CL" mis à jour (facteur 0.7, Prosecco).'])
         self.assertEqual(self.movements(), [(self.prosecco.pk, D("0.7"), D("262.1429"))])
         self.assign("0.75")
         self.pending.refresh_from_db()

@@ -1376,7 +1376,9 @@ def edit_product_conversion(request, product_id):
     # assign_product) - there's nothing left for a human to choose here
     # beyond the conversion factor itself.
     update_product_conversion(product, unit=product.stock_type.unit, stock_equivalent=stock_equivalent)
-    messages.success(request, f'"{product.raw_name}" mis à jour (facteur {stock_equivalent}, {product.stock_type}).')
+    # 0.7, 24 - not the 0.7000, 24.0000 read_amount quantizes to.
+    factor = format(stock_equivalent.normalize(), "f")
+    messages.success(request, f'"{product.raw_name}" mis à jour (facteur {factor}, {product.stock_type}).')
     return redirect("inventory:stock_list")
 
 
