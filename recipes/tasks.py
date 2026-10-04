@@ -22,7 +22,7 @@ from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesI
 from .payments import by_method, oddities, record_payments
 from .pos.laddition_download import DownloadCancelled, download_sales_lines
 from .pos.laddition_xlsx import parse_sales_exports
-from .sales import recipe_lookup, record_sales
+from .sales import TILL_SOURCE, recipe_lookup, record_sales
 
 
 class _Cancelled(Exception):
@@ -298,7 +298,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         seen = sync_pos_products(export)
         job.append_log(f"{seen} produits de caisse vus.")
 
-        result = record_sales(export.entries, source="laddition")
+        result = record_sales(export.entries, source=TILL_SOURCE)
         job.recorded = result.recorded
         job.unmatched = len(set(result.unmatched))
         job.append_log(

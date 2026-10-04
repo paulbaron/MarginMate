@@ -790,8 +790,9 @@ class RecipeSale(models.Model):
     # sale typed by HAND is still refused below zero by ManualSaleForm:
     # nothing types a refund in, and a minus there is a slip.
     quantity = models.IntegerField()
-    # Free-form provenance ("manual", "csv", "api:lightspeed") - kept so a
-    # bad import can be found and re-run without guessing which rows it wrote.
+    # Two sources only: the till's (recipes.sales.TILL_SOURCE, « laddition »
+    # whatever the connector) and a sale typed by hand (MANUAL_SALE_SOURCE,
+    # the default) - recipes/sales.py says why. Stored, never shown.
     source = models.CharField(max_length=50, default="manual")
     recorded_at = models.DateTimeField(auto_now_add=True)
 

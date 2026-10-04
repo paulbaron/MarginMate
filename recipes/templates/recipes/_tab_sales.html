@@ -52,7 +52,7 @@ nothing saying the period had been dropped.
 <div class="card">
     <h3>Ajouter une vente à la main</h3>
     <p class="muted">
-        Pour les ventes que la caisse n'a pas enregistrées (origine « {{ manual_source }} ») : un import ne les
+        Pour les ventes que la caisse n'a pas enregistrées (origine « {{ manual_label }} ») : un import ne les
         écrase jamais. Ressaisir une recette le même jour met à jour sa quantité.
     </p>
     <form method="post" action="{% url 'recipes:sales_list' %}{% querystring %}" class="inline-form manual-sale">
@@ -94,7 +94,7 @@ nothing saying the period had been dropped.
         <tbody>
             {% for row in totals %}
             <tr>
-                <td>{{ row.source }}</td>
+                <td>{{ row.label }}</td>
                 <td class="num">{{ row.rows }}</td>
                 <td class="num">{{ row.units|default:0 }}</td>
             </tr>
@@ -224,7 +224,7 @@ nothing saying the period had been dropped.
                 <td data-sort="{{ sale.sold_on|date:'Y-m-d' }}">{{ sale.sold_on|date:"d/m/Y" }}</td>
                 <td><a href="{{ sale.recipe_url }}">{{ sale.recipe.name }}</a></td>
                 <td class="num">{{ sale.quantity }}</td>
-                <td class="muted">{{ sale.source }}</td>
+                <td class="muted">{{ sale.source_label }}</td>
                 <td class="num">
                     {% if sale.source == manual_source %}
                     <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}{% querystring %}"

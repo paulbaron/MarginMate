@@ -33,7 +33,7 @@ from recipes.payments import record_payments
 from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
-from recipes.sales import record_sales
+from recipes.sales import TILL_SOURCE, record_sales
 from recipes.tasks import payments_log, sync_pos_products
 
 
@@ -143,7 +143,7 @@ class Command(BaseCommand):
         seen = sync_pos_products(export)
         self.stdout.write(f"{seen} till product(s) seen.")
 
-        result = record_sales(export.entries, source="laddition")
+        result = record_sales(export.entries, source=TILL_SOURCE)
         self.stdout.write(
             self.style.SUCCESS(
                 f"Recorded {result.recorded} recipe/day totals ({result.created} new, {result.updated} updated)."

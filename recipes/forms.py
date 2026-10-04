@@ -19,11 +19,11 @@ from common import BlankRowTolerantModelForm
 from inventory.models import StockType
 
 from .models import PosProduct, Recipe, RecipeIngredient, RecipeSale, SaleDocument, SaleDocumentLine
-from .services import assert_no_cycle
 
-# Sales typed in by hand live under their own source so a till import, which
-# only ever rewrites its OWN rows, can never clobber them.
-MANUAL_SALE_SOURCE = "manual"
+# Re-exported: views, menu and « Données » (transfer/sections) import it from
+# here; its one definition is beside the till's (recipes/sales.py).
+from .sales import MANUAL_SALE_SOURCE
+from .services import assert_no_cycle
 
 
 class SelectWidget(forms.Select):

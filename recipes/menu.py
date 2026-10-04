@@ -35,6 +35,7 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
+from .sales import source_label, sources_named
 from .usage import article_uses
 
 
@@ -315,8 +316,12 @@ def _to_link() -> dict:
 
 def _sales_matching(query: str):
     """What a typed search means on the sales: a recipe, a date as it is
-    written (12/07/2026, 07/2026, 2026), or where the sale came from."""
+    written (12/07/2026, 07/2026, 2026), or where the sale came from - in
+    the page's words (« caisse », « main »), or as stored."""
     matches = Q(recipe__name__icontains=query) | Q(source__icontains=query)
+    named = sources_named(query)
+    if named:
+        matches |= Q(source__in=named)
     written = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", query)
     month = re.fullmatch(r"(\d{1,2})[/.-](\d{4})", query)
     if written:
@@ -385,7 +390,12 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
     recipe_url = url_for_each("recipes:recipe_detail")
     for sale in shown:
         sale.recipe_url = recipe_url(sale.recipe_id)
-    totals = recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
+        sale.source_label = source_label(sale.source)
+    # Each row keeps its stored `source` beside the words the page says.
+    totals = [
+        {**row, "label": source_label(row["source"])}
+        for row in recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
+    ]
     return {
         "form": form or ManualSaleForm(),
         "sales": shown,
@@ -400,6 +410,7 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
         "date_window_label": _window_label(window),
         "totals": totals,
         "manual_source": MANUAL_SALE_SOURCE,
+        "manual_label": source_label(MANUAL_SALE_SOURCE),
         "documents": documents,
         "documents_found": documents_found,
         "documents_hidden": max(documents_found - len(documents), 0),

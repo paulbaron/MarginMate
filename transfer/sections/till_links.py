@@ -25,6 +25,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 from recipes.models import PosProduct, Recipe, RecipeSale
+from recipes.sales import TILL_SOURCE
 from transfer import codec, registry
 from transfer.archive import ArchiveError
 from transfer.keys import fold
@@ -51,7 +52,8 @@ RELINK_WHY = (
     "le détacher de nouveau (Recettes & ventes › À lier, « Rattachés » ou « Ignorés »), ou importer sans "
     "« Liens recettes ↔ ventes »."
 )
-LADDITION = "laddition"
+#: The till's per-recipe sales, every connector's (`recipes.sales.TILL_SOURCE`).
+LADDITION = TILL_SOURCE
 
 
 class TillProducts:
