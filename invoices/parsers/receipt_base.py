@@ -504,7 +504,10 @@ def read_date(text: str, date_hint: date | None = None) -> date | None:
 def _figure_dates(text: str) -> list[tuple[int, int, int, int]]:
     """The dates printed in figures, in the order printed: (start, day,
     month, year). A two-digit year past next year's is no date."""
-    found = [(match.start(), *(int(part) for part in match.groups())) for match in DATE_RE.finditer(text)]
+    found = []
+    for match in DATE_RE.finditer(text):
+        day, month, year = (int(part) for part in match.groups())
+        found.append((match.start(), day, month, year))
     latest = timezone.localdate().year + 1
     for match in SHORT_DATE_RE.finditer(text):
         day, _separator, month, year = match.groups()
