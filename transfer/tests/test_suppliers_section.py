@@ -719,3 +719,113 @@ class ClearTests(TestCase):
         self.assertLessEqual({"consignes", "types_consignes"}, registry.closure({"fournisseurs"}, "clear"))
         run_clear({"fournisseurs", "types_consignes", "consignes"}, preview=False, closed=False)
         self.assertFalse(Supplier.objects.filter(pk=self.bakery.pk).exists())
+
+
+#: The AI reading's pseudo-supplier as invoices/0002 seeded it, which every
+#: archive written before 04/10/2026 carries.
+OLD_AI = {"code": "OTHER", "name": "Autre (analyse IA)", "parser_key": "LLM", "is_scrapable": False}
+
+
+class OlderArchiveTests(TestCase):
+    """An archive written before 04/10/2026 still carries « Autre (analyse
+    IA) » (OTHER, reader LLM), which invoices/0037 removed with the reading:
+    it is never created again as such. Left out when nothing the run imports
+    is filed under it; otherwise an ordinary supplier, its reader key empty -
+    so nothing of the archive is lost. Every other record imports as
+    before."""
+
+    def old_archive(self, keys, *, filed=False):
+        """Export `keys` from this database holding the pseudo-supplier as
+        0002 seeded it - a document filed under it when `filed` -, as an
+        older version did, then take both away, as 0037 does in the database
+        imported into."""
+        ai = Supplier.objects.create(**OLD_AI)
+        if filed:
+            make_invoice(supplier=ai, invoice_number="IA-ESSAI-1")
+        reader = export_archive(keys)
+        self.addCleanup(reader.close)
+        Invoice.objects.filter(supplier=ai).delete()
+        ai.delete()
+        records = {record["code"]: record for record in reader.section("fournisseurs").payload()["suppliers"]}
+        self.assertEqual(records["OTHER"]["parser_key"], "LLM")
+        return reader
+
+    def assert_no_ai_supplier(self):
+        self.assertFalse(Supplier.objects.filter(code="OTHER").exists())
+        self.assertFalse(Supplier.objects.filter(parser_key="LLM").exists())
+
+    def test_merged_with_nothing_filed_under_it_it_is_left_out_and_nothing_else_moves(self):
+        reader = self.old_archive({"fournisseurs"})
+        before = db_fingerprint()
+        report = import_archive(reader, MERGE).section("fournisseurs")
+        self.assert_no_ai_supplier()
+        self.assertEqual(db_fingerprint(), before)
+        self.assertIn(section.AI_LEFT_OUT.format(name="Autre (analyse IA)"), report.notes)
+        self.assertEqual(report.tallies["fournisseurs"].unchanged, Supplier.objects.count())
+        self.assertEqual((report.conflicts, report.skipped, report.kept), ([], [], []))
+
+    def test_replaced_with_nothing_filed_under_it_it_is_left_out_and_nothing_else_moves(self):
+        reader = self.old_archive({"fournisseurs"})
+        before = db_fingerprint()
+        report = import_archive(reader, REPLACE).section("fournisseurs")
+        self.assert_no_ai_supplier()
+        self.assertEqual(db_fingerprint(), before)
+        self.assertIn(section.AI_LEFT_OUT.format(name="Autre (analyse IA)"), report.notes)
+        self.assertFalse(report.changes)
+
+    def test_a_document_filed_under_it_brings_it_as_an_ordinary_supplier_merged(self):
+        reader = self.old_archive({"fournisseurs", "factures"}, filed=True)
+        run = import_archive(reader, MERGE)
+        self.assert_ordinary_with_its_document(run)
+
+    def test_a_document_filed_under_it_brings_it_as_an_ordinary_supplier_replaced(self):
+        reader = self.old_archive({"fournisseurs", "factures"}, filed=True)
+        run = import_archive(reader, REPLACE)
+        self.assert_ordinary_with_its_document(run)
+
+    def assert_ordinary_with_its_document(self, run):
+        report = run.section("fournisseurs")
+        kept = Supplier.objects.get(code="OTHER")
+        self.assertEqual((kept.name, kept.parser_key, kept.is_scrapable), ("Autre (analyse IA)", "", False))
+        self.assertEqual(Invoice.objects.get(invoice_number="IA-ESSAI-1").supplier, kept)
+        self.assertIn(section.AI_ORDINARY.format(name="Autre (analyse IA)"), report.notes)
+        self.assertEqual(report.tallies["fournisseurs"].created, 1)
+        self.assertFalse(Supplier.objects.filter(parser_key="LLM").exists())
+        self.assertEqual((report.conflicts, report.skipped), ([], []))
+
+    def test_into_an_espace_that_kept_it_it_stays_an_ordinary_supplier(self):
+        """Something named it here, so 0037 kept it with its reader key
+        emptied: the archive's key is no conflict, and is never written."""
+        reader = self.old_archive({"fournisseurs", "factures"}, filed=True)
+        kept = Supplier.objects.create(**{**OLD_AI, "parser_key": ""})
+        make_invoice(supplier=kept, invoice_number="ICI-1")
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                run = import_archive(reader, {"fournisseurs": strategy, "factures": MERGE})
+                report = run.section("fournisseurs")
+                self.assertEqual(Supplier.objects.get(pk=kept.pk).parser_key, "")
+                self.assertEqual(report.conflicts, [])
+                self.assertEqual(
+                    set(Invoice.objects.filter(supplier=kept).values_list("invoice_number", flat=True)),
+                    {"ICI-1", "IA-ESSAI-1"},
+                )
+
+    def test_its_documents_not_imported_in_this_run_leave_it_out(self):
+        """« Fournisseurs » alone: what the archive filed under it is not
+        brought, and a later import of the documents takes the suppliers
+        with them (they require « Fournisseurs »)."""
+        reader = self.old_archive({"fournisseurs", "factures"}, filed=True)
+        report = import_archive(reader, {"fournisseurs": MERGE}).section("fournisseurs")
+        self.assert_no_ai_supplier()
+        self.assertIn(section.AI_LEFT_OUT.format(name="Autre (analyse IA)"), report.notes)
+
+    def test_an_archive_written_since_carries_it_as_any_supplier(self):
+        """Kept as an ordinary supplier by 0037, it is exported as one: no
+        reader key, no note."""
+        payloads = {"fournisseurs": {"suppliers": [{**OLD_AI, "parser_key": ""}]}}
+        from transfer.archive import ArchiveReader
+
+        with ArchiveReader(forge(payloads)) as reader:
+            report = import_archive(reader, MERGE).section("fournisseurs")
+        self.assertEqual(Supplier.objects.get(code="OTHER").parser_key, "")
+        self.assertFalse([note for note in report.notes if "analyse IA a été retirée" in note])

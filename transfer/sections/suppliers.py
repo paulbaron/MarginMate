@@ -18,6 +18,12 @@ Two things are never an import's or a clear's to touch:
 
 An import writes the archive's state; it is not an act in a supplier's
 history: no `SupplierChange` is recorded (§6.6).
+
+An archive written before 04/10/2026 carries the AI reading's pseudo-supplier
+(`RETIRED_AI_CODE`, `RETIRED_AI_READER`), which invoices/0037 removed with the
+reading: it is never created again as such. Nothing this run imports filed
+under it, it is left out, said; something is, it comes as an ordinary
+supplier, its reader key emptied (`_retired_ai`).
 """
 
 from __future__ import annotations
@@ -84,6 +90,15 @@ LABELS = {
 #: articles, which is what the application calls a StockType.
 PRICES = "prix connus"
 
+#: The AI reading's pseudo-supplier as invoices/0002 seeded it - its code
+#: and reader key -, still in an archive written before 04/10/2026.
+RETIRED_AI_CODE, RETIRED_AI_READER = "OTHER", "LLM"
+AI_LEFT_OUT = "« {name} » : l'analyse IA a été retirée de l'application — fournisseur non repris"
+AI_ORDINARY = (
+    "« {name} » : l'analyse IA a été retirée de l'application — repris comme un fournisseur ordinaire, "
+    "sans lecteur (des données de l'import y sont rangées)"
+)
+
 KEPT_BOUND = "lecteur propre / caisse réglée dans l'application"
 CHARGES_KEPT = (
     "« {name} » : passer en charges (ou en revenir) se fait depuis sa fiche (« changer… »), qui relit ses documents"
@@ -125,6 +140,27 @@ def code_bound(supplier) -> bool:
     from invoices.receipts import has_own_reader
 
     return ticket_parser_for(supplier.code) is not None or has_own_reader(supplier)
+
+
+def _retired_ai(record: dict) -> bool:
+    """Whether `record` is the AI reading's pseudo-supplier of an archive
+    written before 04/10/2026."""
+    return record.get("code") == RETIRED_AI_CODE and record.get("parser_key") == RETIRED_AI_READER
+
+
+def _filed_under_by_this_run(ctx, code: str) -> bool:
+    """Whether a section this run imports files something under `code` - it
+    names it among its `supplier_names`, the table every section filing a
+    record under a supplier writes. Every such section requires
+    « Fournisseurs », so one not imported here brings nothing that would
+    need it."""
+    for key in ctx.strategies:
+        if key == KEY:
+            continue
+        names = ctx.reader.section(key).payload().get("supplier_names")
+        if isinstance(names, dict) and code in names:
+            return True
+    return False
 
 
 def known_parser(key: str) -> bool:
@@ -303,6 +339,14 @@ class SuppliersSection(Section):
                 if code not in by_code:
                     block(ctx, code)
                 continue
+            if _retired_ai(record):
+                if not _filed_under_by_this_run(ctx, code):
+                    report.note(AI_LEFT_OUT.format(name=name))
+                    if code not in by_code:
+                        block(ctx, code)
+                    continue
+                report.note(AI_ORDINARY.format(name=name))
+                record = {**record, "parser_key": ""}
             supplier = by_code.get(code)
             if supplier is not None:
                 claimed[supplier.pk] = code
