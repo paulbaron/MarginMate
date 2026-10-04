@@ -12,12 +12,13 @@ report) is given with the upload (`day`).
 
 Pure: no database is written, nothing is read from it but the payments'
 vocabulary (`PosDailyPayment`, imported lazily). It needs Django's settings
-all the same: `common.search_key` folds a title or a spelling, and the day a
-file may reach is today's (`timezone.localdate`). `check_format` compiles a format - any object carrying its fields: a row, a
-form's data, a test's namespace - or says what is wrong with it
-(FormatError: a field and a French sentence); `read` reads a file with it
-into the very `ParsedExport` L'Addition's reader returns, so the one writer
-(recipes.tasks.store_reading) stores both.
+all the same: `common.search_key` folds a title or a spelling, and the last
+day a file may hold is tomorrow (`timezone.localdate`). `check_format`
+compiles a format - any object carrying its fields: a row, a form's data, a
+test's namespace - or says what is wrong with it (FormatError: a field and a
+French sentence); `read` reads a file with it into the very `ParsedExport`
+L'Addition's reader returns, so the one writer (recipes.tasks.store_reading)
+stores both.
 
 The rules, each a way a till's file could be silently wrong money:
 
