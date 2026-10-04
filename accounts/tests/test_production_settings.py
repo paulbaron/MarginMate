@@ -441,6 +441,15 @@ class SecretKeyRulesTests(SimpleTestCase):
         ):
             self.assertIn(f"\n{name}\n", example)
 
+    def test_the_example_file_leaves_the_fuzzy_threshold_to_the_settings(self):
+        """A .env copied from the example ran the product matcher at 92, the
+        value config/settings.py raised to 94 because a longer « COCA COLA
+        … » line merged silently into its « ZERO »: a value in .env wins
+        over the measured default."""
+        example = (Path(settings.BASE_DIR) / ".env.example").read_text(encoding="utf-8")
+        set_lines = [line for line in example.splitlines() if line.startswith("PRODUCT_FUZZY_MATCH_THRESHOLD=")]
+        self.assertEqual(set_lines, [])
+
 
 class ServerChecksTests(TestCase):
     """The checks called in this process, settings overridden. A TestCase:
