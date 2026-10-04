@@ -31,6 +31,19 @@ preset's order (positions are numbered across both questions, each ordered
 on its own). Each row goes through its model's `full_clean`, the format's
 check and the rules' pattern guard included. Installing twice writes once.
 
+`set_up_new_espace()` is a step of `accounts.provisioning.
+HOSTED_ESPACE_STEPS`, run once in a new espace that is not the owner's: it
+gets the OFX and CAMT.053 presets AHEAD of the owner's bank's format - the
+OFX one becomes its default -, the BNP format and its eight rules kept (a
+correct preset for a bar banking there); their rules come after the BNP
+ones, which read a payee the codes do not. The owner's espace, the
+`_template` and every database migrated alone (the tests') keep the seeds
+alone. Their names are durable (`NEW_ESPACE_FORMAT_NAMES`,
+`NEW_ESPACE_RULE_NAMES`): espaces already provisioned hold them, and
+`transfer.views.holds_only_seeds` knows a new espace's « Règles de la
+banque » by them. A preset failing its own checks would fail the signup,
+loudly (its ValidationError, the files removed): the tests run every preset
+through them.
 """
 
 from __future__ import annotations
@@ -129,6 +142,14 @@ BNP_CSV = _bnp()
 PRESETS = (OFX, CAMT053, BNP_CSV)
 BY_KEY = {preset.key: preset for preset in PRESETS}
 
+#: What a new espace that is not the owner's is given ahead of the owner's
+#: bank (`set_up_new_espace`). Never rename them: espaces already
+#: provisioned hold them, and `transfer.views.holds_only_seeds` knows a new
+#: espace by them.
+NEW_ESPACE_PRESETS = (OFX, CAMT053)
+NEW_ESPACE_FORMAT_NAMES = tuple(preset.format_name for preset in NEW_ESPACE_PRESETS)
+NEW_ESPACE_RULE_NAMES = tuple(name for preset in NEW_ESPACE_PRESETS for name, *_rest in preset.rules)
+
 
 @dataclass
 class Installed:
@@ -180,6 +201,26 @@ def install(preset: Preset) -> Installed:
         done.rules.append(made)
         position += 1
     return done
+
+
+@transaction.atomic
+def set_up_new_espace() -> None:
+    """In a new espace that is not the owner's (`accounts.provisioning.
+    HOSTED_ESPACE_STEPS`, bound to it): the OFX and CAMT.053 presets, their
+    formats first in that order - an import reads OFX when nobody chooses -,
+    every other format after them in its own order. Nothing is deleted."""
+    for preset in NEW_ESPACE_PRESETS:
+        install(preset)
+    ahead = [recognition.name_key(name) for name in NEW_ESPACE_FORMAT_NAMES]
+    formats = list(StatementFormat.objects.order_by("position", "name"))
+    first = sorted(
+        (fmt for fmt in formats if recognition.name_key(fmt.name) in ahead),
+        key=lambda fmt: ahead.index(recognition.name_key(fmt.name)),
+    )
+    ordered = first + [fmt for fmt in formats if fmt not in first]
+    for position, fmt in enumerate(ordered, start=1):
+        fmt.position = position
+    StatementFormat.objects.bulk_update(ordered, ["position"])
 
 
 def _after(model) -> int:

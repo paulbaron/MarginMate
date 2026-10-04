@@ -12,9 +12,10 @@ from django.db.migrations.recorder import MigrationRecorder
 
 from accounts import paths, provisioning
 from accounts.models import Tenant
-from accounts.tenancy import bound_tenant
+from accounts.tenancy import _bound_database, bound_tenant
 from accounts.tests.support import TenancyTestCase
-from bank.models import StatementFormat
+from bank import recognition, reconcile
+from bank.models import OperationRule, StatementFormat
 from invoices.models import InvoiceType, Supplier
 
 LEAF = ("invoices", "0035_supplier_typed_identifiers")
@@ -49,9 +50,16 @@ class CreateTenantTests(TenancyTestCase):
             self.assertEqual(pending_migrations(), [])
             # What the seed migrations put in every database is there - the
             # format a statement is read with included: without one, an
-            # espace's first import would be refused.
+            # espace's first import would be refused. A hosted espace reads
+            # the standard files first (bank.presets.set_up_new_espace), the
+            # owner's bank's CSV kept after them.
             self.assertTrue(Supplier.objects.filter(code="METRO").exists())
-            self.assertTrue(StatementFormat.objects.filter(name="BNP Paribas (CSV)").exists())
+            self.assertEqual(
+                list(StatementFormat.objects.order_by("position").values_list("name", "file_type")),
+                [("Relevé OFX", "ofx"), ("Relevé CAMT.053", "camt053"), ("BNP Paribas (CSV)", "csv")],
+            )
+            self.assertEqual(reconcile.default_format().name, "Relevé OFX")
+            self.assertEqual(recognition.load().invalid, {})
 
     def test_two_tenants_never_share_a_folder(self):
         one, other = provisioning.create_tenant("Bar Un"), provisioning.create_tenant("Bar Deux")
@@ -70,6 +78,25 @@ class CreateTenantTests(TenancyTestCase):
         with bound_tenant(tenant):
             self.assertTrue(Supplier.objects.get(code="METRO").is_scrapable)
             self.assertTrue(InvoiceType.objects.filter(source_kind="EMAIL", is_active=True).exists())
+            # The owner's bank alone, as every database migrated alone.
+            self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), ["BNP Paribas (CSV)"])
+
+    def test_the_template_and_this_database_keep_the_seeds_alone(self):
+        """The presets are a hosted espace's own step, never a migration's:
+        the _template every espace is copied from, and the test database,
+        hold the owner's bank's format alone."""
+        provisioning.create_tenant("Bar Nouveau")
+        with _bound_database(paths.template_database()):
+            self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), ["BNP Paribas (CSV)"])
+            self.assertFalse(OperationRule.objects.filter(name__contains="OFX").exists())
+        self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), ["BNP Paribas (CSV)"])
+
+    def test_a_failing_bank_step_leaves_nothing_behind(self):
+        with mock.patch("bank.presets.set_up_new_espace", side_effect=RuntimeError("panne d'essai")):
+            with self.assertRaisesMessage(RuntimeError, "panne d'essai"):
+                provisioning.create_tenant("Bar Raté")
+        self.assertFalse(Tenant.objects.exists())
+        self.assertEqual([p.name for p in paths.tenants_root().iterdir()], [paths.TEMPLATE_DIR])
 
     def test_a_failure_leaves_nothing_behind(self):
         for step in ("switch_off_server_integrations", "_migrate_bound", "copy_database"):

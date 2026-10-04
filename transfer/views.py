@@ -599,6 +599,24 @@ def _migration(app: str, name: str):
     return importlib.import_module(f"{app}.migrations.{name}")
 
 
+def _holds_only_bank_seeds() -> bool:
+    """« Règles de la banque » holds nothing but what a new espace starts
+    with: no ignore rule (none is installed), no format and no recognition
+    rule but those of bank/0007 and bank/0006 (their literals) and those a
+    new espace that is not the owner's is given (`bank.presets.
+    NEW_ESPACE_FORMAT_NAMES`, `NEW_ESPACE_RULE_NAMES`, frozen)."""
+    from bank import presets
+    from bank.models import IgnoreRule, OperationRule, StatementFormat
+
+    rules = [rule[1] for rule in _migration("bank", "0006_operation_rules").RULES]
+    formats = [_migration("bank", "0007_statement_formats").NAME]
+    return (
+        not IgnoreRule.objects.exists()
+        and not OperationRule.objects.exclude(name__in=[*rules, *presets.NEW_ESPACE_RULE_NAMES]).exists()
+        and not StatementFormat.objects.exclude(name__in=[*formats, *presets.NEW_ESPACE_FORMAT_NAMES]).exists()
+    )
+
+
 def holds_only_seeds(key: str) -> bool:
     """Whether this database holds nothing of section `key` but the rows
     the migrations installed - by the names they gave them, edited or not:
@@ -617,15 +635,7 @@ def holds_only_seeds(key: str) -> bool:
         code, name = SEEDED_SOURCE
         return not InvoiceType.objects.exclude(supplier__code=code, name=name).exists()
     if key == "regles_banque":
-        from bank.models import IgnoreRule, OperationRule, StatementFormat
-
-        rules = [rule[1] for rule in _migration("bank", "0006_operation_rules").RULES]
-        layout = _migration("bank", "0007_statement_formats").NAME
-        return (
-            not IgnoreRule.objects.exists()
-            and not OperationRule.objects.exclude(name__in=rules).exists()
-            and not StatementFormat.objects.exclude(name=layout).exists()
-        )
+        return _holds_only_bank_seeds()
     if key == "types_consignes":
         from returnables.models import ReturnableType, SlipFormat
 

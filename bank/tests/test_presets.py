@@ -21,6 +21,8 @@ from django.db import IntegrityError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
+from accounts.tenancy import bound_tenant
+from accounts.tests.support import TwoTenantsTestCase
 from bank import presets, recognition, reconcile, statements, views
 from bank.models import BankTransaction, OperationRule, StatementFormat
 from bank.tests import camt_files, ofx_files
@@ -28,6 +30,9 @@ from bank.tests.support import SEEDED_NAMES, pause_seeded_rules
 from bank.tests.test_recognition_views import text_of
 from staff.tests.page_forms import as_post, form_posting_to
 from tests.test_views_smoke import assertNoUnrenderedTemplateSyntax
+from transfer import views as transfer_views
+from transfer.sections.base import Strategy
+from transfer.tests.support import export_archive, import_archive
 
 SEEDED_FORMAT = importlib.import_module("bank.migrations.0007_statement_formats")
 SEEDED_RULES = importlib.import_module("bank.migrations.0006_operation_rules")
@@ -269,3 +274,73 @@ class PageTests(TestCase):
         response = self.client.post(self.url, data, follow=True)
         self.assertEqual(self.messages_of(response), ["Format « Relevé OFX maison » ajouté."])
         self.assertEqual(StatementFormat.objects.get(name="Relevé OFX maison").date_column, None)
+
+
+class NewEspaceTests(TwoTenantsTestCase):
+    """A new espace that is not the owner's (`accounts.provisioning.
+    HOSTED_ESPACE_STEPS`): the OFX and CAMT.053 presets ahead of the owner's
+    bank's format, which is kept with its rules; the owner's espace keeps the
+    seeds alone; « Données » still knows the new espace's « Règles de la
+    banque » for nothing but its starting rows."""
+
+    owner_a = True
+
+    def test_a_hosted_espace_reads_ofx_first_and_keeps_the_owner_s_bank(self):
+        with bound_tenant(self.bar_b):
+            self.assertEqual(
+                list(StatementFormat.objects.order_by("position", "name").values_list("name", flat=True)),
+                [*presets.NEW_ESPACE_FORMAT_NAMES, SEEDED_FORMAT.NAME],
+            )
+            self.assertEqual(reconcile.default_format().name, "Relevé OFX")
+            names = list(OperationRule.objects.order_by("position", "name").values_list("name", flat=True))
+            self.assertEqual(names, [*SEEDED_NAMES, *presets.NEW_ESPACE_RULE_NAMES])
+            self.assertTrue(OperationRule.objects.filter(is_active=True).count() == len(names))
+            self.assertEqual(recognition.load().invalid, {})
+            self.assertTrue(transfer_views.holds_only_seeds("regles_banque"))
+            # A person's own rule, and the part is no longer only the seeds.
+            OperationRule.objects.create(
+                name="Ma règle", meaning="debit", searched="label", pattern="^MOI", position=99
+            )
+            self.assertFalse(transfer_views.holds_only_seeds("regles_banque"))
+
+    def test_the_owner_s_espace_keeps_the_seeds_alone(self):
+        with bound_tenant(self.bar_a):
+            self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), [SEEDED_FORMAT.NAME])
+            self.assertEqual(
+                list(OperationRule.objects.order_by("position").values_list("name", flat=True)), list(SEEDED_NAMES)
+            )
+            self.assertTrue(transfer_views.holds_only_seeds("regles_banque"))
+
+    def test_the_names_a_new_espace_is_known_by_are_frozen(self):
+        """`transfer.views.holds_only_seeds` and every espace already
+        provisioned know them by these exact names."""
+        self.assertEqual(presets.NEW_ESPACE_FORMAT_NAMES, ("Relevé OFX", "Relevé CAMT.053"))
+        self.assertEqual(
+            presets.NEW_ESPACE_RULE_NAMES,
+            (
+                "Carte (OFX : POS)",
+                "Prélèvement (OFX : DIRECTDEBIT)",
+                "Virement (OFX : XFER, DIRECTDEP)",
+                "Carte (ISO : PMNT/CCRD/POSD)",
+                "Prélèvement (ISO : PMNT/RDDT)",
+                "Virement émis (ISO : PMNT/ICDT)",
+                "Virement reçu (ISO : PMNT/RCDT)",
+                "Dépôt d'espèces (ISO : PMNT/CNTR/CDPT)",
+                "Remise de chèques (ISO : PMNT/RCHQ)",
+            ),
+        )
+
+    def test_the_owner_s_bank_rules_replaced_into_a_new_espace_are_exactly_his(self):
+        """« Configuration seule » of the owner's bank, imported with
+        « Remplacer » into a hosted espace: exactly the owner's format and
+        rules - the presets the archive does not name pruned."""
+        with bound_tenant(self.bar_a):
+            reader = export_archive({"regles_banque"})
+        self.addCleanup(reader.close)
+        with bound_tenant(self.bar_b):
+            import_archive(reader, {"regles_banque": Strategy.REPLACE})
+            self.assertEqual(list(StatementFormat.objects.values_list("name", flat=True)), [SEEDED_FORMAT.NAME])
+            self.assertEqual(
+                list(OperationRule.objects.order_by("position").values_list("name", flat=True)), list(SEEDED_NAMES)
+            )
+            self.assertEqual(reconcile.default_format().name, SEEDED_FORMAT.NAME)

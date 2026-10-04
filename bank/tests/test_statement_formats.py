@@ -721,16 +721,22 @@ class SeedTests(TestCase):
 
 class TenantTests(TwoTenantsTestCase):
     """Real espaces (accounts.provisioning): each is copied from the
-    migrated _template, so each can import from its first day."""
+    migrated _template, so each can import from its first day - a hosted one
+    reading the standard files first (bank.presets.set_up_new_espace), the
+    owner's bank's format kept, as seeded, after them."""
 
-    def test_every_new_espace_is_given_the_owners_bank_format(self):
+    def test_every_new_espace_is_given_the_owners_bank_format_after_the_standard_ones(self):
         for bar in (self.bar_a, self.bar_b):
             with self.subTest(bar=bar.name), bound_tenant(bar):
                 self.assertEqual(
-                    list(StatementFormat.objects.values_list(*FIELDS)),
-                    [(SEEDED_NAME, 1, "auto", ";", "dd/mm/yyyy", ",", 1, "4", 6, None, None, 5, 2, r"\*{2,}[0-9]+")],
+                    list(StatementFormat.objects.values_list("name", "position", "file_type")),
+                    [("Relevé OFX", 1, "ofx"), ("Relevé CAMT.053", 2, "camt053"), (SEEDED_NAME, 3, "csv")],
                 )
-                self.assertEqual(reconcile.default_format().name, SEEDED_NAME)
+                self.assertEqual(
+                    list(StatementFormat.objects.filter(name=SEEDED_NAME).values_list(*FIELDS)),
+                    [(SEEDED_NAME, 3, "auto", ";", "dd/mm/yyyy", ",", 1, "4", 6, None, None, 5, 2, r"\*{2,}[0-9]+")],
+                )
+                self.assertEqual(reconcile.default_format().name, "Relevé OFX")
 
 
 # -- The check ------------------------------------------------------------------------------------------------------
