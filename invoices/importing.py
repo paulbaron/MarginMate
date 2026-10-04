@@ -52,12 +52,16 @@ def import_parsed_invoice(
         and Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists()
     ):
         raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
-    # Refused before anything is written, the source file included
-    # (_fitting says why).
-    for parsed_line in parsed.lines:
-        _line_values(parsed_line)
     if supplier.expenses_only:
         parsed.printed_total_ttc = charge_reading(parsed)[0]
+    # A supplier of charges has no products: its document is filed as the
+    # charge items it names, or as one line per VAT rate, on products that
+    # carry its charges and reach no stock page.
+    lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
+    # The lines written, refused before anything is - the source file
+    # included (_fitting says why).
+    for parsed_line in lines:
+        _line_values(parsed_line)
 
     invoice = Invoice(
         supplier=supplier,
@@ -75,10 +79,6 @@ def import_parsed_invoice(
             invoice.source_file.save(name, File(fh), save=False)
     invoice.save()
 
-    # A supplier of charges has no products: its document is filed as the
-    # charge items it names, or as one line per VAT rate, on products that
-    # carry its charges and reach no stock page.
-    lines = expense_lines(supplier, parsed) if supplier.expenses_only else parsed.lines
     needs_review = False
     if supplier.expenses_only:
         for parsed_line in lines:

@@ -389,6 +389,35 @@ class FiguresWiderThanTheirColumnTests(TestCase):
             replace_invoice_lines(invoice, [wide()])
         self.assertEqual(invoice.lines.count(), 0)
 
+    def test_a_charge_too_wide_leaves_no_file_behind(self):
+        """A supplier of charges is filed as its own reading (expense_lines),
+        not as the lines read: those are the lines checked before the source
+        file is copied. Checked only as they were written, the refusal came
+        after the copy, and the rolled-back invoice left its file in media."""
+        import shutil
+        import tempfile
+
+        from accounts import paths
+        from invoices.importing import LineTooWideError, import_parsed_invoice
+        from invoices.parsers.base import ParsedInvoice
+
+        rent = make_supplier(code="LOYER", name="Loyer", parser_key="", expenses_only=True)
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        source = os.path.join(folder, "loyer-trop-large.pdf")
+        with open(source, "wb") as handle:
+            handle.write(b"%PDF-1.4 loyer")
+        parsed = ParsedInvoice(
+            supplier_code=rent.code,
+            invoice_number="",
+            invoice_date=date(2026, 9, 1),
+            printed_total_ttc=Decimal("6000000.00"),
+        )
+        with self.assertRaisesMessage(LineTooWideError, "le prix unitaire"):
+            import_parsed_invoice(rent, parsed, source)
+        stored = [name for _root, _dirs, names in os.walk(paths.media_root()) for name in names]
+        self.assertNotIn("loyer-trop-large.pdf", stored)
+
 
 class ManualInvoicePostedTwiceTests(TestCase):
     """Most paper invoices typed in have no number, and the number was the
