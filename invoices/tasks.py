@@ -173,9 +173,36 @@ def _import_downloaded_file(
     pdf_path: str,
     date_hint: date | None = None,
     parser_key_override: str | None = None,
+    chosen_because: str | None = None,
+    by_type: str | None = None,
 ) -> bool:
+    """A file Metro or a mailbox source naming its reader fetched, read by
+    that reader - but refused when this very file is in already (its digest)
+    and, an e-invoice, read from its XML, as receipts.import_document does
+    every other way in: through the reader alone, a Factur-X's stated
+    figures were thrown away, and a document the reader finds no number on
+    was filed again at every gather."""
+    from . import einvoice
+    from .receipts import file_sha256, import_einvoice
+
     try:
-        parse_and_import(pdf_path, supplier, date_hint=date_hint, parser_key_override=parser_key_override)
+        digest = file_sha256(pdf_path)
+        if Invoice.objects.filter(source_sha256=digest).exists():
+            raise DuplicateInvoiceError(pdf_path)
+        xml = einvoice.document_xml(pdf_path)
+        if xml is not None:
+            import_einvoice(
+                pdf_path,
+                xml,
+                supplier=supplier,
+                date_hint=date_hint,
+                chosen_because=chosen_because,
+                by_type=by_type,
+            )
+            return True
+        invoice = parse_and_import(pdf_path, supplier, date_hint=date_hint, parser_key_override=parser_key_override)
+        invoice.source_sha256 = digest
+        invoice.save(update_fields=["source_sha256"])
         return True
     except DuplicateInvoiceError:
         job.append_log(f"Skipped {pdf_path} (already imported)")
@@ -383,6 +410,8 @@ def _gather_email(
                 pdf_path,
                 date_hint=email_date,
                 parser_key_override=invoice_type.parser_key,
+                chosen_because=f"Reçue par e-mail (« {invoice_type.name} »).",
+                by_type=invoice_type.name,
             )
         else:
             brought_in = _import_document_file(
@@ -528,7 +557,7 @@ def _gather_metro(job: ScrapeJob, supplier: Supplier, start: date, end: date, me
     job.update_progress("METRO", found=len(files))
     imported = 0
     for pdf_path in files:
-        if _import_downloaded_file(job, supplier, pdf_path):
+        if _import_downloaded_file(job, supplier, pdf_path, chosen_because=f"Téléchargée par « {supplier.name} »."):
             imported += 1
             job.update_progress("METRO", imported=imported)
     if error:
