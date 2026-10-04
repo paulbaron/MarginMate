@@ -485,6 +485,21 @@ class ApproveSureSuggestionsTests(TestCase):
         self.assertIn("facteur de conversion hors limites", self.message(response))
         self.assertEqual(self.client.get(reverse("inventory:stock_list")).status_code, 200)
 
+    def test_a_suggested_factor_finer_than_its_column_is_rounded_to_it(self):
+        """0.25 g of a spice is 0.00025 kg: wider than stock_equivalent's four
+        decimals, which « Approuver » refuses - and the suggestion made again
+        was the same, so the product could never be approved."""
+        spice = make_stock_type(name="Safran", unit=UnitChoices.KILOGRAM, category="Epicerie")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SAFRAN 1G", stock_type=spice, stock_equivalent="0.001"
+        )
+        bought(neighbour)
+        product = make_product(supplier=self.supplier, raw_name="SAFRAN 0,25G")
+        bought(product)
+        made = suggest_for_product(product)
+        self.assertEqual(made["stock_type_name"], "Safran")
+        self.assertEqual(made["stock_equivalent"], "0.0003")
+
     def test_approving_everything_still_takes_every_confidence(self):
         products = [
             self.pending("RHUM A 70CL", self.rum, "high"),

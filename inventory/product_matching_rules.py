@@ -196,9 +196,11 @@ def _resolve_stock_type_match(suggestion: dict) -> None:
     # Pre-format so the review form's editable input doesn't show something
     # like "0.7000000000000001", and so a Decimal never ends up in a dict
     # that's about to be saved into a JSONField (json.dumps doesn't know how
-    # to serialize one).
+    # to serialize one). Four decimals at most, what stock_equivalent holds:
+    # « SAFRAN 0,25G » is 0.00025 kg, which « Approuver » refuses, and the
+    # suggestion made again was the same.
     try:
-        suggestion["stock_equivalent"] = f"{float(suggestion.get('stock_equivalent', 1)):g}"
+        suggestion["stock_equivalent"] = f"{round(float(suggestion.get('stock_equivalent', 1)), 4):g}"
     except (TypeError, ValueError):
         suggestion["stock_equivalent"] = "1"
 
