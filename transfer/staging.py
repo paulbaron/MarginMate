@@ -205,8 +205,11 @@ def stage_upload(upload) -> Stage:
 def _stage_legacy(token: str, path: Path, raw: Path) -> Stage:
     if raw.stat().st_size > archive.MAX_JSON_BYTES:
         raise ArchiveError(archive.NOT_ZIP_NOR_JSON)
+    data = raw.read_bytes()
+    if archive.json_values_bound(data) > archive.MAX_JSON_VALUES:
+        raise ArchiveError(archive.NOT_ZIP_NOR_JSON)
     try:
-        text = raw.read_bytes().decode("utf-8-sig")
+        text = data.decode("utf-8-sig")
         payload = json.loads(text, parse_constant=archive._refuse_constant)
     except ValueError:
         raise ArchiveError(archive.NOT_ZIP_NOR_JSON) from None

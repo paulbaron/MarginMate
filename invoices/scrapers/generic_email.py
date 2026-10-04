@@ -375,7 +375,9 @@ def find_matching_emails(
 
 UNSAFE_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 #: Windows' device names: « NUL.pdf » or « COM1.pdf » is no file there.
-RESERVED_NAMES = frozenset({"con", "prn", "aux", "nul"} | {f"{kind}{n}" for kind in ("com", "lpt") for n in range(1, 10)})
+RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"} | {f"{kind}{n}" for kind in ("com", "lpt") for n in range(1, 10)}
+)
 #: A name's length on disk, its extension included: a sender's 300-character
 #: name passed Windows' limit and failed the whole source (audit 04/10/2026).
 MAX_NAME_LENGTH = 120

@@ -374,6 +374,23 @@ class RefusalTests(SimpleTestCase):
         with mock.patch.object(archive, "MAX_JSON_BYTES", 1000):
             self.assertRefused(path, "Archive refusée : fournisseurs.json est trop gros.")
 
+    def test_a_section_file_of_too_many_values(self):
+        """Few bytes, millions of lists once parsed: refused while it is read,
+        before json.loads makes them (audit 04/10/2026)."""
+        path = write_zip(
+            {"fournisseurs.json": '{"suppliers": [' + ",".join(["[]"] * 3000) + "]}"}, manifest_for(["fournisseurs"])
+        )
+        with mock.patch.object(archive, "MAX_JSON_VALUES", 1000), ArchiveReader(path) as reader:
+            with self.assertRaises(ArchiveError) as caught:
+                reader.section("fournisseurs").payload()
+        self.assertEqual(str(caught.exception), "Archive refusée : fournisseurs.json est trop gros.")
+
+    def test_a_manifest_too_big(self):
+        manifest = manifest_for(["fournisseurs"])
+        path = write_zip({"fournisseurs.json": "{}"}, {**manifest, "padding": "x" * 5000})
+        with mock.patch.object(archive, "MAX_MANIFEST_BYTES", 1000):
+            self.assertRefused(path, "Archive refusée : manifest.json est trop gros.")
+
     def test_a_declared_section_missing(self):
         self.assertRefused(write_zip({}, manifest_for(["fournisseurs"])), "Archive refusée : fournisseurs.json manque.")
 
