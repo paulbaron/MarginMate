@@ -271,6 +271,18 @@ class ChooseShopInBatchTests(TestCase):
                     messages_of(response),
                 )
 
+    def test_a_new_shop_made_for_a_slip_put_in_consignes_is_not_told_to_be_chosen(self):
+        """The file went to Consignes on purpose: there is nothing left to
+        name a shop for, and « choisissez-la dans la liste » said otherwise."""
+        name = "Transports Exemple"
+        entry = {"name": "bon.pdf", "status": "duplicate", "message": "Bon de consignes : rangé.", "consignes": True}
+        with mock.patch("invoices.receipt_batches.import_with_shop", return_value=entry):
+            response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+        self.assertRedirects(response, self.page)
+        said = messages_of(response)
+        self.assertIn(f"Enseigne {name} créée, sans ce fichier.", said)
+        self.assertFalse(any("choisissez" in message for message in said), said)
+
     def test_a_file_that_blows_up_while_being_described_is_said_on_the_page(self):
         """`_record_import` inside the try here too, as in `_read_file`: a
         figure the database cannot read back raised out of the `else:` and

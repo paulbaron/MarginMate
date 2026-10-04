@@ -22,7 +22,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from accounts import paths
-from invoices.importing import DuplicateInvoiceError
+from invoices.importing import DuplicateInvoiceError, RoutedToReturnablesError
 from invoices.models import Invoice, Supplier
 from invoices.parsers.base import ParsedInvoice, ParsedLine
 from invoices.receipt_batches import import_with_shop, run_receipt_batch, stage_batch
@@ -138,6 +138,22 @@ class UploadTests(TestCase):
                 said = [str(message) for message in get_messages(response.wsgi_request)]
                 self.assertTrue(Supplier.objects.filter(name=name).exists())
                 self.assertTrue(any(f"Fournisseur {name} créé" in message for message in said), said)
+
+    def test_a_new_supplier_made_for_a_slip_is_not_told_to_be_chosen(self):
+        """A driver's slip is no invoice: whether it went to Consignes or
+        must be dropped there, filing it again under that supplier is refused
+        the same way. « choisissez-le dans la liste » sent the operator back
+        to a retry with nothing to retry."""
+        slips = {"rangé": object(), "à déposer": None}
+        for label, slip in slips.items():
+            with self.subTest(slip=label):
+                name = f"Transports {label}"
+                refusal = RoutedToReturnablesError(f"Bon de consignes : {label}.", slip=slip)
+                with mock.patch("invoices.receipts.import_document", side_effect=refusal):
+                    response = self.post(supplier="new", new_name=name)
+                said = [str(message) for message in get_messages(response.wsgi_request)]
+                self.assertIn(f"Fournisseur {name} créé, sans ce document.", said)
+                self.assertFalse(any("choisissez" in message for message in said), said)
 
     def test_the_same_file_twice_is_said_so(self):
         supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")

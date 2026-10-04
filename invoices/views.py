@@ -69,6 +69,7 @@ from .importing import (
     DuplicateInvoiceError,
     InvoiceLinesInUseError,
     LineTooWideError,
+    RoutedToReturnablesError,
     corrected_line,
     import_parsed_invoice,
     parse_and_import,
@@ -169,6 +170,7 @@ def upload_invoice(request):
     uploaded = form.cleaned_data["source_file"]
     suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    is_slip = False
     try:
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
@@ -205,6 +207,7 @@ def upload_invoice(request):
                 OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
+        is_slip = isinstance(exc, RoutedToReturnablesError)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
         # The app's refusals in their words, anything else by kind: never the
         # exception's own text, which can name the server's files (audit
@@ -229,7 +232,10 @@ def upload_invoice(request):
         # Made before the file was read, it stays: an empty supplier is a
         # legitimate one (deleted from its page if need be), but not a
         # silent one - the retry under the same name says « existe déjà ».
-        messages.info(request, f"Fournisseur {supplier.name} créé, sans ce document : choisissez-le dans la liste.")
+        # A slip is no invoice to retry under it: its sentence says where it
+        # went, or where to drop it.
+        then = "" if is_slip else " : choisissez-le dans la liste"
+        messages.info(request, f"Fournisseur {supplier.name} créé, sans ce document{then}.")
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
 
 
@@ -961,7 +967,7 @@ def receipt_batch_assign(request, pk, index):
         return redirect("invoices:receipt_batch", pk=batch.pk)
     if entry["status"] != "ok":
         messages.warning(request, entry["message"])
-        _say_shop_made_anyway(request, supplier, created)
+        _say_shop_made_anyway(request, supplier, created, in_consignes=entry.get("consignes", False))
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
     _say_supplier_changes(request, changes)
@@ -971,11 +977,13 @@ def receipt_batch_assign(request, pk, index):
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
 
 
-def _say_shop_made_anyway(request, supplier, created: bool) -> None:
+def _say_shop_made_anyway(request, supplier, created: bool, in_consignes: bool = False) -> None:
     """A new shop named for a file that was not filed under it: made before
     the file was read, it stays (see upload_invoice), and is said."""
     if created:
-        messages.info(request, f"Enseigne {supplier.name} créée, sans ce fichier : choisissez-la dans la liste.")
+        # A slip put in Consignes leaves no file to name a shop for.
+        then = "" if in_consignes else " : choisissez-la dans la liste"
+        messages.info(request, f"Enseigne {supplier.name} créée, sans ce fichier{then}.")
 
 
 def _say_new_shop(request, supplier) -> None:
