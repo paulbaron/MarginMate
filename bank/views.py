@@ -2553,23 +2553,28 @@ def _fill(rows, with_choices: bool = True) -> None:
     wants the suggestions alone (`with_choices=False`): it offers what the
     matching found, and the pick-list is the bank page's."""
     # What the links read - each invoice's supplier, its lines for its
-    # total, and the other lines paying it (`invoice__payments__transaction`)
-    # - in four queries for the whole page rather than per invoice (see
-    # « N+1s hide in per-object properties »), and for these rows only: the
-    # page reads every line's payments for its counts, and draws a tab of
-    # them.
+    # total, and the other lines paying it (`paid_with`, with their bank
+    # line) - in three queries for the whole page rather than per invoice
+    # (see « N+1s hide in per-object properties »), and for these rows only:
+    # the page reads every line's payments for its counts, and draws a tab of
+    # them. Lists (`to_attr`), not the managers: those clone a queryset per
+    # invoice.
     prefetch_related_objects(
         [payment for row in rows for payment in row.payments],
         "invoice__supplier",
-        "invoice__lines",
-        "invoice__payments__transaction",
+        Prefetch("invoice__lines", queryset=reconcile.total_lines(), to_attr="line_list"),
+        Prefetch(
+            "invoice__payments",
+            queryset=InvoicePayment.objects.select_related("transaction"),
+            to_attr="paid_with",
+        ),
     )
     for row in rows:
         row.links = [
             Link(
                 payment,
                 reconcile.rounded_total(payment.invoice),
-                [other.transaction for other in payment.invoice.payments.all() if other.transaction_id != row.line.pk],
+                [other.transaction for other in payment.invoice.paid_with if other.transaction_id != row.line.pk],
             )
             for payment in row.payments
         ]

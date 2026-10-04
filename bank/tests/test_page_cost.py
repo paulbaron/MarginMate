@@ -177,6 +177,8 @@ class ChoiceLabelTests(TestCase):
 
 #: The invoices whose lines a query reads.
 LINES_OF = re.compile(r'FROM "invoices_invoiceline" .*"invoices_invoiceline"\."invoice_id" IN \(([^)]*)\)')
+#: Bank lines read by their pks (« id IN (...) », or « id = ... OR ... » for a few).
+LINES_BY_PK = re.compile(r'FROM "bank_banktransaction" WHERE \(?"bank_banktransaction"\."id" (IN|=)')
 
 
 def debit(day, label, amount, n, **fields):
@@ -231,7 +233,7 @@ class Statement:
 class BankPageQueriesTests(Statement, TestCase):
     """Every tab of « Banque » costs the same number of queries whatever the
     statement holds: the payments are one query for every line, what a link
-    shows besides is four for the rows on screen, the unpaid invoices two."""
+    shows besides is three for the rows on screen, the unpaid invoices two."""
 
     VIEWS = ("a-traiter", "rapprochees", "sans-facture", "toutes", "entrees", "par-beneficiaire")
 
@@ -268,6 +270,60 @@ class BankPageQueriesTests(Statement, TestCase):
                 read |= {int(pk) for pk in asked.group(1).split(",")}
         self.assertTrue(read)  # the unpaid invoices' lines, for their totals
         self.assertFalse(read & paid)
+
+    def test_an_invoice_s_lines_are_read_for_their_total_alone(self):
+        """A link and the pick-list read of each line the columns its total is
+        made of (`reconcile.total_lines`): its name, quantity, volume and
+        costs were most of what a tab loaded, for nothing."""
+        self.statement(2)
+        for view in ("a-traiter", "rapprochees", "toutes"):
+            with self.subTest(view=view), CaptureQueriesContext(connection) as captured:
+                self.client.get(reverse("bank:bank_home"), {"vue": view})
+            lines = [
+                query["sql"] for query in captured.captured_queries if 'FROM "invoices_invoiceline"' in query["sql"]
+            ]
+            self.assertTrue(lines)
+            for sql in lines:
+                self.assertNotIn('"raw_name"', sql)
+
+    def test_the_other_lines_paying_a_linked_invoice_come_with_their_payments(self):
+        """One query for the payments of the linked invoices and the lines
+        making them, rather than one for each."""
+        self.statement(2)
+        with CaptureQueriesContext(connection) as captured:
+            self.client.get(reverse("bank:bank_home"), {"vue": "rapprochees"})
+        by_pk = [query["sql"] for query in captured.captured_queries if LINES_BY_PK.search(query["sql"])]
+        self.assertEqual(by_pk, [])
+
+
+class RoundedTotalTests(TestCase):
+    """`reconcile.rounded_total` on an invoice `unpaid_invoices` loaded - its
+    lines in a list, a few columns each - is the invoice's own `total_ttc`
+    rounded, on every branch of `Invoice.total_ttc_of`, and costs no query."""
+
+    def assertSameTotal(self, invoice):
+        loaded = {each.pk: each for each in reconcile.unpaid_invoices()}[invoice.pk]
+        with self.assertNumQueries(0):
+            total = reconcile.rounded_total(loaded)
+        # Read the plain way: every column, through the manager.
+        self.assertEqual(total, reconcile.rounded_total(Invoice.objects.get(pk=invoice.pk)))
+
+    def test_every_branch_of_the_total(self):
+        supplier = make_supplier()
+        printed = make_invoice(supplier=supplier, printed_total_ttc=Decimal("12.01"))
+        make_invoice_line(invoice=printed, total_ht="5.00", vat_rate="0.055", printed_ttc="5.28", discount_ttc="0.10")
+        make_invoice_line(invoice=printed, total_ht="5.70", vat_rate="0.20", printed_ttc="6.84")
+        from_ht = make_invoice(supplier=supplier, reconciliation_adjustment=Decimal("1.50"))
+        make_invoice_line(invoice=from_ht, total_ht="10.00", vat_rate="0.20", taxes="2.00")
+        make_invoice_line(invoice=from_ht, total_ht="33.33", vat_rate="0.055")
+        stated = make_invoice(supplier=supplier, printed_total_ttc=Decimal("229.39"), einvoice_format="ubl")
+        make_invoice_line(invoice=stated, total_ht="169.00", vat_rate="0.20")
+        make_invoice_line(invoice=stated, total_ht="25.20", vat_rate="0.055")
+        empty = make_invoice(supplier=supplier)
+        Invoice.objects.filter(pk=empty.pk).update(invoice_date=None)
+        for invoice in (printed, from_ht, stated, empty):
+            with self.subTest(invoice=invoice.pk):
+                self.assertSameTotal(invoice)
 
 
 class ProposalsAndRulesQueriesTests(Statement, TestCase):
