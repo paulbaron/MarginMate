@@ -477,7 +477,14 @@ def pos_products_bulk(request):
         messages.error(request, "Aucun produit sélectionné.")
         return redirect("recipes:pos_product_list")
 
-    updated = PosProduct.objects.filter(name__in=names).update(ignored=True, recipe=None)
+    with transaction.atomic():
+        updated = PosProduct.objects.filter(name__in=names, recipe__isnull=True).update(ignored=True)
+        # The ticks are on rows still to link, but the page can be stale: a
+        # product linked meanwhile goes through set_aside, which takes its
+        # sales and its happy-hour name off the recipe - one UPDATE would not.
+        for product in PosProduct.objects.filter(name__in=names, recipe__isnull=False).select_related("recipe"):
+            set_aside(product, ignored=True)
+            updated += 1
     messages.success(request, f"{updated} produit{'s' if updated > 1 else ''} ignoré{'s' if updated > 1 else ''}.")
     return redirect("recipes:pos_product_list")
 
