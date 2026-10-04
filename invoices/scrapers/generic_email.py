@@ -214,7 +214,7 @@ def find_matching_emails(
     log=print,
     on_progress=None,
     should_cancel=None,
-    compile=re.compile,
+    compile=None,
 ) -> list[EmailMatch]:
     """Searches the shared invoice mailbox for emails matching every given
     pattern (blank subject/body pattern = match anything), fetching each
@@ -238,8 +238,11 @@ def find_matching_emails(
     here too.
 
     `compile` turns each pattern (sender, subject, body, attachment) into
-    something with `.search(text)`; `re.compile` - an invoice source's
-    patterns, and « Tester », exactly as before. The returnables gather passes
+    something with `.search(text)`. By default (an invoice source's patterns,
+    and « Tester ») returnables.patterns.invoice_mail_matcher: `re`'s meaning
+    as before, but checked by the motif guard and matched with a timeout - a
+    bare `re.compile` let one email's body hang the whole server on a
+    backtracking pattern (security audit 04/10/2026). The returnables gather passes
     returnables.patterns.mail_matcher: a format's patterns are checked before
     anything compiles them, matched case-insensitively and with a timeout -
     a header anybody on the internet can write must not hang the gather. A
@@ -251,6 +254,13 @@ def find_matching_emails(
     if not integrations_allowed():
         raise RuntimeError(integrations.MAILBOX)
     address, app_password, host = mailbox_credentials()
+
+    if compile is None:
+        from functools import partial
+
+        from returnables.patterns import invoice_mail_matcher
+
+        compile = partial(invoice_mail_matcher, log=log)
 
     sender_regex = compile(sender_pattern)
     subject_regex = compile(subject_pattern) if subject_pattern else None
@@ -364,6 +374,11 @@ def find_matching_emails(
 
 
 UNSAFE_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+#: Windows' device names: « NUL.pdf » or « COM1.pdf » is no file there.
+RESERVED_NAMES = frozenset({"con", "prn", "aux", "nul"} | {f"{kind}{n}" for kind in ("com", "lpt") for n in range(1, 10)})
+#: A name's length on disk, its extension included: a sender's 300-character
+#: name passed Windows' limit and failed the whole source (audit 04/10/2026).
+MAX_NAME_LENGTH = 120
 
 
 def attachment_file_name(name: str, taken: set[str]) -> str:
@@ -376,6 +391,11 @@ def attachment_file_name(name: str, taken: set[str]) -> str:
     stem, dot, extension = cleaned.rpartition(".")
     if not dot:
         stem, extension = cleaned, ""
+    extension = extension[:10]
+    stem = stem[: MAX_NAME_LENGTH - len(extension) - 1].rstrip(". ") or "piece-jointe"
+    if stem.split(".")[0].strip().lower() in RESERVED_NAMES:
+        stem = f"_{stem}"
+    cleaned = f"{stem}.{extension}" if extension else stem
     candidate, number = cleaned, 1
     while candidate.lower() in taken:
         number += 1
@@ -417,8 +437,14 @@ def scrape_email_invoices(
     for match in matches:
         for attachment in match.attachments:
             filepath = os.path.join(download_dir, attachment_file_name(attachment.filename, taken))
-            with open(filepath, "wb") as f:
-                f.write(attachment.content)
+            try:
+                with open(filepath, "wb") as f:
+                    f.write(attachment.content)
+            except OSError as exc:
+                # One attachment the disk refuses is skipped, said, and the
+                # source's other invoices still come in.
+                log(f"Pièce jointe ignorée : {attachment.filename!r} ({exc.strerror or exc})")
+                continue
             log(f"Downloaded: {attachment.filename}")
             downloaded.append((filepath, match.email_date))
     return downloaded

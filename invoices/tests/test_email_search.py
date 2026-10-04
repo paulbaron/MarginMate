@@ -78,9 +78,10 @@ def slip_mail(content: bytes, sender="mphone@uba.paris") -> bytes:
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
 class CompiledPatternsTests(SimpleTestCase):
-    """`compile=`: how the patterns become matchers. Left out, `re.compile`,
-    as for every invoice source and « Tester »; the returnables gather passes
-    returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
+    """`compile=`: how the patterns become matchers. Left out,
+    returnables.patterns.invoice_mail_matcher - `re`'s meaning, checked and
+    timed - for every invoice source and « Tester »; the returnables gather
+    passes returnables.patterns.mail_matcher (checked, case-insensitive, timed)."""
 
     def search(self, message_bytes, **kwargs):
         with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
@@ -117,6 +118,41 @@ class CompiledPatternsTests(SimpleTestCase):
         self.assertEqual(
             len(self.search(message, sender_pattern=r"mphone@uba\.paris", compile=patterns.mail_matcher)), 1
         )
+
+    def test_left_out_a_pattern_the_guard_refuses_stops_before_signing_in(self):
+        """A bare re.compile took any pattern; a counted repetition that
+        large is refused before anything signs in (audit 04/10/2026)."""
+        from returnables.patterns import PatternError
+
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            with self.assertRaises(PatternError):
+                find_matching_emails(
+                    date(2026, 2, 1), date(2026, 2, 28), sender_pattern="(?:x{500}){500}", log=lambda message: None
+                )
+        client.assert_not_called()
+
+    def test_left_out_a_body_that_makes_the_pattern_backtrack_is_no_match(self):
+        """A body anybody can write must not hang the gather: the match
+        times out, the mail is left out, and the log says why."""
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["From"] = "factures@exemple.fr"
+        message["Subject"] = "Facture"
+        message["Date"] = "Tue, 10 Feb 2026 08:15:02 +0100"
+        message.set_content("a" * 60 + "b")
+        logged = []
+        with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client:
+            fake_mailbox(client, message.as_bytes())
+            matches = find_matching_emails(
+                date(2026, 2, 1),
+                date(2026, 2, 28),
+                sender_pattern="exemple",
+                body_pattern="(a|aa)+$",
+                log=logged.append,
+            )
+        self.assertEqual(matches, [])
+        self.assertTrue(any("trop lent" in line for line in logged))
 
     def test_every_pattern_goes_through_it(self):
         compiled = []
@@ -185,3 +221,25 @@ class AttachmentFileTests(SimpleTestCase):
         for path, _day in files:
             self.assertEqual(os.path.dirname(path), folder)
             self.assertTrue(os.path.basename(path).endswith(".pdf"))
+
+    def test_a_name_too_long_for_the_disk_is_cut_and_keeps_its_extension(self):
+        _folder, files = self.download(("F" * 300 + ".pdf", b"%PDF-A"))
+        name = os.path.basename(files[0][0])
+        self.assertLessEqual(len(name), 120)
+        self.assertTrue(name.endswith(".pdf"))
+
+    def test_a_windows_device_name_is_written_under_another(self):
+        _folder, files = self.download(("NUL.pdf", b"%PDF-A"), ("com1.pdf", b"%PDF-B"))
+        self.assertEqual([os.path.basename(path) for path, _day in files], ["_NUL.pdf", "_com1.pdf"])
+
+    def test_an_attachment_the_disk_refuses_does_not_stop_the_others(self):
+        real_open = open
+
+        def refusing_open(path, *args, **kwargs):
+            if os.path.basename(str(path)) == "refuse.pdf":
+                raise OSError(22, "Invalid argument")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", refusing_open):
+            _folder, files = self.download(("refuse.pdf", b"%PDF-A"), ("facture.pdf", b"%PDF-B"))
+        self.assertEqual([os.path.basename(path) for path, _day in files], ["facture.pdf"])
