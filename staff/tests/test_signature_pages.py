@@ -666,6 +666,26 @@ class CountersignTests(OwnerCase):
         self.assertEqual(self.messages_of(answer), ["Cette demande n'est pas à contresigner."])
         self.assertEqual(self.kinds(request).count(Kind.COUNTERSIGNED), 1)
 
+    def test_the_employee_s_signed_file_gone_from_disk_is_said_by_its_name_never_its_path(self):
+        """A FileNotFoundError's words are the file's full path on the
+        server (security audit LB-3): the log gets them, the page its name."""
+        request, _token = self.create()
+        self.employee_signs(request)
+        (private_files.request_dir(request.uuid) / private_files.EMPLOYEE_SIGNED).unlink()
+        with self.assertLogs("staff.signature_requests", "WARNING") as logged:
+            answer = self.countersign(self.page(), follow=False)
+        self.assertEqual(answer.status_code, 200)
+        self.assertEqual(
+            self.pad_error(answer),
+            "Le fichier signed_employee.pdf est introuvable dans le dossier privé de l'espace : restaurez-le depuis "
+            "la sauvegarde. Rien n'a été contresigné.",
+        )
+        html = unescape(self.html(answer))
+        self.assertNotIn(str(private_files.private_dir()), html)
+        self.assertNotIn("Errno", html)
+        self.assertIn("No such file or directory", "\n".join(logged.output))
+        self.refused_as_it_stands(request)
+
 
 # -- Cancelling and correcting ----------------------------------------------------------------------------------
 
@@ -788,6 +808,21 @@ class VerifyAndDownloadTests(OwnerCase):
         path.write_bytes(path.read_bytes().replace(b"DUPONT", b"DUPOND", 1))
         text = self.text(self.verify())
         self.assertIn("ne correspond plus à l'empreinte enregistrée", text)
+
+    def test_verify_says_a_file_gone_from_disk_by_its_name_never_its_path(self):
+        """The verdict is shown, then written for good in the journal and
+        the proof file: never the server's path (security audit LB-3)."""
+        request, _token = self.complete()
+        (private_files.request_dir(request.uuid) / private_files.FINAL).unlink()
+        with self.assertLogs("staff.signature_requests", "WARNING"):
+            answer = self.verify()
+        said = requests_.FILE_MISSING.format(name=private_files.FINAL)
+        self.assertIn(said, " ".join(self.text(answer).split()))
+        verified = request.events.filter(kind=Kind.VERIFIED).last()
+        self.assertEqual(verified.detail["verdict"], said)
+        for where in (unescape(self.html(answer)), *requests_.describe_event(verified).details):
+            self.assertNotIn(str(private_files.private_dir()), where)
+            self.assertNotIn("Errno", where)
 
     def test_every_file_is_downloaded_from_the_page_and_logged(self):
         request, _token = self.complete()

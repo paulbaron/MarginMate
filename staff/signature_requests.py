@@ -82,6 +82,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -143,6 +144,12 @@ NOT_SIGNED = "La signature n'a pas pu être enregistrée : rien n'a été signé
 #: Refused to a code by e-mail while the one the employer handed over can
 #: still be typed: anyone holding the link could otherwise void it.
 HANDED_OVER_CODE_WAITING = "Votre employeur vous a donné un code : tapez-le ci-dessous (il vaut 15 minutes)."
+#: A file gone from the tenant's private folder, said by its name: an OS
+#: error's own words are its full path on the server (security audit LB-3),
+#: and « Vérifier » writes its verdict for good in the journal and the proof.
+FILE_MISSING = (
+    "Le fichier {name} est introuvable dans le dossier privé de l'espace : restaurez-le depuis la sauvegarde."
+)
 #: « Contresigner » posted before the employee signed (a page drawn earlier).
 COUNTERSIGN_TOO_EARLY = "Ce relevé n'est pas encore signé du côté salarié : il se contresigne ensuite."
 #: Where the SHA-256 of the employer's drawing is recorded: the COUNTERSIGNED
@@ -1145,7 +1152,12 @@ def countersign_request(
         employee_signed = private_files.read_checked(
             request.uuid, private_files.EMPLOYEE_SIGNED, request.employee_pdf_sha256
         )
-    except (private_files.AlteredFileError, FileNotFoundError) as error:
+    except FileNotFoundError as error:
+        logger.warning("Demande %s : le document signé par le salarié est introuvable (%s)", request.uuid, error)
+        raise RequestError(
+            f"{FILE_MISSING.format(name=private_files.EMPLOYEE_SIGNED)} Rien n'a été contresigné."
+        ) from None
+    except private_files.AlteredFileError as error:
         raise RequestError(
             f"Le document signé avant contreseing a changé sur le disque ({error}) : rien n'a été contresigné."
         ) from None
@@ -1243,7 +1255,12 @@ def verify_request(request: SignatureRequest, *, now=None, ip=None, user_agent="
     try:
         name, data = latest_document(request)
     except (private_files.AlteredFileError, FileNotFoundError) as error:
-        result = signing.Verification(error=str(error))
+        message = str(error)
+        if isinstance(error, FileNotFoundError) and error.filename:
+            # The OS's, naming the path; latest_document's own names none.
+            logger.warning("Demande %s : document introuvable pour « Vérifier » (%s)", request.uuid, error)
+            message = FILE_MISSING.format(name=os.path.basename(error.filename))
+        result = signing.Verification(error=message)
         name = ""
     else:
         result = signing.verify(data)
