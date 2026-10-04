@@ -1,0 +1,81 @@
+{% load assets %}
+{% comment %}
+What « Tester » read in a file with the format as typed (till_views.FormatTest):
+its first rows in numbered columns, each role's column, what the format reads,
+or why it reads nothing - nothing saved, the file not kept. Context: `test`,
+None when nothing was tried.
+{% endcomment %}
+{% if test %}
+    {% if test.problem %}
+        <div class="message message-warning" id="essai">{{ test.problem }}</div>
+    {% else %}
+        <div class="message" id="essai">
+            <p>Fichier « {{ test.file_name|truncatechars:80 }} » : rien n'est enregistré.</p>
+        </div>
+        {% if test.rows %}
+            <h3>Premières lignes, colonnes numérotées</h3>
+            <div class="table-wrap">
+                <table data-table data-table-label="premières lignes du fichier">
+                    <thead>
+                        <tr>
+                            <th>Ligne</th>
+                            {% for number in test.columns %}<th>{{ number }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for number, cells in test.rows %}
+                            <tr>
+                                <td class="muted">{{ number }}</td>
+                                {% for cell in cells %}<td>{{ cell|truncatechars:40 }}</td>{% endfor %}
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if test.wider %}<p class="muted">Les colonnes au-delà de la {{ test.column_limit }}e ne sont pas lues.</p>{% endif %}
+        {% endif %}
+        {% if test.refusal %}
+            <div class="message message-error">{{ test.refusal }}</div>
+        {% else %}
+            {% with reading=test.reading export=test.export %}
+            <h3>Ce que le format lit</h3>
+            <ul class="till-format-mapping">
+                {% if reading.header_row %}<li>En-tête trouvé ligne {{ reading.header_row }}{% if reading.rows_above_header %} ({{ reading.rows_above_header }} ligne{{ reading.rows_above_header|pluralize }} au-dessus, passée{{ reading.rows_above_header|pluralize }}){% endif %}.</li>{% endif %}
+                {% for word, number, title in test.mapping %}
+                    <li>{{ word }} → colonne {{ number }}{% if title %} « {{ title }} »{% endif %}</li>
+                {% endfor %}
+                {% if test.day %}<li>jour → le {{ test.day|date:"d/m/Y" }} pour chaque ligne (choisi à l'import)</li>{% endif %}
+            </ul>
+            <p>
+                <strong>{{ reading.rows_read }} ligne{{ reading.rows_read|pluralize }} lue{{ reading.rows_read|pluralize }}</strong>{% if reading.truncated %}, l'essai s'arrête là : l'import lira tout le fichier{% endif %}.
+                {% if reading.rows_without_day %}{{ reading.rows_without_day }} sans jour passée{{ reading.rows_without_day|pluralize }}.{% endif %}
+                {% if reading.rows_without_product %}{{ reading.rows_without_product }} sans produit passée{{ reading.rows_without_product|pluralize }}.{% endif %}
+                {% if reading.rows_without_payment %}{{ reading.rows_without_payment }} sans paiement passée{{ reading.rows_without_payment|pluralize }}.{% endif %}
+            </p>
+            {% if test.kind == "ventes" %}
+                <ul>
+                    <li>{{ export.entries|length }} (produit, jour), {{ export.total_quantity }} unité{{ export.total_quantity|pluralize }}{% if export.days %}, du {{ export.days.0|date:"d/m/Y" }} au {{ export.days.1|date:"d/m/Y" }}{% endif %}.</li>
+                    {% if export.money_columns %}
+                        <li>Recette : {{ export.revenue_ttc|money }} € TTC, {{ export.revenue_ht|money }} € HT{% if export.revenue_without_rate_ttc %}, dont {{ export.revenue_without_rate_ttc|money }} € TTC sans taux lisible (pas de HT){% endif %}.</li>
+                        {% if export.days_without_amount %}<li>{{ export.days_without_amount }} (produit, jour) laissé{{ export.days_without_amount|pluralize }} non lu{{ export.days_without_amount|pluralize }} : une ligne sans montant lisible.</li>{% endif %}
+                    {% else %}
+                        <li>Aucune colonne de montant : la recette de ces jours reste « non lue ».</li>
+                    {% endif %}
+                    {% if export.quantities_rounded %}<li>{{ export.quantities_rounded }} (produit, jour) à une quantité fractionnaire, arrondie à l'unité.</li>{% endif %}
+                    {% if export.refund_lines %}<li>{{ export.refund_lines }} ligne{{ export.refund_lines|pluralize }} de remboursement.</li>{% endif %}
+                    <li>{{ test.known_products }} produit{{ test.known_products|pluralize }} déjà connu{{ test.known_products|pluralize }}, {{ test.new_count }} nouveau{{ test.new_count|pluralize:"x" }} (à lier){% if test.new_products %} : {{ test.new_products|join:", " }}{% if test.new_more %}… et {{ test.new_more }} de plus{% endif %}{% endif %}.</li>
+                </ul>
+            {% else %}
+                <ul>
+                    <li>{{ export.payments_total|money }} € payés sur {{ export.payment_days|length }} jour{{ export.payment_days|length|pluralize }}.</li>
+                    {% for label, amount, count in test.methods %}
+                        <li>{{ label }} : {{ amount|money }} € en {{ count }} paiement{{ count|pluralize }}</li>
+                    {% endfor %}
+                    {% if export.unread_payment_tickets %}<li>{{ export.unread_payment_tickets }} paiement{{ export.unread_payment_tickets|pluralize }} sans moyen : classé{{ export.unread_payment_tickets|pluralize }} « Illisible ».</li>{% endif %}
+                    {% if export.unmapped_methods %}<li>Moyens que rien ne fait correspondre, gardés tels qu'imprimés : {% for printed in export.unmapped_methods %}« {{ printed }} »{% if not forloop.last %}, {% endif %}{% endfor %}. Ajoutez-les aux « Moyens de paiement » du format pour qu'ils comptent comme Carte, Espèces…</li>{% endif %}
+                </ul>
+            {% endif %}
+            {% endwith %}
+        {% endif %}
+    {% endif %}
+{% endif %}

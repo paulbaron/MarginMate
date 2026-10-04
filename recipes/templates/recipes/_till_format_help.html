@@ -1,0 +1,19 @@
+{% comment %}
+How a format reads a till's file, under its form. Context: `example`
+(till_views.FORMAT_EXAMPLE, read by the tests as it says).
+{% endcomment %}
+<details class="explainer pattern-help">
+    <summary>Lire un format</summary>
+    <ul class="pattern-cheatsheet">
+        <li>Une colonne se désigne par son titre, tel que l'en-tête l'imprime (accents, majuscules et espaces mis à part), ou par son numéro à partir de 1 : « Tester » les numérote.</li>
+        <li>Une ligne dont le jour est vide, ou sans chiffre (un « Total »), est passée et comptée ; un jour illisible sur une ligne de vente refuse le fichier, en nommant la ligne.</li>
+        <li>Le montant est celui de la ligne, remises déduites, sauf « prix unitaire » coché. Le HT se calcule par taux français ; sans taux lisible, il reste inconnu.</li>
+        <li>Une quantité négative est un remboursement ; une quantité fractionnaire est additionnée, puis le jour est arrondi à l'unité.</li>
+        <li>Un jour importé de nouveau remplace, produit par produit, ce que le fichier en dit ; les ventes saisies à la main ne sont jamais touchées.</li>
+    </ul>
+    <p>Exemple, sur un export inventé :</p>
+    <ul class="pattern-cheatsheet">
+        {% for row in example.rows %}<li><code>{{ row }}</code></li>{% endfor %}
+    </ul>
+    <p>{{ example.said }} → {{ example.reads }}.</p>
+</details>

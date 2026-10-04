@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Formats des fichiers de caisse - Ventes - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}">← Recettes &amp; ventes · Ventes</a></p>
+            <h1>Formats des fichiers de caisse</h1>
+            <p class="page-subtitle">
+                Comment lire le fichier que votre caisse exporte. Une colonne se désigne par son titre (« Date », « Qté »)
+                ou par son numéro, en comptant à partir de 1.
+            </p>
+        </div>
+    </div>
+
+    {% if rows %}
+        <div class="table-wrap">
+            <table data-table data-table-label="formats">
+                <thead>
+                    <tr>
+                        <th>Nom</th>
+                        <th>Contenu</th>
+                        <th>Colonnes</th>
+                        <th>Séparateur</th>
+                        <th>Dates</th>
+                        <th data-no-sort></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr id="format-{{ row.fmt.pk }}">
+                            <td>
+                                <strong>{{ row.fmt.name }}</strong>
+                                {% if row.problem %}
+                                    <span class="status-pill status-ERROR">à corriger</span>
+                                    <p class="field-error">{{ row.problem }}</p>
+                                {% endif %}
+                                {% if row.no_money %}<p class="muted small">Sans colonne de montant : la recette de ces jours reste « non lue ».</p>{% endif %}
+                            </td>
+                            <td>{{ row.fmt.get_kind_display }}</td>
+                            <td>{{ row.columns }}</td>
+                            <td>{{ row.fmt.get_delimiter_display }}</td>
+                            <td>{{ row.fmt.get_date_format_display }}</td>
+                            <td class="row-actions">
+                                <a href="{% url 'recipes:till_format' row.fmt.pk %}" aria-label="Modifier « {{ row.fmt.name }} »">Modifier</a>
+                                <form method="post" action="{% url 'recipes:till_format' row.fmt.pk %}"
+                                      data-confirm="Supprimer le format « {{ row.fmt.name }} » ?">
+                                    {% csrf_token %}
+                                    <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer"
+                                            aria-label="Supprimer « {{ row.fmt.name }} »">Supprimer</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>Aucun format : décrivez ci-dessous les colonnes du fichier de votre caisse.</p>
+        </div>
+    {% endif %}
+
+    <div class="card" id="nouveau-format">
+        <h2>Nouveau format</h2>
+        <form method="post" action="{% url 'recipes:till_formats' %}#nouveau-format" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            {% include "recipes/_till_format_file.html" %}
+            {% comment %}
+            « Tester » first: Enter in a field presses the form's first submit
+            button, and it reads the file - it never saves the format.
+            {% endcomment %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="tester">Tester</button>
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer le format</button>
+            </div>
+        </form>
+        {% include "recipes/_till_format_test.html" %}
+    </div>
+
+    {% include "recipes/_till_format_help.html" %}
+{% endblock %}
