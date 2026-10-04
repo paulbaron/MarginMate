@@ -78,6 +78,26 @@ AI_KEY_MISSING = (
     "L'analyse IA demande une clé d'API Anthropic : renseignez-la sur la page Identifiants (réservée au "
     "propriétaire de l'espace)."
 )
+#: The AI reading's refusals once a key is there: the server's own limit,
+#: and what Anthropic answered - each a fixed sentence (parsers.llm_fallback
+#: maps the SDK's errors), never the SDK's English.
+AI_BUSY = "L'analyse IA lit déjà deux factures sur le serveur : réessayez dans un instant."
+AI_KEY_REFUSED = "La clé d'API Anthropic a été refusée : vérifiez-la sur la page Identifiants."
+AI_RATE_LIMITED = "Le compte Anthropic de la clé a atteint sa limite : réessayez dans quelques minutes."
+AI_BAD_REQUEST = (
+    "Le compte Anthropic de la clé a refusé la lecture (crédit épuisé ?) : vérifiez-le sur console.anthropic.com."
+)
+AI_UNAVAILABLE = "L'analyse IA est momentanément indisponible chez Anthropic : réessayez plus tard."
+AI_MODEL_GONE = "Le modèle de l'analyse IA n'est plus proposé par Anthropic : prévenez l'administrateur de MarginMate."
+AI_NO_ANSWER = "L'analyse IA ne répond pas : réessayez plus tard."
+#: The credential the AI reading signs its requests with (« Identifiants »).
+AI_KEY_NAME = "ANTHROPIC_API_KEY"
+
+
+class AiReadingRefused(RuntimeError):
+    """The AI reading did not run, or Anthropic refused it: a French sentence
+    of this module, said as it is on the page (receipt_batches.
+    READING_REFUSALS) - never « Erreur inattendue »."""
 
 
 def mailbox_offered(state=None) -> bool:
@@ -93,3 +113,16 @@ def mailbox_offered(state=None) -> bool:
     if server_accounts_allowed():
         return True
     return vault.ready(*MAILBOX_NAMES, state=state)
+
+
+def ai_offered(state=None) -> bool:
+    """Whether « Analyse IA » is offered on the PDF import: in the platform
+    owner's espace always, as before; in any other once its key is on its
+    « Identifiants » page - chosen without one, the upload is refused before
+    it is sent. `state`: the store already read for this request."""
+    from accounts import vault
+    from accounts.tenancy import server_accounts_allowed
+
+    if server_accounts_allowed():
+        return True
+    return vault.ready(AI_KEY_NAME, state=state)

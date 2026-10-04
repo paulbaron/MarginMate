@@ -9,13 +9,23 @@ same structured shape a hand-written parser would.
 
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
+from ..integrations import AI_KEY_NAME
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
 from .registry import register
 
 MODEL = "claude-sonnet-5"
+#: One call's limit, in seconds, and no retry: the call runs inside the
+#: upload's request (one of the server's eight threads), and the tunnel
+#: answers the browser by itself past 100 s.
+TIMEOUT_SECONDS = 60.0
+#: How many AI readings run at once on the server, every espace together; a
+#: third is refused at once, never queued (`integrations.AI_BUSY`).
+AI_SLOTS = 2
+_SLOTS = threading.BoundedSemaphore(AI_SLOTS)
 
 EXTRACTION_TOOL = {
     "name": "record_invoice",
@@ -66,8 +76,29 @@ def _to_decimal(value) -> Decimal:
         return Decimal("0")
 
 
-#: The credential the AI reading signs its requests with (« Identifiants »).
-AI_KEY_NAME = "ANTHROPIC_API_KEY"
+def _said(anthropic, exc) -> str | None:
+    """The fixed sentence for one of the SDK's errors, or None for anything
+    else. Read off the SDK's own classes by name - a test's stand-in module
+    holds the same names."""
+    from invoices import integrations
+
+    for names, sentence in (
+        (("AuthenticationError", "PermissionDeniedError"), integrations.AI_KEY_REFUSED),
+        (("RateLimitError",), integrations.AI_RATE_LIMITED),
+        (("BadRequestError",), integrations.AI_BAD_REQUEST),
+        (("NotFoundError",), integrations.AI_MODEL_GONE),
+        (("InternalServerError", "OverloadedError", "ServiceUnavailableError"), integrations.AI_UNAVAILABLE),
+        # APITimeoutError is one of these.
+        (("APIConnectionError",), integrations.AI_NO_ANSWER),
+    ):
+        for name in names:
+            kind = getattr(anthropic, name, None)
+            if isinstance(kind, type) and isinstance(exc, kind):
+                return sentence
+    status_error = getattr(anthropic, "APIStatusError", None)
+    if isinstance(status_error, type) and isinstance(exc, status_error):
+        return integrations.AI_UNAVAILABLE if getattr(exc, "status_code", 0) >= 500 else integrations.AI_BAD_REQUEST
+    return None
 
 
 @register
@@ -79,36 +110,50 @@ class LLMFallbackParser(InvoiceParser):
         # « Identifiants » page, else - in the owner's tenant only - the
         # server's (accounts.vault.setting). Refused before the document is
         # read or anything is sent, whichever path got here (the PDF import,
-        # a source's reader, a gathered attachment).
+        # a source's reader, a gathered attachment). Every refusal is an
+        # AiReadingRefused: a sentence the page says as it is.
         from accounts import vault
         from accounts.tenancy import integrations_allowed
         from invoices import integrations
 
         if not integrations_allowed():
-            raise RuntimeError(integrations.AI_READING)
+            raise integrations.AiReadingRefused(integrations.AI_READING)
         api_key = vault.setting(AI_KEY_NAME)
         if not api_key:
-            raise RuntimeError(integrations.AI_KEY_MISSING)
+            raise integrations.AiReadingRefused(integrations.AI_KEY_MISSING)
 
         import anthropic
 
         text = _extract_text(pdf_path)
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            tools=[EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": "record_invoice"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Extract every purchased product line from this supplier invoice text. "
-                        "Only include actual line items, not subtotals, taxes, or shipping.\n\n" + text
-                    ),
-                }
-            ],
-        )
+        # Two at a time on the server, never waited for: a request thread
+        # waiting on another bar's reading is a thread nobody else gets.
+        if not _SLOTS.acquire(blocking=False):
+            raise integrations.AiReadingRefused(integrations.AI_BUSY)
+        try:
+            client = anthropic.Anthropic(api_key=api_key, timeout=TIMEOUT_SECONDS, max_retries=0)
+            try:
+                response = client.messages.create(
+                    model=MODEL,
+                    max_tokens=4096,
+                    tools=[EXTRACTION_TOOL],
+                    tool_choice={"type": "tool", "name": "record_invoice"},
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                "Extract every purchased product line from this supplier invoice text. "
+                                "Only include actual line items, not subtotals, taxes, or shipping.\n\n" + text
+                            ),
+                        }
+                    ],
+                )
+            except Exception as exc:
+                sentence = _said(anthropic, exc)
+                if sentence is None:
+                    raise
+                raise integrations.AiReadingRefused(sentence) from exc
+        finally:
+            _SLOTS.release()
 
         tool_use = next(block for block in response.content if block.type == "tool_use")
         data = tool_use.input

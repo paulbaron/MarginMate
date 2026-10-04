@@ -346,7 +346,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "import_tab": import_tab,
         "receipt_form": receipt_form or ReceiptBatchUploadForm(),
         "pdf_form": pdf_form or InvoiceUploadForm(),
-        "invoice_supplier_groups": invoice_supplier_choices(),
+        "invoice_supplier_groups": invoice_supplier_choices(state),
         "gather_sources": gather_sources,
         "default_start_date": gather_start,
         "default_end_date": gather_end,
@@ -361,7 +361,13 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
             if server or not allowed
             else [*([] if mailbox else [integrations.MAILBOX_TO_FILL]), integrations.METRO, integrations.PORTALS]
         ),
-        "ai_refused": None if allowed else integrations.AI_READING,
+        "ai_refused": (
+            integrations.AI_READING
+            if not allowed
+            else None
+            if integrations.ai_offered(state)
+            else integrations.AI_KEY_MISSING
+        ),
         # « Prendre une photo » stops what the form would post short of
         # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
         # as common's caps are, so a test can patch it.

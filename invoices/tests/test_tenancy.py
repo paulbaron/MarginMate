@@ -246,6 +246,9 @@ class GateTests(TwoTenantsTestCase):
     def test_the_ai_reading_is_offered_and_taken_on_upload_in_every_espace(self):
         with bound_tenant(self.bar_b):
             ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
+            # Its key, on its « Identifiants » (invoices/tests/test_ai_reading.py
+            # has the page before it is).
+            vault.save({"ANTHROPIC_API_KEY": "cle-beta-essai"})
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list"))
         self.assertContains(page, '<optgroup label="Analyse IA">')
@@ -402,7 +405,7 @@ class GateTests(TwoTenantsTestCase):
             mock.patch("invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI") as extract,
         ):
             with bound_tenant(self.bar_b):
-                with self.assertRaises(RuntimeError) as refused:
+                with self.assertRaises(integrations.AiReadingRefused) as refused:
                     LLMFallbackParser().parse("facture.pdf")
             extract.assert_not_called()
             anthropic.Anthropic.assert_not_called()
@@ -425,7 +428,7 @@ class GateTests(TwoTenantsTestCase):
         with self.assertRaises(RuntimeError) as mailbox:
             find_matching_emails(START, END, "traiteur", "", "", "")
         self.assertEqual(str(mailbox.exception), integrations.MAILBOX)
-        with self.assertRaises(RuntimeError) as ai:
+        with self.assertRaises(integrations.AiReadingRefused) as ai:
             LLMFallbackParser().parse("facture.pdf")
         self.assertEqual(str(ai.exception), integrations.AI_READING)
 

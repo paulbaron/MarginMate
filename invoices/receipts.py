@@ -229,13 +229,18 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
     ]
 
 
-def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
+def invoice_supplier_choices(state=None) -> list[tuple[str, list[Supplier]]]:
     """What a PDF invoice can be imported under, grouped by how it is read -
     those waiting for their first document first. The AI reading runs on the
-    owner's key: not offered where the server's accounts may not be used
-    (integrations.py; forms.InvoiceUploadForm refuses it when posted)."""
+    espace's own key: offered where it may run and - outside the platform
+    owner's espace - once a key is on « Identifiants »
+    (integrations.ai_offered; forms.InvoiceUploadForm refuses it when posted
+    all the same). `state`: the store already read for this request."""
+    from . import integrations
+
     waiting, suppliers = _waiting_first(list(Supplier.objects.order_by("name")))
     ai = [supplier for supplier in suppliers if supplier.parser_key == LLM_PARSER_KEY]
+    offered = integrations_allowed() and integrations.ai_offered(state)
     return [
         (WAITING_GROUP, waiting),
         ("Lecteur dédié", [supplier for supplier in suppliers if has_own_reader(supplier)]),
@@ -247,7 +252,7 @@ def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
                 if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)
             ],
         ),
-        ("Analyse IA", ai if integrations_allowed() else []),
+        ("Analyse IA", ai if offered else []),
     ]
 
 
