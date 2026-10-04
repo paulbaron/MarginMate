@@ -1377,6 +1377,17 @@ class OldArchiveImportTests(TestCase):
         self.assertEqual(registry.get("types_consignes").snapshot(), before)
 
 
+def assert_rows_read_as_the_sections_count(test) -> None:
+    """`views._holds_rows` keeps its own map of each seeded part's tables
+    (`SEEDED_MODELS`): a part missing from it, or a table wrong, and the
+    « Base neuve » note left that part out without a word. It says what the
+    part's own section counts, in the database bound."""
+    test.assertEqual(set(views.SEEDED_MODELS), set(views.SEEDED_SECTIONS))
+    for key in views.SEEDED_SECTIONS:
+        with test.subTest(section=key):
+            test.assertEqual(views._holds_rows(key), any(registry.get(key).count().values()))
+
+
 class SeededSectionsTests(TestCase):
     """`views.SEEDED_SECTIONS` is what the migrations install into every
     database, read off the real sections of one holding every seed (the test
@@ -1400,6 +1411,15 @@ class SeededSectionsTests(TestCase):
             with self.subTest(section=key):
                 self.assertTrue(views.holds_only_seeds(key))
 
+    def test_a_part_holds_rows_where_its_section_counts_some(self):
+        assert_rows_read_as_the_sections_count(self)
+        # And where it counts none: every source deleted.
+        from invoices.models import InvoiceType
+
+        InvoiceType.objects.all().delete()
+        self.assertFalse(views._holds_rows("sources"))
+        assert_rows_read_as_the_sections_count(self)
+
 
 class SeededPartsInANewEspaceTests(TenancyTestCase):
     """The « Base neuve » note computed in real new espaces
@@ -1419,6 +1439,7 @@ class SeededPartsInANewEspaceTests(TenancyTestCase):
             holding = self.configuration_holding_rows()
             self.assertLessEqual(holding, set(views.SEEDED_SECTIONS))
             self.assertNotIn("sources", holding)
+            assert_rows_read_as_the_sections_count(self)
             for key in holding:
                 with self.subTest(section=key):
                     self.assertTrue(views.holds_only_seeds(key))
