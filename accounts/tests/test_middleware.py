@@ -4,8 +4,10 @@ no tenant is bound."""
 
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.db import connections
+from django.db.backends.sqlite3.base import SQLiteCursorWrapper
 from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.template import engines
 from django.template.response import TemplateResponse
@@ -16,13 +18,17 @@ from django.urls import reverse
 from accounts import access
 from accounts.middleware import TenantMiddleware
 from accounts.models import Membership
-from accounts.tenancy import bound_tenant, current_tenant
+from accounts.tenancy import TenancyError, bound_tenant, current_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from config.navigation import navigation
 from inventory.context_processors import review_count
 from invoices.context_processors import receipt_review_count
+from invoices.models import ScrapeJob
 from recipes.models import PosProduct
 from tests.factories import make_product, make_supplier
+
+#: The badges base.html draws, in the order of its links.
+BADGES = ("review_count_nav", "receipt_review_count_nav", "pos_pending_count_nav")
 
 #: A made-up value per path converter (« <int:pk> », « <staff_month:month> »).
 SAMPLES = {
@@ -419,3 +425,55 @@ class UnboundContextProcessorsTests(TwoTenantsTestCase):
         request.access = access.Access(owner=False, areas=["returnables"])
         with bound_tenant(self.bar_a), self.assertNumQueries(0), self.assertNumQueries(0, using="accounts"):
             self.assertIs(access.context(request)["can"], request.access)
+
+
+class BadgesCountedWhenDrawnTests(TwoTenantsTestCase):
+    """The three badges are counted when base.html draws them, not when the
+    processors run: every fragment - the gather's card polled every second
+    among them - ran them too, a scan of the invoice table it threw away
+    (5-20 ms of a 7 ms poll, growing with the invoices)."""
+
+    BADGE_TABLES = ("invoices_invoice", "inventory_product", "recipes_posproduct")
+
+    def test_the_processors_count_nothing_until_read(self):
+        request = RequestFactory().get(reverse("inventory:stock_list"))
+        with bound_tenant(self.bar_a):
+            make_product(raw_name="Sirop Alpha")
+            PosProduct.objects.create(name="Pinte Alpha")
+            with self.assertNumQueries(0):
+                drawn = {**review_count(request), **receipt_review_count(request), **navigation(request)}
+            with self.assertNumQueries(3):
+                printed = [str(drawn[name]) for name in BADGES]
+            self.assertEqual(printed, ["1", "0", "1"])
+
+    def test_a_badge_read_under_another_binding_counts_nothing_of_it(self):
+        """Read outside its request's binding, a badge would count another
+        bar's queue, or none: refused."""
+        request = RequestFactory().get("/")
+        with bound_tenant(self.bar_a):
+            drawn = review_count(request)
+        with bound_tenant(self.bar_b), self.assertRaises(TenancyError):
+            str(drawn["review_count_nav"])
+
+    def test_a_polled_card_counts_no_badge(self):
+        with bound_tenant(self.bar_a):
+            make_product(raw_name="Sirop Alpha")
+            job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.GATHER, status=ScrapeJob.Status.RUNNING)
+        self.client.force_login(self.user_a)
+        url = reverse("invoices:gather_status", args=[job.pk])
+        # Every query of the request, the tenant's connection made by the
+        # middleware included.
+        queries = []
+        execute = SQLiteCursorWrapper.execute
+
+        def seen(cursor, query, params=None):
+            queries.append(query)
+            return execute(cursor, query, params)
+
+        with mock.patch.object(SQLiteCursorWrapper, "execute", seen):
+            response = self.client.get(url)
+        self.assertContains(response, "data-job-active")
+        counted = [query for query in queries if any(table in query for table in self.BADGE_TABLES)]
+        self.assertEqual(counted, [])
+        # A full page still draws them.
+        self.assertContains(self.client.get(reverse("inventory:stock_list")), '<span class="badge">1</span>')
