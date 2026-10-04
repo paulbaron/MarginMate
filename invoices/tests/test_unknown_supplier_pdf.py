@@ -12,9 +12,11 @@ Data invented; the PDFs are written by hand (pdf_files.py).
 
 import os
 import shutil
+from contextlib import nullcontext
 from decimal import Decimal
 from unittest import mock
 
+from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
@@ -118,6 +120,24 @@ class UploadTests(TestCase):
                 self.assertEqual(response.context["import_tab"], "documents")
                 self.assertContains(response, message)
         self.assertFalse(Invoice.objects.exists())
+
+    def test_a_new_supplier_made_for_a_file_that_fails_is_said(self):
+        """Made before the file is read, it stays when the import fails - an
+        empty supplier is a legitimate one, deleted from its page if need
+        be. Said only on success, it sat in « Enseignes et fournisseurs »
+        unannounced, and the retry under the same name was refused with
+        « existe déjà »."""
+        for outcome in (DuplicateInvoiceError("Déjà dans MarginMate."), RuntimeError("PDF illisible")):
+            with self.subTest(outcome=type(outcome).__name__):
+                name = f"Plomberie {type(outcome).__name__}"
+                with (
+                    mock.patch("invoices.receipts.import_document", side_effect=outcome),
+                    self.assertLogs("invoices.views", "ERROR") if isinstance(outcome, RuntimeError) else nullcontext(),
+                ):
+                    response = self.post(supplier="new", new_name=name)
+                said = [str(message) for message in get_messages(response.wsgi_request)]
+                self.assertTrue(Supplier.objects.filter(name=name).exists())
+                self.assertTrue(any(f"Fournisseur {name} créé" in message for message in said), said)
 
     def test_the_same_file_twice_is_said_so(self):
         supplier = make_supplier(code="CUISIPRO", name="Cuisipro", parser_key="")

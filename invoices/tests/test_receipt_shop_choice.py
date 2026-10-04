@@ -12,6 +12,7 @@ OCR never runs here: `receipts.recognise` is replaced.
 
 import os
 import shutil
+from contextlib import nullcontext
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from unittest import mock
@@ -248,6 +249,27 @@ class ChooseShopInBatchTests(TestCase):
         self.assertFalse(any("photo illisible" in message for message in messages_of(response)))
         self.assertNotIn("photo illisible", self.batch.log)
         self.assertIn("photo illisible", "\n".join(logged.output))
+
+    def test_a_new_shop_made_for_a_file_that_fails_is_said(self):
+        """Made before the file is read, it stays: said, not left to be
+        found in « Enseignes et fournisseurs »."""
+        outcomes = (RuntimeError("photo illisible"), DuplicateInvoiceError("Déjà dans MarginMate."))
+        for number, outcome in enumerate(outcomes):
+            with self.subTest(outcome=type(outcome).__name__):
+                name = f"Épicerie Exemple {number}"
+                with (
+                    mock.patch("invoices.receipt_batches.import_document", side_effect=outcome),
+                    self.assertLogs("invoices.receipt_batches", "ERROR")
+                    if isinstance(outcome, RuntimeError)
+                    else nullcontext(),
+                ):
+                    response = self.client.post(self.url, {"supplier": "new", "new_name": name})
+                self.assertRedirects(response, self.page)
+                self.assertTrue(Supplier.objects.filter(name=name).exists())
+                self.assertTrue(
+                    any(f"Enseigne {name} créée" in message for message in messages_of(response)),
+                    messages_of(response),
+                )
 
     def test_a_file_that_blows_up_while_being_described_is_said_on_the_page(self):
         """`_record_import` inside the try here too, as in `_read_file`: a

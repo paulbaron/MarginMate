@@ -224,6 +224,11 @@ def upload_invoice(request):
         return redirect("invoices:receipt_review", pk=invoice.pk)
     finally:
         os.unlink(tmp_path)
+    if created:
+        # Made before the file was read, it stays: an empty supplier is a
+        # legitimate one (deleted from its page if need be), but not a
+        # silent one - the retry under the same name says « existe déjà ».
+        messages.info(request, f"Fournisseur {supplier.name} créé, sans ce document : choisissez-le dans la liste.")
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
 
 
@@ -932,9 +937,11 @@ def receipt_batch_assign(request, pk, index):
             entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
         messages.error(request, str(exc))
+        _say_shop_made_anyway(request, supplier, created)
         return redirect("invoices:receipt_batch", pk=batch.pk)
     if entry["status"] != "ok":
         messages.warning(request, entry["message"])
+        _say_shop_made_anyway(request, supplier, created)
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
     _say_supplier_changes(request, changes)
@@ -942,6 +949,13 @@ def receipt_batch_assign(request, pk, index):
         _say_new_shop(request, supplier)
     # Checked within its import - the batch may still be running meanwhile.
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
+
+
+def _say_shop_made_anyway(request, supplier, created: bool) -> None:
+    """A new shop named for a file that was not filed under it: made before
+    the file was read, it stays (see upload_invoice), and is said."""
+    if created:
+        messages.info(request, f"Enseigne {supplier.name} créée, sans ce fichier : choisissez-la dans la liste.")
 
 
 def _say_new_shop(request, supplier) -> None:
