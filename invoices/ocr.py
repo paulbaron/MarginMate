@@ -57,13 +57,13 @@ nothing newly wrong.
 from __future__ import annotations
 
 import math
+import os
 import re
 import statistics
 import threading
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import cast
 
 # Two boxes are on one line when, measured along the local slope of the
 # text, they share at least this fraction of the smaller one's height.
@@ -307,6 +307,20 @@ MAX_INFLATE_TOTAL = 64 * 1024 * 1024
 #: total for what PDFium will draw, weighed before it opens the file
 #: (`_decode_drawn`): about 20 bytes of page objects a byte of path.
 MAX_RUN_TOTAL = 8 * 1024 * 1024
+#: What drawing one PDF's pages may cost: PDFium runs in a process of its
+#: own (`page_images`, invoices/pdfium_worker.py), which may commit
+#: RENDER_MEMORY (a Job Object on Windows) and run RENDER_SECONDS, and whose
+#: pages may weigh RENDER_OUTPUT_BYTES once written - uncompressed while
+#: they weigh RENDER_RAW_BYTES together (an A4 page at 300 dpi is 25 MB, and
+#: PNG took 0,2 s to write it and 0,1 s to read it back), PNG after. One
+#: such process at a time (PDFIUM_LOCK). Of 1 374 real invoices, the
+#: heaviest took 133 MB, the slowest 1,7 s, and the longest wrote 131 MB of
+#: pages (six A4 pages, the last in PNG); a 120 KB tiling pattern took
+#: 1,3 GB and 26 s, an ink annotation of a million points 50 s.
+RENDER_MEMORY = 1536 * 1024 * 1024
+RENDER_SECONDS = 60
+RENDER_OUTPUT_BYTES = 512 * 1024 * 1024
+RENDER_RAW_BYTES = 128 * 1024 * 1024
 
 TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
 PAGE_TOO_LARGE = (
@@ -317,6 +331,9 @@ TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caract�
 TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
 TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
 TOO_MANY_CODES = "Document trop chargé pour être lu : ses polices déclarent plus de {limit} caractères."
+TOO_HEAVY_TO_DRAW = "Document trop lourd à afficher : plus de {weight} de mémoire pour dessiner ses pages."
+TOO_SLOW_TO_DRAW = "Document trop lourd à afficher : plus de {seconds} secondes pour dessiner ses pages."
+TOO_MUCH_DRAWN = "Document trop lourd à afficher : ses pages dessinées pèsent plus de {weight}."
 
 
 class DocumentTooBig(ValueError):
@@ -324,13 +341,12 @@ class DocumentTooBig(ValueError):
     person: its words are said on the file's line."""
 
 
-#: PDFium is not thread-safe (pypdfium2 says so: one thread at a time in a
-#: process), and `page_images` runs in a folder import's thread
-#: (receipt_batches, which takes no OCR_LOCK), a gather's, and the requests'
-#: - all in the one process serving every bar. Every call into it holds this
-#: lock; a page handed to the caller holds nothing. Re-entrant: a generator
-#: left half read closes its document whenever it is collected, possibly in
-#: a thread already inside the lock.
+#: One process drawing a PDF at a time, for the whole server (`page_images`
+#: holds it while its PDFium process runs): it runs in a folder import's
+#: thread (receipt_batches, which takes no OCR_LOCK), a gather's, and the
+#: requests', and eight of them at RENDER_MEMORY each would be 12 GB. A page
+#: handed to the caller holds nothing. Re-entrant, as when PDFium ran in
+#: this process: a thread inside it may be the one collecting a generator.
 PDFIUM_LOCK = threading.RLock()
 
 
@@ -340,6 +356,10 @@ def _centimetres(points: float) -> str:
 
 def _millions(pixels: int) -> str:
     return f"{pixels / 1_000_000:.0f}"
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1024 / 1024:.0f} Mo"
 
 
 def _check_pixels(width: int, height: int, number: int) -> None:
@@ -362,29 +382,6 @@ def render_scale(width: float, height: float) -> float | None:
     return scale if scale >= MIN_RENDER_SCALE else None
 
 
-def _plan_pdf(document, pdfium_raw) -> list:
-    """(page, the one image to take as it is or None, the render scale) for
-    every page - every page weighed before the first is read."""
-    if len(document) > MAX_PAGES:
-        raise DocumentTooBig(TOO_MANY_PAGES.format(pages=len(document), limit=MAX_PAGES))
-    plan = []
-    for number, page in enumerate(document, start=1):
-        width, height = page.get_size()
-        images = list(page.get_objects(filter=(pdfium_raw.FPDF_PAGEOBJ_IMAGE,)))
-        for image in images:
-            _check_pixels(*cast("tuple[int, int]", image.get_px_size()), number)
-        if len(images) == 1 and covers_page(images[0].get_bounds(), width, height):
-            plan.append((page, images[0], None))
-            continue
-        scale = render_scale(width, height)
-        if scale is None:
-            raise DocumentTooBig(
-                PAGE_TOO_LARGE.format(number=number, width=_centimetres(width), height=_centimetres(height))
-            )
-        plan.append((page, None, scale))
-    return plan
-
-
 def page_images(path: str):
     """Yield one PIL image per page.
 
@@ -400,6 +397,9 @@ def page_images(path: str):
     document whose reading would cost more than MAX_PAGES pages,
     IMAGE_MAX_PIXELS for a photo, or RENDER_MAX_PIXELS for a rendered page
     at MIN_RENDER_SCALE (a bigger page is rendered at a lower resolution).
+
+    A PDF is drawn by PDFium in a process of its own (`_drawn_pages`), never
+    in this one; refused here first by its weighing (`_weigh_contents`).
     """
     if path.lower().endswith(IMAGE_EXTENSIONS):
         from PIL import Image, ImageOps, ImageSequence
@@ -416,29 +416,76 @@ def page_images(path: str):
         return
 
     _weigh_contents(path)
-    import pypdfium2 as pdfium
-    import pypdfium2.raw as pdfium_raw
+    yield from _drawn_pages(path)
 
-    # One call into PDFium at a time in the process (PDFIUM_LOCK), and none
-    # held while the caller works on a page: its OCR takes seconds.
-    with PDFIUM_LOCK:
-        document = pdfium.PdfDocument(path)
-        try:
-            plan = _plan_pdf(document, pdfium_raw)
-        except BaseException:
-            document.close()
-            raise
+
+def _drawn_pages(path: str):
+    """The pages of the PDF at `path` as PDFium draws them - in a process of
+    its own (invoices/pdfium_worker.py), never in this one, which serves
+    every bar: what a PDF can make PDFium allocate or compute is not bounded
+    by anything weighed beforehand (security review: a tiling pattern, a
+    Type3 glyph, a soft mask of a few KB each took 700 MB to 1,3 GB and 20 s,
+    an ink annotation 53 s). Bounded by the operating system instead
+    (`pdfium_sandbox.run`): RENDER_MEMORY, RENDER_SECONDS, and its pages
+    RENDER_OUTPUT_BYTES once written - past which, DocumentTooBig « trop
+    lourd à afficher ». One such process at a time (PDFIUM_LOCK), held while
+    it draws every page and never while the caller works on one: its OCR
+    takes seconds. The pages come back losslessly, the very pixels
+    PDFium gave, one at a time from a private folder removed whatever
+    happens. What PDFium cannot open is UnreadablePdf, said « PDF
+    illisible » as its own error was. About 0,4 s more a document than
+    PDFium in this process (starting Python and pypdfium2: 0,3 s)."""
+    import shutil
+    import tempfile
+
+    from common import UnreadablePdf, weight
+    from invoices import pdfium_sandbox
+    from invoices.pdfium_worker import LIMITS
+
+    folder = tempfile.mkdtemp(prefix="pdfium-")
     try:
-        for page, image, scale in plan:
-            with PDFIUM_LOCK:
-                if image is not None:
-                    picture = image.get_bitmap().to_pil().convert("RGB")
-                else:
-                    picture = page.render(scale=scale).to_pil().convert("RGB")
-            yield picture
-    finally:
+        limits = {name: globals()[name] for name in LIMITS}
         with PDFIUM_LOCK:
-            document.close()
+            outcome = pdfium_sandbox.run(os.path.abspath(path), folder, limits, RENDER_MEMORY, RENDER_SECONDS)
+        result = outcome.result or {}
+        if outcome.expired:
+            raise DocumentTooBig(TOO_SLOW_TO_DRAW.format(seconds=RENDER_SECONDS))
+        if outcome.memory or result.get("memory"):
+            raise DocumentTooBig(TOO_HEAVY_TO_DRAW.format(weight=weight(RENDER_MEMORY)))
+        if isinstance(result.get("refused"), str):
+            raise DocumentTooBig(result["refused"][:SAID_CHARS])
+        if isinstance(result.get("unreadable"), str):
+            raise UnreadablePdf(f"PDFium : {result['unreadable'][:SAID_CHARS]}")
+        pages = result.get("pages")
+        if not isinstance(pages, int) or not 0 <= pages <= MAX_PAGES:
+            if outcome.capped and os.name != "nt":
+                # Killed by its rlimit, it could not say so.
+                raise DocumentTooBig(TOO_HEAVY_TO_DRAW.format(weight=weight(RENDER_MEMORY)))
+            raise UnreadablePdf(f"PDFium s'est arrêté sans réponse (code {outcome.returncode}).")
+        for number in range(1, pages + 1):
+            yield _drawn_page(os.path.join(folder, str(number)))
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+#: What is said of a refusal from PDFium's process at most: its sentence.
+SAID_CHARS = 300
+
+
+def _drawn_page(path: str):
+    """A page PDFium's process wrote (uncompressed, or PNG): within the caps,
+    read whole."""
+    from PIL import Image
+
+    from common import UnreadablePdf
+
+    with open(path, "rb") as handle:
+        picture = Image.open(handle, formats=("PPM", "PNG"))
+        width, height = picture.size
+        if width * height > max(IMAGE_MAX_PIXELS, RENDER_MAX_PIXELS):
+            raise UnreadablePdf(f"PDFium : une page de {width} × {height} pixels.")
+        picture.load()
+    return picture if picture.mode == "RGB" else picture.convert("RGB")
 
 
 #: How much of its page an embedded image has to cover to be the page - a

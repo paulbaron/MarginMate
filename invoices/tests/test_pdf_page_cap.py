@@ -554,7 +554,7 @@ class InflatedContentTests(TestCase):
                 mock.patch.object(ocr, "MAX_INFLATE_TOTAL", 6_000),
                 mock.patch.object(pdfplumber.page.Page, "extract_words", never("extract_words")),
                 mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")),
-                mock.patch("pypdfium2.PdfDocument", never("PDFium")),
+                mock.patch("invoices.pdfium_sandbox.run", never("PDFium")),
             ):
                 with self.assertRaises(ocr.DocumentTooBig) as refused:
                     reader(self.path)
@@ -686,7 +686,7 @@ class DrawnContentTests(TestCase):
             "ocr_pdf": ocr.ocr_pdf,
         }
         for name, reader in readers.items():
-            with self.subTest(reader=name), mock.patch("pypdfium2.PdfDocument", never("PDFium")):
+            with self.subTest(reader=name), mock.patch("invoices.pdfium_sandbox.run", never("PDFium")):
                 with self.assertRaises(ocr.DocumentTooBig) as refused:
                     reader(self.path)
                 self.assertEqual(str(refused.exception), said)
