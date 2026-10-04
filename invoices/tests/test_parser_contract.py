@@ -90,6 +90,19 @@ class ParserContractTests(SimpleTestCase):
             with self.subTest(parser=key):
                 parser.parse_pages([junk], source_name="junk.pdf")
 
+    def test_every_reader_a_source_can_choose_has_a_name(self):
+        """The source form's « Lecteur » lists them by `label`, a name a
+        person recognises - never the registry key."""
+        from invoices.parsers import layout_readers, reader_label
+
+        self.assertTrue(layout_readers())
+        for key, parser in layout_readers().items():
+            with self.subTest(parser=key):
+                self.assertNotIsInstance(parser, (ReceiptParser, LLMFallbackParser))
+                self.assertTrue(parser.label)
+                self.assertEqual(reader_label(key), parser.label)
+        self.assertEqual(reader_label("INCONNU"), "INCONNU")
+
     def test_registry_keys_match_supplier_codes(self):
         for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):

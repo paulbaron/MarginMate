@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from invoices.forms import ManualInvoiceLineFormSet
-from invoices.models import Invoice
+from invoices.models import Invoice, Supplier
 from tests.factories import make_invoice, make_supplier
 
 
@@ -131,6 +131,72 @@ class ManualEntryInsteadOfAiTests(TestCase):
         labels = [label for _value, label in InvoiceTypeForm().fields["parser_key"].choices]
         self.assertIn("— Lecteur générique —", labels)
         self.assertFalse([label for label in labels if "IA" in label])
+
+
+class SourceReaderChoicesTests(TestCase):
+    """A source's « Lecteur »: the readers of a PDF layout, by their French
+    names, sorted - never the AI reader, nor a till's settings (a till is
+    keyed on its supplier's code, and reading a mailbox's PDF with one shop's
+    till made no sense): every bar saw the original bar's local shops' codes
+    there."""
+
+    def choices(self, form):
+        return form.fields["parser_key"].choices
+
+    def test_the_generic_reader_then_the_layout_readers_by_name(self):
+        from invoices.forms import InvoiceTypeForm
+
+        self.assertEqual(
+            self.choices(InvoiceTypeForm()),
+            [
+                ("", "— Lecteur générique —"),
+                ("CECINA", "Cecina (Vignerons de Cessenon)"),
+                ("METRO", "Metro"),
+                ("UBA", "UBA"),
+            ],
+        )
+
+    def test_a_till_or_the_ai_reader_is_refused(self):
+        from invoices.forms import InvoiceTypeForm
+
+        for key in ("FRANPRIX", "SABBH", "LLM", "XYZ"):
+            with self.subTest(key=key):
+                form = InvoiceTypeForm(
+                    data={
+                        "name": "Source essai",
+                        "supplier": str(Supplier.objects.get(code="METRO").pk),
+                        "source_kind": "EMAIL",
+                        "parser_key": key,
+                        "is_active": "on",
+                    }
+                )
+                self.assertFalse(form.is_valid())
+                self.assertIn("parser_key", form.errors)
+
+    def test_a_saved_legacy_key_stays_valid(self):
+        """A source saved with a till's key before keeps it: offered, under
+        its name, and saved again as it is."""
+        from invoices.forms import InvoiceTypeForm
+        from invoices.models import InvoiceType
+
+        franprix = Supplier.objects.get(code="FRANPRIX")
+        source = InvoiceType.objects.create(name="Franprix - PDF", supplier=franprix, parser_key="FRANPRIX")
+        self.assertIn(("FRANPRIX", "Franprix"), self.choices(InvoiceTypeForm(instance=source)))
+        source.parser_key = "PLUS_LA"
+        source.save()
+        self.assertIn(("PLUS_LA", "PLUS_LA"), self.choices(InvoiceTypeForm(instance=source)))
+        form = InvoiceTypeForm(
+            instance=source,
+            data={
+                "name": "Franprix - PDF",
+                "supplier": str(franprix.pk),
+                "source_kind": "EMAIL",
+                "parser_key": "PLUS_LA",
+                "is_active": "on",
+            },
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["parser_key"], "PLUS_LA")
 
 
 class InvoiceLineEditingTests(TestCase):

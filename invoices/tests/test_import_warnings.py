@@ -61,6 +61,18 @@ class ImportWarningTests(TestCase):
         self.assertIn("n'a trouvé aucune ligne", invoice.error_message)
         self.assertEqual(invoice.status, Invoice.Status.NEEDS_REVIEW)
 
+    def test_it_is_named_by_its_label_not_its_registry_key(self):
+        """« Le parseur CECINA » was the code's word and key: the page calls
+        it a « lecteur », by its name. A reader without a label is named by
+        its key."""
+        self.assertIn("Le lecteur GROSSISTE n'a trouvé aucune ligne", self.import_with(parsed()).error_message)
+        Invoice.objects.all().delete()
+        reader = FakeParser(parsed())
+        reader.label = "Grossiste Exemple (Halles)"
+        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {"GROSSISTE": reader}):
+            invoice = parse_and_import(self.path, self.supplier)
+        self.assertIn("Le lecteur Grossiste Exemple (Halles) n'a trouvé aucune ligne", invoice.error_message)
+
     def test_a_parser_warning_is_kept_and_holds_the_invoice_for_review(self):
         """Even when every product is known and the invoice would otherwise
         be complete."""

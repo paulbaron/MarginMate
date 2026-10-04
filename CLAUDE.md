@@ -2210,6 +2210,17 @@ the review screen, which also takes the ticket's date and total (a blank
 total keeps the one read: it is a field nobody filled in, not a total
 removed).
 
+**A source's « Lecteur »** (`InvoiceTypeForm`, `parsers.reader_choices`)
+lists « — Lecteur générique — », then the readers of a PDF layout by their
+`label`, sorted (Cecina (Vignerons de Cessenon), Metro, UBA:
+`parsers.layout_readers`) - never a till (keyed on its supplier's code, its
+settings one shop's tickets: every bar saw the original bar's local shops'
+codes there) nor the AI reader. A key saved before (a till's, one since
+removed) stays offered under its name, so no source becomes invalid. The
+sources table and an import's « Le lecteur X n'a trouvé aucune ligne » name
+a reader the same way (`parsers.reader_label`, `InvoiceType.reader_name`); a
+new reader needs a `label` (`test_parser_contract`).
+
 A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
 of the day: it comes round, so it is stored with the date, or a later ticket
 was refused as a duplicate. **The digits are counted without the zeros a till

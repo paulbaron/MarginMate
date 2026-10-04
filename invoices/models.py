@@ -165,6 +165,14 @@ class InvoiceType(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def reader_name(self) -> str:
+        """Its « Lecteur » on screen: the generic reader, or a reader by its
+        name (parsers.reader_label), as the source form lists them."""
+        from .parsers import reader_label
+
+        return reader_label(self.parser_key) if self.parser_key else "Lecteur générique"
+
 
 class EmailInvoiceSource(models.Model):
     """How to recognize an InvoiceType's emails in the shared invoice

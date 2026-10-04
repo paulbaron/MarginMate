@@ -11,7 +11,7 @@ from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands
 
 from . import integrations
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
-from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
+from .parsers import LLM_PARSER_KEY, reader_choices
 from .rendering import PLAIN_INPUTS
 
 
@@ -559,11 +559,10 @@ class InvoiceTypeForm(forms.ModelForm):
         self.fields["source_kind"].choices = [(kind.value, CHANNELS[kind]) for kind in InvoiceType.SourceKind]
         # No dedicated parser no longer means typing it in: the one reader
         # reads any document's table, totals and VAT (parsers/generic_receipt).
-        choices = [("", "— Lecteur générique —")] + [
-            (key, key) for key in sorted(PARSER_REGISTRY) if key != LLM_PARSER_KEY
-        ]
+        # The layout readers by name, never a till's settings nor the AI
+        # reader; a key saved before stays valid (parsers.reader_choices).
         self.fields["parser_key"] = forms.ChoiceField(
-            choices=choices,
+            choices=reader_choices(self.instance.parser_key or ""),
             required=False,
             label="Lecteur",
             help_text=(

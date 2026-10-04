@@ -217,6 +217,18 @@ class SourcesTabTests(TestCase):
         self.assertNotContains(response, "Fournisseurs avec leur propre lecteur")
         self.assertNotContains(response, reverse("invoices:supplier_create"))
 
+    def test_its_reader_is_named_as_the_source_form_names_it(self):
+        """By its label, not the registry key (« CECINA »); a key no reader
+        answers to any more is shown as saved."""
+        shop = make_supplier(code="CAVE_X", name="Cave Exemple", parser_key="")
+        make_invoice_type(supplier=shop, name="Cave - générique")
+        make_invoice_type(supplier=shop, name="Cave - Cecina", parser_key="CECINA")
+        make_invoice_type(supplier=shop, name="Cave - ancien", parser_key="ANCIEN_LECTEUR")
+        response = self.client.get(SOURCES)
+        for reader in ("Lecteur générique", "Cecina (Vignerons de Cessenon)", "ANCIEN_LECTEUR"):
+            with self.subTest(reader=reader):
+                self.assertContains(response, f'<td class="muted">{reader}</td>', html=True)
+
     def test_an_old_bookmark_of_its_suppliers_lands_on_the_way_there(self):
         """/invoices/types/#fournisseurs: a fragment never reaches the
         server, so nothing can redirect it - the anchor still exists."""

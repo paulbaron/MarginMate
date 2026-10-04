@@ -206,6 +206,9 @@ class InvoiceParser:
     """
 
     supplier_code: str = ""
+    # The reader's name on screen (a source's « Lecteur », an import's
+    # message): French, a name a person recognises - never the registry key.
+    label: str = ""
     # extract_tables() is comparatively expensive, so only the parsers that
     # actually read tables pay for it.
     needs_tables: bool = False

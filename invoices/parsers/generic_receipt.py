@@ -721,6 +721,7 @@ class GenericReceiptParser(ReceiptParser):
     def __init__(self, shop: TicketShop):
         self.shop = shop
         self.supplier_code = shop.supplier_code
+        self.label = shop.label
         self.header_patterns = shop.header_patterns
 
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:
