@@ -600,6 +600,24 @@ handlers render them.
   pdfplumber one (it runs first, on every PDF). A bon (`returnables.
   reading.pdf_text`) is counted the same way, to its own 5 pages, before
   pdfplumber opens it. **Never `len(pdf.pages)` on a file from outside.**
+- **What pdfminer's object parser reads is bounded**
+  (`returnables.reading.bound_pdf_parsing`, process-wide like the decoders,
+  glyph and cmap bounds, installed by returnables' ready()). It counts
+  PDFParser and PDFStreamParser only - content streams have the run budget,
+  font maps `MAX_CMAP_CODES`: `MAX_PARSED_TOKENS` (100 000) tokens and
+  comments a reading (a document, outside `inflate_budget`: the page walk,
+  `embedded_xml`), `MAX_TOKEN_BYTES` (1 MB) read for one token (pdfminer
+  copies a long token again at every 4 KB read), and an object stream
+  decoding past `MAX_OBJECT_STREAM_BYTES` (1 MB) refused before it is
+  parsed. Past one: `ParseLimit`, an InflateLimit - a bon is « trop long »,
+  Achats `DocumentTooBig(TOO_BIG_OBJECTS)`. A handler turning an
+  InflateLimit into « trop lourd une fois décompressé » asks
+  `reading.parse_refused` first (`_weigh_contents`, `_decode_drawn`,
+  `bounded_reading`, `_refuse_past_the_cap`). A 55 KB file whose object
+  stream held an InkList of 4 million points took 24 s and 1,1 GB in
+  `check_page_count` alone; it is refused at once. Real invoices: 8 042
+  tokens a reading, an 11 KB object stream at most, and the five readers
+  answer byte for byte as before on all 1 374 (audit 04/10/2026).
 - **An Achats PDF is weighed before anything reads or renders it**
   (`ocr._weigh_contents`, from `check_page_count`, `pdf_pages` and
   `page_images`): its content streams through pdfminer's bounded decoders,
@@ -637,8 +655,16 @@ handlers render them.
   clock - **never a fallback to PDFium in-process**. One child at a time
   (`ocr.PDFIUM_LOCK`, re-entrant, held while it runs, never while the
   caller OCRs a page): a folder's thread reads its files without
-  `receipts.OCR_LOCK` beside the requests and the gathers. The pages come
-  back through a temporary folder of its own, removed whatever happens.
+  `receipts.OCR_LOCK` beside the requests and the gathers. A document holds
+  the lock `RENDER_SECONDS` at most and waits for it `PDFIUM_WAIT_SECONDS`
+  (2 x RENDER_SECONDS) at most, then is `DocumentTooBig(PDFIUM_BUSY)`
+  (« réessayez dans un instant », on the file's line like any refusal): an
+  RLock serves its waiters in no order. The pages come back through a
+  folder of its own, `TEMP\marginmate-pdfium\pdfium-*`, removed whatever
+  happens to the render; one left by a server killed mid-render is swept
+  at start by every process (`ocr.sweep_drawn_folders` from
+  `InvoicesConfig.ready`, `serve` included): only that parent's pdfium-*
+  folders older than `DRAWN_FOLDER_SECONDS` (1 h), nothing outside it.
   What PDFium cannot open, or a child gone silent, is `common.UnreadablePdf`
   (« PDF illisible », like PdfiumError). A few KB of tiling pattern, Type3
   glyph, soft mask or ink annotation took 0,7-1,3 GB and 20-50 s of PDFium:
@@ -646,15 +672,10 @@ handlers render them.
   pixels byte for byte; about 0,4 s more a document. Tests patch the caps
   down (40 MB, 0,05 s).
 - **Known and left** (the PDF bounds, review of 04/10/2026):
-  - pdfminer still parses whole objects inside the server's process; the
-    reviewer's minor point about object size is not addressed. The
-    review's 14 KB ink file costs 6,9 s of CPU and 333 MB in
-    `_weigh_contents`: resolving the annotation parses its InkList and its
-    object stream, and any object in that stream (the page itself, say)
-    makes pdfminer parse the whole stream, so `check_page_count` is exposed
-    too. Only the 64 MB inflate cap on the object stream bounds it, about 9
-    times the 7 MB case. It needs a finding of its own - a cap on
-    pdfminer's `PSBaseParser` tokens per object, for instance.
+  - pdfminer's parse of a top-level object (not in an object stream) is
+    bounded per token (`MAX_TOKEN_BYTES`) and in tokens, but its linear
+    cost - pdfminer decodes a hex string pair by pair - only by the 25 MB
+    upload cap: about 10 s of CPU for 25 MB of hex, with little memory.
   - Under the caps, a hostile PDF can still hold `PDFIUM_LOCK` for up to
     60 s and make one child commit up to 1,5 GB, which delays every bar's
     previews and OCR. The worst real document needs 1,7 s and 133 MB, so
