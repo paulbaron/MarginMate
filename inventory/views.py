@@ -397,7 +397,9 @@ def catalogue_context(request) -> dict:
         # handing it straight over would silently drop that day's sales. So
         # the day before goes in its place.
         sold = quantities_sold(
-            window.start - timedelta(days=1) if window.start else None,
+            # The calendar's first day has no day before it: from the
+            # beginning is the same sales.
+            window.start - timedelta(days=1) if window.start and window.start > date.min else None,
             window.end,
             unit_costs=unit_costs,
             available=available,

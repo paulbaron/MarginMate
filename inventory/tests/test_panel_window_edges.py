@@ -308,3 +308,15 @@ class WhatTheListPrintsIsWhatThePanelsAnswerTests(PurchaseWindowTestCase):
         self.assertContains(panel, "10/01/2026")
         self.assertContains(panel, "10/02/2026")
         self.assertNotContains(panel, "tout l'historique")
+
+
+class CalendarEdgesTests(ArticlePanelTestCase):
+    """« du » on the calendar's first day: the sales are read from the day
+    before it, and there is none - an OverflowError on the Stock page and
+    « Liste » rather than the whole history."""
+
+    def test_the_first_day_there_is_opens_the_whole_history(self):
+        for name in ("inventory:stock_list", "inventory:stock_catalogue"):
+            with self.subTest(page=name):
+                response = self.client.get(reverse(name), {"du": "0001-01-01"})
+                self.assertEqual(response.status_code, 200)

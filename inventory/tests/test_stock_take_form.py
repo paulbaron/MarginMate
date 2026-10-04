@@ -362,3 +362,15 @@ class StockTakePayloadTests(TestCase):
         response = self.post(self.payload(rows, initial_forms=3), self.edit_url(take))
         self.assertEqual(response.status_code, 302)
         self.assertTrue(take.lines.filter(product=self.bottles[2], counted_quantity=4).exists())
+
+    # -- the date ---------------------------------------------------------
+
+    def test_a_date_off_the_calendar_is_refused(self):
+        """9999-12-31 was saved, and « Combler les écarts » then read the day
+        after it: a 500 at every visit until the date was edited."""
+        for taken_at in ("9999-12-31 23:00:00", "1999-12-31 12:00:00"):
+            with self.subTest(taken_at=taken_at):
+                response = self.post(self.payload({0: self.row(self.bottles[0])}, taken_at=taken_at))
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Date hors limites")
+                self.assertEqual(StockTake.objects.count(), 0)

@@ -474,7 +474,13 @@ def gaps_since(take: StockTake, end: date | None = None) -> GapReport:
     # The first day a sale puts its recipe on the menu: the day after the
     # take, or the months chosen back from `end` - before the take or after.
     sold_within_months = GapFillSetting.current().sold_within_months
-    menu_since = months_before(end, sold_within_months) if sold_within_months else start + timedelta(days=1)
+    # A take on the calendar's last day (saved before its form refused it)
+    # has no day after it: the page opened on an OverflowError, every visit.
+    menu_since = (
+        months_before(end, sold_within_months)
+        if sold_within_months
+        else (start + timedelta(days=1) if start < date.max else start)
+    )
 
     opening = counts_by_stock_type(take)
     # The latest delivery of the window comes out of the same scan.

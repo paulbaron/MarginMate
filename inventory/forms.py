@@ -1,5 +1,8 @@
+from datetime import date
+
 from django import forms
 from django.forms import BaseInlineFormSet, inlineformset_factory
+from django.utils import timezone
 
 from .models import Product, StockTake, StockTakeLine, StockType, UnitChoices
 from .services import first_purchase_dates, product_counting_ratios
@@ -205,12 +208,33 @@ def stock_take_entry_lookup() -> dict[str, dict]:
     return entries
 
 
+#: The oldest date a count may carry: the invoices' own (2000).
+EARLIEST_STOCK_TAKE_DATE = date(2000, 1, 1)
+
+
 class StockTakeForm(forms.ModelForm):
     class Meta:
         model = StockTake
         fields = ["taken_at", "note"]
         labels = {"taken_at": "Date", "note": "Note"}
         widgets = {"taken_at": forms.DateTimeInput(attrs={"type": "datetime-local"})}
+
+    def clean_taken_at(self):
+        """Between 2000 and the end of next year. 9999-12-31 was saved, and
+        « Combler les écarts » then read the day after it."""
+        taken_at = self.cleaned_data.get("taken_at")
+        if taken_at is None:
+            return taken_at
+        last = date(timezone.localdate().year + 1, 12, 31)
+        try:
+            day = timezone.localtime(taken_at).date()
+        except (OverflowError, ValueError):
+            day = None
+        if day is None or not EARLIEST_STOCK_TAKE_DATE <= day <= last:
+            raise forms.ValidationError(
+                f"Date hors limites : entre le {EARLIEST_STOCK_TAKE_DATE:%d/%m/%Y} et le {last:%d/%m/%Y}."
+            )
+        return taken_at
 
 
 #: A second row naming what a row above already counts. Not added up for the
