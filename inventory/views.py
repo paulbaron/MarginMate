@@ -2089,6 +2089,23 @@ def _stock_take_form_view(request, stock_take):
                 # again in one save met the line still there (one per product).
                 for obj in formset.deleted_objects:
                     obj.delete()
+                # So are the saved lines moved to another product or article:
+                # one put onto the product the next still held (a shift, a
+                # swap) met it there. Each is written again under its own pk
+                # (save() inserts what its UPDATE no longer finds), its
+                # sources rebuilt with it.
+                stored = {
+                    pk: source
+                    for pk, *source in StockTakeLine.objects.filter(
+                        pk__in=[line.pk for line in lines if line.pk]
+                    ).values_list("pk", "product_id", "stock_type_id")
+                }
+                moved = [
+                    line.pk
+                    for line in lines
+                    if line.pk and stored.get(line.pk) != [line.product_id, line.stock_type_id]
+                ]
+                StockTakeLine.objects.filter(pk__in=moved).delete()
                 for line in lines:
                     _save_stock_take_line(line)
             messages.success(request, "Inventaire enregistré.")

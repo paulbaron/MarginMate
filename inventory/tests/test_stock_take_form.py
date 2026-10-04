@@ -345,6 +345,47 @@ class StockTakePayloadTests(TestCase):
         self.assertNotEqual(line.pk, lines[1].pk)
         self.assertEqual(line.counted_quantity, 5)
 
+    def test_saved_rows_moved_onto_each_others_product_in_one_save(self):
+        """Two misread rows put right at once: the first onto the product the
+        second held (a shift), or the two exchanged (a swap). No row on the
+        page repeats a product, but the lines were saved one at a time, and
+        the first met the second still holding it: a 500, the edit lost."""
+        for name, moved in (("shift", {0: 1, 1: 3}), ("swap", {0: 1, 1: 0})):
+            with self.subTest(name):
+                take, lines = self.existing_take()
+                rows = {index: self.row(self.bottles[index], id=line.pk) for index, line in enumerate(lines)}
+                for index, bottle in moved.items():
+                    rows[index] = self.row(self.bottles[bottle], quantity=str(index + 5), id=lines[index].pk)
+
+                response = self.post(self.payload(rows, initial_forms=3), self.edit_url(take))
+                self.assertEqual(response.status_code, 302)
+                saved = {line.pk: (line.product, line.counted_quantity) for line in take.lines.all()}
+                expected = {line.pk: (self.bottles[index], 2) for index, line in enumerate(lines)}
+                expected.update({lines[index].pk: (self.bottles[bottle], index + 5) for index, bottle in moved.items()})
+                self.assertEqual(saved, expected)
+                take.delete()
+
+    def test_saved_article_rows_swapped_in_one_save(self):
+        take = make_stock_take(taken_at=datetime(2026, 3, 31, 12, 0))
+        articles = (self.vodka, self.gin)
+        lines = [
+            make_stock_take_line(stock_take=take, stock_type=article, counted_quantity="2", unit=UnitChoices.LITRE)
+            for article in articles
+        ]
+        rows = {
+            index: {
+                "id": line.pk,
+                "entry_search": stock_type_entry_name(articles[1 - index]),
+                "counted_quantity": str(index + 5),
+                "unit": UnitChoices.LITRE,
+            }
+            for index, line in enumerate(lines)
+        }
+        response = self.post(self.payload(rows, initial_forms=2), self.edit_url(take))
+        self.assertEqual(response.status_code, 302)
+        saved = {line.pk: (line.stock_type, line.counted_quantity) for line in take.lines.all()}
+        self.assertEqual(saved, {lines[0].pk: (self.gin, 5), lines[1].pk: (self.vodka, 6)})
+
     def test_a_negative_count_is_refused(self):
         rows = {0: self.row(self.bottles[0], quantity="-3")}
         response = self.post(self.payload(rows))
