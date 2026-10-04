@@ -887,6 +887,28 @@ redemande votre mot de passe.
 Cette version ajoute deux migrations : `deploy.cmd` les applique lui-même (étape `migrate_tenants`,
 après la sauvegarde).
 
+## 14. Les autres bars
+
+Un bar invité dans son propre espace n'a plus seulement l'import à la main :
+
+- **Ses propres comptes**, saisis par son patron sur sa page **Identifiants** : sa boîte mail des
+  factures, son compte L'Addition et sa clé d'analyse IA (facturée sur son compte Anthropic). Il ne
+  voit jamais les comptes de votre `.env`, et ses récupérations ne s'en servent jamais.
+- **Restent à votre espace seul** : Metro (toutes les connexions partiraient de l'adresse IP de
+  votre box, que le pare-feu de Metro a déjà bloquée) et les espaces clients des fournisseurs (le
+  navigateur du serveur irait sur votre réseau domestique). Ses factures Metro en PDF, déposées à
+  la main, sont lues comme chez vous.
+- **Une autre caisse** : Recettes & ventes → Ventes → « Importer un fichier de la caisse », après
+  avoir décrit les colonnes de son export sur « Formats des fichiers de caisse ».
+- **Une autre banque** : ses relevés en CSV, OFX ou CAMT.053 ; un nouvel espace a déjà les formats
+  OFX et CAMT.053, et « Partir d'un modèle » sur « Format du relevé ».
+- **Ses fournisseurs** : un nouvel espace ne reçoit plus UBA, Sabbh Oriental ni Wing Seng ; votre
+  espace les garde.
+
+Cette version ajoute deux migrations (`bank` 0009 et `recipes` 0018) : `deploy.cmd` les applique
+lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce qui est déjà dans votre espace ne
+change de sens.
+
 ## Limites connues
 
 - **Taille des envois.** Cloudflare, dans son offre gratuite, refuse les envois de plus de 100 Mo,
