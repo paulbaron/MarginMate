@@ -3,9 +3,9 @@
 Real tenants in temporary files (accounts/tests/support.py): a bar's jobs,
 files and caches stay its own, whichever thread or process-global structure
 they pass through. The connectors (invoices/integrations.py): the mailbox
-and the AI reading run in every espace, each with what it typed on its own
-« Identifiants » page - never with the server's .env values, which stand in
-for the platform owner's espace alone -, and Metro and the customer portals
+runs in every espace, each with what it typed on its own « Identifiants »
+page - never with the server's .env values, which stand in for the platform
+owner's espace alone -, and Metro and the customer portals
 stay the owner's, refused at every entry point elsewhere (views, task
 bodies, connectors) with « à configurer ».
 
@@ -17,7 +17,6 @@ download folder would have been taken for the other's. Data invented.
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 import threading
 import time
@@ -41,7 +40,6 @@ from invoices import integrations
 from invoices.deletion import delete_invoice
 from invoices.integrations import TO_CONFIGURE_PLURAL
 from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier, WebsiteInvoiceSource
-from invoices.parsers import LLM_PARSER_KEY
 from invoices.scrapers.generic_email import MAILBOX_MISSING
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
 from invoices.tests.pdf_files import write_pdf
@@ -59,7 +57,6 @@ SERVER_ENV = {
     "INVOICE_IMAP_HOST": "imap.exemple.invalid",
     "LADDITION_EMAIL": "caisse@exemple.invalid",
     "LADDITION_PASSWORD": "secret-caisse-essai",
-    "ANTHROPIC_API_KEY": "cle-serveur-essai",
 }
 
 
@@ -108,8 +105,8 @@ class _Reached(Exception):
 
 class GateTests(TwoTenantsTestCase):
     """Bar Alpha is the platform owner's espace; Bar Beta another bar, which
-    runs the mailbox and the AI reading with its own « Identifiants », and
-    neither Metro nor a portal."""
+    runs the mailbox with its own « Identifiants », and neither Metro nor a
+    portal."""
 
     owner_a = True
 
@@ -252,24 +249,6 @@ class GateTests(TwoTenantsTestCase):
         self.assertContains(page, integrations.PORTALS)
         self.client.force_login(self.user_a)
         self.assertNotContains(self.client.get(reverse("invoices:invoice_type_list")), integrations.PORTALS)
-
-    def test_the_ai_reading_is_offered_and_taken_on_upload_in_every_espace(self):
-        with bound_tenant(self.bar_b):
-            ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-            # Its key, on its « Identifiants » (invoices/tests/test_ai_reading.py
-            # has the page before it is).
-            vault.save({"ANTHROPIC_API_KEY": "cle-beta-essai"})
-        self.client.force_login(self.user_b)
-        page = self.client.get(reverse("invoices:invoice_list"))
-        self.assertContains(page, '<optgroup label="Analyse IA">')
-        upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4 essai", content_type="application/pdf")
-        with (
-            mock.patch("invoices.ocr.check_page_count"),
-            mock.patch("invoices.receipts.route_to_returnables"),
-            mock.patch("invoices.views.parse_and_import", side_effect=_Reached) as parse,
-        ):
-            self.client.post(reverse("invoices:invoice_upload"), {"supplier": str(ai.pk), "source_file": upload})
-        parse.assert_called_once()
 
     def test_metro_is_not_said_to_be_fetched_by_its_own_module_outside_the_owners_tenant(self):
         self.reopen_everything_in_b()
@@ -427,43 +406,12 @@ class GateTests(TwoTenantsTestCase):
         driver_factory.assert_not_called()
         self.assertFalse(folder.exists())
 
-    @override_settings(**SERVER_ENV)
-    def test_the_ai_reading_never_bills_the_server_s_key(self):
-        from invoices.parsers.llm_fallback import LLMFallbackParser
-
-        anthropic = mock.Mock()
-        anthropic.Anthropic.side_effect = _Reached
-        with (
-            mock.patch.dict(sys.modules, {"anthropic": anthropic}),
-            mock.patch("invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI") as extract,
-        ):
-            with bound_tenant(self.bar_b):
-                with self.assertRaises(integrations.AiReadingRefused) as refused:
-                    LLMFallbackParser().parse("facture.pdf")
-            extract.assert_not_called()
-            anthropic.Anthropic.assert_not_called()
-            self.assertEqual(str(refused.exception), integrations.AI_KEY_MISSING)
-            with bound_tenant(self.bar_b):
-                # Its own key, typed on its « Identifiants »: that one is sent.
-                vault.save({"ANTHROPIC_API_KEY": "cle-beta-essai"})
-                with self.assertRaises(_Reached):
-                    LLMFallbackParser().parse("facture.pdf")
-            self.assertEqual(anthropic.Anthropic.call_args.kwargs["api_key"], "cle-beta-essai")
-            with bound_tenant(self.bar_a):
-                with self.assertRaises(_Reached):
-                    LLMFallbackParser().parse("facture.pdf")
-            self.assertEqual(anthropic.Anthropic.call_args.kwargs["api_key"], "cle-serveur-essai")
-
     def test_unbound_every_connector_refuses(self):
-        from invoices.parsers.llm_fallback import LLMFallbackParser
         from invoices.scrapers.generic_email import find_matching_emails
 
         with self.assertRaises(RuntimeError) as mailbox:
             find_matching_emails(START, END, "traiteur", "", "", "")
         self.assertEqual(str(mailbox.exception), integrations.MAILBOX)
-        with self.assertRaises(integrations.AiReadingRefused) as ai:
-            LLMFallbackParser().parse("facture.pdf")
-        self.assertEqual(str(ai.exception), integrations.AI_READING)
 
     def test_refused_agrees_with_a_plural_subject(self):
         self.assertTrue(integrations.PORTALS.endswith("disponibles prochainement dans les réglages de votre espace."))

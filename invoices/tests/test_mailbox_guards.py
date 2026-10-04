@@ -580,8 +580,8 @@ class HostedMailboxTests(TwoTenantsTestCase):
         self.assertTrue(socket.getaddrinfo("127.0.0.1", 80))
 
     def test_the_achats_page_reads_the_store_once(self):
-        """The gather card, the mailbox offered and « Analyse IA » are asked of
-        ONE reading of another bar's « Identifiants » (pages are measured)."""
+        """The gather card and the mailbox offered are asked of ONE reading of
+        another bar's « Identifiants » (pages are measured)."""
         self.type_the_mailbox(self.bar_b)
         self.client.force_login(self.user_b)
         with mock.patch("accounts.vault.load", wraps=vault.load) as load:

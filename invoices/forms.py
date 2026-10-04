@@ -6,12 +6,10 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from accounts.tenancy import integrations_allowed
 from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands, is_id, selection_too_big
 
-from . import integrations
 from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
-from .parsers import LLM_PARSER_KEY, reader_choices
+from .parsers import reader_choices
 from .rendering import PLAIN_INPUTS
 
 
@@ -559,8 +557,8 @@ class InvoiceTypeForm(forms.ModelForm):
         self.fields["source_kind"].choices = [(kind.value, CHANNELS[kind]) for kind in InvoiceType.SourceKind]
         # No dedicated parser no longer means typing it in: the one reader
         # reads any document's table, totals and VAT (parsers/generic_receipt).
-        # The layout readers by name, never a till's settings nor the AI
-        # reader; a key saved before stays valid (parsers.reader_choices).
+        # The layout readers by name, never a till's settings; a key saved
+        # before stays valid (parsers.reader_choices).
         self.fields["parser_key"] = forms.ChoiceField(
             choices=reader_choices(self.instance.parser_key or ""),
             required=False,
@@ -834,9 +832,7 @@ class ReceiptShopForm(forms.Form):
         value = self.cleaned_data["supplier"].strip()
         if value == NEW_SHOP:
             return NEW_SHOP
-        supplier = (
-            Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).filter(pk=value).first() if is_id(value) else None
-        )
+        supplier = Supplier.objects.filter(pk=value).first() if is_id(value) else None
         if supplier is None:
             raise forms.ValidationError("Enseigne inconnue.")
         return supplier
@@ -923,8 +919,7 @@ class SupplierCreateForm(forms.Form):
 
 class InvoiceUploadForm(ReceiptShopForm):
     """A supplier's PDF invoice, and whose it is: a supplier with a reader of
-    its own, any other one (its invoice is read like a ticket), a new one -
-    or the AI pseudo-supplier, which only this import offers."""
+    its own, any other one (its invoice is read like a ticket) or a new one."""
 
     source_file = forms.FileField(label="Fichier PDF ou XML")
     unnamed_error = "Donnez un nom au nouveau fournisseur."
@@ -935,19 +930,6 @@ class InvoiceUploadForm(ReceiptShopForm):
         self.fields["supplier"].error_messages["required"] = "Choisissez le fournisseur de la facture."
         self.fields["new_name"].label = "Nom du nouveau fournisseur"
         self.fields["new_header"].label = "Texte en tête de ses factures"
-
-    def clean_supplier(self):
-        value = self.cleaned_data["supplier"].strip()
-        if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
-            # The AI reading runs on the espace's own key: refused unbound,
-            # and - outside the platform owner's espace - before the upload
-            # when no key is on « Identifiants » (invoices/integrations.py).
-            if not integrations_allowed():
-                raise forms.ValidationError(integrations.AI_READING)
-            if not integrations.ai_offered():
-                raise forms.ValidationError(integrations.AI_KEY_MISSING)
-            return Supplier.objects.get(pk=value)
-        return super().clean_supplier()
 
     def clean_source_file(self):
         """A PDF, or the XML of an electronic invoice - which arrives on its

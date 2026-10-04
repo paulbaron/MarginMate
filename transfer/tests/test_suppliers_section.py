@@ -41,7 +41,7 @@ from transfer.tests.support import (
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 #: What separates an amount's thousands in the report (common.THOUSANDS_SEPARATOR).
 NBSP = "\N{NO-BREAK SPACE}"
-SEEDS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
+SEEDS = {"METRO", "UBA", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 BOUND = SEEDS | {"CECINA"}
 PAUSE = {
     "scrape_last_login_at": datetime(2026, 9, 17, 14, 2, 11, 120000, tzinfo=UTC),
@@ -132,11 +132,11 @@ class GuardTests(TestCase):
         bound = {supplier.code for supplier in Supplier.objects.all() if section.code_bound(supplier)}
         self.assertEqual(bound, BOUND)
 
-    def test_count_leaves_out_the_ai_pseudo_supplier(self):
+    def test_count_counts_every_supplier(self):
         build_suppliers()
         self.assertEqual(
             registry.get("fournisseurs").count(),
-            {"fournisseurs": Supplier.objects.count() - 1, "prix connus": 4},
+            {"fournisseurs": Supplier.objects.count(), "prix connus": 4},
         )
 
     def test_the_archive_counts_what_count_counts_under_the_same_labels(self):
@@ -148,8 +148,6 @@ class GuardTests(TestCase):
         reader = export_archive({"fournisseurs"})
         self.addCleanup(reader.close)
         self.assertEqual(reader.counts("fournisseurs"), registry.get("fournisseurs").count())
-        # The AI pseudo-supplier is still exported: only the number leaves it out.
-        self.assertIn("OTHER", {record["code"] for record in reader.section("fournisseurs").payload()["suppliers"]})
 
 
 class RoundTripTests(TestCase):
@@ -190,7 +188,7 @@ class IdempotenceTests(TestCase):
 
     def test_merge_says_everything_is_unchanged(self):
         report = import_archive(self.reader, MERGE).section("fournisseurs")
-        self.assertEqual(report.tallies["fournisseurs"].unchanged, Supplier.objects.count() - 1)
+        self.assertEqual(report.tallies["fournisseurs"].unchanged, Supplier.objects.count())
         self.assertEqual(report.tallies["prix connus"].unchanged, 4)
         self.assertEqual((report.conflicts, report.skipped, report.kept), ([], [], []))
         self.assertFalse(report.changes)
@@ -204,7 +202,7 @@ class IdempotenceTests(TestCase):
 
     def test_the_report_counts_what_count_and_the_archive_count(self):
         """« 30 inchangés » for the 29 suppliers the page and the archive
-        announced: the AI pseudo-supplier was counted in the report only."""
+        announced, when a supplier was counted in the report only."""
         for strategy in (MERGE, REPLACE):
             with self.subTest(strategy=strategy):
                 report = import_archive(self.reader, strategy).section("fournisseurs")
@@ -212,48 +210,6 @@ class IdempotenceTests(TestCase):
                 counted = tally.created + tally.updated + tally.unchanged
                 self.assertEqual(counted, registry.get("fournisseurs").count()["fournisseurs"])
                 self.assertEqual(counted, self.reader.counts("fournisseurs")["fournisseurs"])
-                self.assertNotIn(section.AI_ROW, report.tallies)
-
-
-class AiPseudoSupplierTests(TestCase):
-    """The AI pseudo-supplier is no supplier on the page, so never one of
-    the report's « fournisseurs » either - but what happens to it is never
-    hidden: a row of its own, which is also what the safety archive is
-    chosen from (safety.sections_at_risk)."""
-
-    def setUp(self):
-        build_suppliers()
-        self.reader = export_archive({"fournisseurs"})
-        self.addCleanup(self.reader.close)
-
-    def test_a_replace_changing_it_counts_it_on_its_own_row(self):
-        from transfer import safety
-        from transfer.archive import ArchiveReader
-
-        def learned(payload):
-            for record in payload["suppliers"]:
-                if record["code"] == "OTHER":
-                    record["ticket_header"] = "EN-TETE ESSAI IA"
-            return payload
-
-        with ArchiveReader(forge(self.reader, fournisseurs=learned)) as reader:
-            run = import_archive(reader, REPLACE)
-        report = run.section("fournisseurs")
-        self.assertEqual(Supplier.objects.get(code="OTHER").ticket_header, "EN-TETE ESSAI IA")
-        self.assertEqual(report.tallies[section.AI_ROW].updated, 1)
-        self.assertEqual(report.tallies["fournisseurs"].updated, 0)
-        self.assertEqual(report.tallies["fournisseurs"].unchanged, registry.get("fournisseurs").count()["fournisseurs"])
-        self.assertIn("fournisseurs", safety.sections_at_risk(run, strategies={"fournisseurs": REPLACE}))
-
-    def test_a_clear_resetting_it_counts_it_on_its_own_row(self):
-        Supplier.objects.filter(code="OTHER").update(ticket_identifiers=["siren:900000004"])
-        report = run_clear({"fournisseurs"}, preview=False, closed=False).section("fournisseurs")
-        self.assertEqual(Supplier.objects.get(code="OTHER").ticket_identifiers, [])
-        self.assertEqual(report.tallies[section.AI_ROW].updated, 1)
-
-    def test_unchanged_it_is_counted_nowhere(self):
-        report = import_archive(self.reader, MERGE).section("fournisseurs")
-        self.assertNotIn(section.AI_ROW, report.tallies)
 
 
 class MergeAndReplaceTests(TestCase):
@@ -726,8 +682,7 @@ class ClearTests(TestCase):
         self.assertIn("1 changement de l'historique des fournisseurs effacé", report.notes)
         self.assertTrue(any(note.endswith("leurs identifiants appris sont remis à zéro") for note in report.notes))
         self.assertIn("Metro", report.notes[-1])
-        self.assertNotIn("Autre (analyse IA)", report.notes[-1])
-        self.assertEqual(registry.get("fournisseurs").count(), {"fournisseurs": len(BOUND) - 1, "prix connus": 0})
+        self.assertEqual(registry.get("fournisseurs").count(), {"fournisseurs": len(BOUND), "prix connus": 0})
 
     def test_a_clear_preview_changes_nothing(self):
         before = db_fingerprint()

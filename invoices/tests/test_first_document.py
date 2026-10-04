@@ -157,7 +157,6 @@ class FirstDocumentTests(TestCase):
             self.assertIn(self.caterer, waiting)
             self.assertNotIn(self.wholesaler, waiting)
             self.assertFalse(any(self.caterer in suppliers for _label, suppliers in groups[1:]))
-            self.assertFalse(any(supplier.code == "OTHER" for supplier in waiting))
 
 
 class TypeGuardTests(TestCase):

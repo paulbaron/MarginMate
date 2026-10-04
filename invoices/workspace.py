@@ -122,8 +122,6 @@ def render_purchases(request, tab, *, status=200, **card):
     """The page, on `tab` ("documents", "a-verifier", "sources",
     "fournisseurs"), with the import card as `card` says (import_tab, batch,
     receipt_form, pdf_form)."""
-    from .parsers import LLM_PARSER_KEY
-
     counts = Invoice.objects.aggregate(
         total=Count("pk"),
         tickets=Count("pk", filter=TICKET_TO_CHECK),
@@ -135,16 +133,15 @@ def render_purchases(request, tab, *, status=200, **card):
     waiting = counts["tickets"] + counts["to_fix"]
     # « Enseignes et fournisseurs » counts every supplier, grey - counted,
     # not listed: the list reads every document's text, and the tabs are on
-    # every page of Achats. Both of its tables are every supplier but the AI
-    # pseudo-supplier. Beside it, amber, « N à voir »: the suppliers with a
+    # every page of Achats. Both of its tables are every supplier. Beside it,
+    # amber, « N à voir »: the suppliers with a
     # change to see, which the tab lists at its top (#a-voir). One number
     # meant both - 29 grey, then an amber 1 - with no word nor title, and the
     # owner could not tell what the « 1 » was (19/09). The fragment stays:
     # the list sits below the import card, 850 px down; the sticky topbar's
     # height is left above it by the stylesheet (--topbar-room), since the
     # list's heading first landed under the bar.
-    suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY)
-    to_see = _changes_to_see().filter(supplier__in=suppliers).values("supplier_id").distinct().count()
+    to_see = _changes_to_see().values("supplier_id").distinct().count()
     suppliers_url = reverse("invoices:supplier_list")
     context = {
         "tab": tab,
@@ -174,7 +171,7 @@ def render_purchases(request, tab, *, status=200, **card):
                 "key": "fournisseurs",
                 "label": "Enseignes et fournisseurs",
                 "url": suppliers_url + ("#a-voir" if to_see else ""),
-                "count": suppliers.count(),
+                "count": Supplier.objects.count(),
                 "attention": False,
                 "to_see": to_see,
             },
@@ -346,7 +343,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "import_tab": import_tab,
         "receipt_form": receipt_form or ReceiptBatchUploadForm(),
         "pdf_form": pdf_form or InvoiceUploadForm(),
-        "invoice_supplier_groups": invoice_supplier_choices(state),
+        "invoice_supplier_groups": invoice_supplier_choices(),
         "gather_sources": gather_sources,
         "default_start_date": gather_start,
         "default_end_date": gather_end,
@@ -362,13 +359,6 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         # the form, never « Aucune source configurée » and a button answering
         # « Aucune source cochée ».
         "gather_to_fill": integrations.MAILBOX_TO_FILL if allowed and not server and not mailbox else None,
-        "ai_refused": (
-            integrations.AI_READING
-            if not allowed
-            else None
-            if integrations.ai_offered(state)
-            else integrations.AI_KEY_MISSING
-        ),
         # « Prendre une photo » stops what the form would post short of
         # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
         # as common's caps are, so a test can patch it.
@@ -895,16 +885,11 @@ def _suppliers() -> dict:
     Above them, every change to see, oldest first, with why it asks and its
     « Vu »: what lights the tab's « à voir », said where it lights up rather
     than as a pill on one row among thirty."""
-    from .parsers import LLM_PARSER_KEY, is_ticket_shop
+    from .parsers import is_ticket_shop
     from .receipts import has_own_reader, names_shop, prints_header
     from .supplier_changes import why_to_see
 
-    changes_to_see = list(
-        _changes_to_see()
-        .exclude(supplier__parser_key=LLM_PARSER_KEY)
-        .select_related("supplier")
-        .order_by("created_at", "pk")
-    )
+    changes_to_see = list(_changes_to_see().select_related("supplier").order_by("created_at", "pk"))
     for change in changes_to_see:
         change.why = why_to_see(change)
 
@@ -918,7 +903,7 @@ def _suppliers() -> dict:
     sources: dict[int, list] = {}
     for invoice_type in InvoiceType.objects.order_by("name"):
         sources.setdefault(invoice_type.supplier_id, []).append(invoice_type)
-    suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
+    suppliers = list(Supplier.objects.order_by("name"))
     for supplier in suppliers:
         # Each row leads to the supplier's own page (supplier_views).
         supplier.url = reverse("invoices:supplier_detail", args=[supplier.pk])

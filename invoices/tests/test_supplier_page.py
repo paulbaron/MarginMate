@@ -178,10 +178,6 @@ class SupplierPageTests(Subscriptions):
 
 
 class PagesItHasNotTests(TestCase):
-    def test_the_ai_pseudo_supplier_has_no_page(self):
-        response = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
-        self.assertRedirects(response, reverse("invoices:supplier_list"))
-
     def test_a_till_has_no_header_to_set(self):
         till = make_supplier(code="FRANPRIX", name="Franprix", parser_key="FRANPRIX")
         page = self.client.get(reverse("invoices:supplier_detail", args=[till.pk]))

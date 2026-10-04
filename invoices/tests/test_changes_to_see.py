@@ -28,7 +28,6 @@ from django.utils.html import escape
 from inventory.models import Product
 from invoices import supplier_changes
 from invoices.models import Supplier, SupplierChange
-from invoices.parsers import LLM_PARSER_KEY
 from invoices.scrapers import website
 from invoices.tests.page_posts import page_post
 from recipes.models import PosProduct
@@ -158,14 +157,8 @@ class TabNoticeTests(CatererTestCase):
         self.assertEqual(notice.count("Voir le document"), 1)
         self.assertEqual(page.context["tabs"][3]["to_see"], 2)
 
-    def test_an_undone_change_is_not_listed_nor_the_ai_pseudo_suppliers(self):
+    def test_an_undone_change_is_not_listed(self):
         SupplierChange.objects.filter(pk=self.change.pk).update(undone_at=timezone.now())
-        SupplierChange.objects.create(
-            supplier=Supplier.objects.get(parser_key=LLM_PARSER_KEY),
-            kind=SupplierChange.Kind.IDENTIFIERS,
-            summary="Appris : un site.",
-            needs_review=True,
-        )
         page = self.client.get(SUPPLIERS)
         self.assertEqual(page.context["changes_to_see"], [])
         self.assertNotContains(page, 'id="a-voir"')
