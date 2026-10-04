@@ -18,6 +18,7 @@ Every name, amount and file below is invented.
 
 import hashlib
 import os
+import re
 import tracemalloc
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -26,7 +27,9 @@ from unittest import mock
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from accounts import paths
 from bank.models import BankTransaction, InvoicePayment
@@ -67,6 +70,8 @@ MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 D = Decimal
 COMPLETE, NEEDS_REVIEW = Invoice.Status.COMPLETE, Invoice.Status.NEEDS_REVIEW
 TWIN = b"%PDF-1.4 ticket Monoprix essai 8,44 EUR - deux fois le meme fichier"
+#: A document read alone by its id (`Invoice.objects.get(pk=…)`).
+ONE_INVOICE = re.compile(r'FROM "invoices_invoice" .*WHERE "invoices_invoice"\."id" = \d+ LIMIT 21')
 
 
 def store(name: str, data: bytes) -> str:
@@ -468,6 +473,15 @@ class IdempotenceTests(MediaMixin, TestCase):
         self.assertEqual(run.affected(), set())
         self.assertEqual(db_fingerprint(), before)
         self.assertEqual({name: sha(name) for name in named_files()}, files)
+
+    def test_the_documents_found_here_are_read_at_once(self):
+        """One query per document an archive's record found here was a
+        quarter of a preview's time (audit 04/10/2026)."""
+        with CaptureQueriesContext(connection) as queries:
+            report = import_archive(self.reader, MERGE, preview=True).section("factures")
+        self.assertEqual(report.tallies["documents"].unchanged, 7)
+        one_by_one = [query["sql"] for query in queries if ONE_INVOICE.search(query["sql"])]
+        self.assertEqual(one_by_one, [])
 
 
 class FileCountTests(MediaMixin, TestCase):

@@ -259,6 +259,9 @@ class RecipeResolver:
 # -- invoices ------------------------------------------------------------------------
 
 KEY_FIELDS = ("supplier", "number", "sha256", "file_sha256", "occurrence")
+#: Ids per query when InvoiceIndex.prefetch reads them, under SQLite's
+#: variable limit.
+PREFETCH_BATCH = 500
 
 
 def invoice_key(invoice, occurrence: int, file_sha: str | None = None) -> dict:
@@ -454,6 +457,31 @@ class InvoiceIndex:
         self._hash_files()
         return self._rank([pk for sha in shas for pk in self._by_file_sha.get(sha, [])], occurrence)
 
+    def _found(self, key: dict) -> tuple[int | None, int | None]:
+        """(by its number, by its file): steps 1 and 2-4."""
+        number = key.get("number") or ""
+        by_number = None
+        if number:
+            supplier = self.suppliers.resolve(key.get("supplier"))
+            if supplier is not None:
+                by_number = self._by_number.get((supplier.pk, number))
+        return by_number, self._by_content(key)
+
+    def prefetch(self, keys: Iterable[dict]) -> None:
+        """Reads at once the invoices resolve() will hand out for `keys`:
+        one query each was a quarter of a preview's time (audit 04/10/2026).
+        resolve() still decides; a pk this missed costs it one query."""
+        from invoices.models import Invoice
+
+        wanted: set[int] = set()
+        for key in keys:
+            if isinstance(key, dict) and _canonical(key) not in self._bound:
+                wanted.update(pk for pk in self._found(key) if pk is not None)
+        missing = sorted(wanted - self._objects.keys())
+        for start in range(0, len(missing), PREFETCH_BATCH):
+            chunk = missing[start : start + PREFETCH_BATCH]
+            self._objects.update(Invoice.objects.select_related("supplier").in_bulk(chunk))
+
     def resolve(self, key: dict, report=None):
         if not isinstance(key, dict):
             return None
@@ -461,12 +489,7 @@ class InvoiceIndex:
         if canonical in self._bound:
             return self._bound[canonical]
         number = key.get("number") or ""
-        by_number = None
-        if number:
-            supplier = self.suppliers.resolve(key.get("supplier"))
-            if supplier is not None:
-                by_number = self._by_number.get((supplier.pk, number))
-        by_file = self._by_content(key)
+        by_number, by_file = self._found(key)
         if by_number is not None and by_file is not None and by_number != by_file:
             return Ambiguous(self._invoice(by_number), self._invoice(by_file))
         chosen = by_number if by_number is not None else by_file

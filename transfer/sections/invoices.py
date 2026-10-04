@@ -487,6 +487,8 @@ class InvoicesSection(Section):
         self._released = self._released_takes()
         claimed: set[int] = set()
         matched, new = [], []
+        # Every resolve() is in the loop below, before anything is written.
+        ctx.invoices.prefetch(_clean_key(record.get("key")) for record in self.records if isinstance(record, dict))
         for record in self.records:
             doc = self._parse(record)
             if doc is None:
