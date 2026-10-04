@@ -41,13 +41,23 @@ def media(request, name):
     return file_response(handle, Path(handle.name).name)
 
 
-def open_stored(name: str):
+def media_folder() -> Path:
+    """The bound tenant's media folder, resolved: what `open_stored` keeps a
+    file inside."""
+    return Path(paths.media_root()).resolve()
+
+
+def open_stored(name: str, root: Path | None = None):
     """The bound tenant's stored file `name`, open for reading - or None when
     it is not there, is not a file, or lies outside the tenant's media folder
     (a name climbing out with « ../ », a link pointing out of it). Every door
     serving a stored file opens it here: this view, a document's own file
-    (invoices.views.invoice_file) and Banque's zip (bank/invoice_files.py)."""
-    root = Path(paths.media_root()).resolve()
+    (invoices.views.invoice_file) and Banque's zip (bank/invoice_files.py).
+
+    `root` is `media_folder()` found once by a caller opening many files in
+    the same request (the zip) - never anything a request typed."""
+    if root is None:
+        root = media_folder()
     try:
         full = Path(safe_join(os.fspath(root), name)).resolve()
         # safe_join works on the text; a link inside media pointing out of
