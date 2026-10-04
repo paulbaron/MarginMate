@@ -78,6 +78,7 @@ from recipes.models import (
     RecipeIngredient,
     RecipeSale,
     SaleDocumentLine,
+    scoped_unit_cost,
     variation_scope,
 )
 
@@ -778,7 +779,7 @@ def _every_ingredient_priced(recipe: Recipe, ingredients: list, being_read: set[
                 inside = [line for group in sub.choice_groups() for line in group]
                 if not _every_ingredient_priced(sub, inside, being_read):
                     return False
-            elif ingredient.stock_type.current_unit_cost_ht <= 0:
+            elif scoped_unit_cost(ingredient.stock_type) <= 0:
                 return False
         return True
     finally:

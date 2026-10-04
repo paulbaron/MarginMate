@@ -10,7 +10,7 @@ from django.db import models
 from django.utils import timezone
 
 from common import JobLogMixin, search_key
-from inventory.models import StockType, UnitChoices
+from inventory.models import StockMovement, StockType, UnitChoices
 
 _costing = threading.local()
 
@@ -57,7 +57,7 @@ def _counting_scope():
     if outer is not None:
         yield outer  # reuse the enclosing scope's cache
         return
-    _variation_counts.cache = {"counts": {}, "groups": {}}
+    _variation_counts.cache = {"counts": {}, "groups": {}, "unit_costs": {}}
     try:
         yield _variation_counts.cache
     finally:
@@ -69,6 +69,40 @@ def _counting_scope():
 #: lot in this, so the sub-recipes behind it are read once rather than once
 #: per question asked.
 variation_scope = _counting_scope
+
+
+def scoped_unit_cost(stock_type) -> Decimal:
+    """`stock_type.current_unit_cost_ht`, as `Recipe.load_choice_groups`
+    summed it into the open scope when it read the article, else asked of the
+    article itself (its own prefetch, or the ledger)."""
+    cache = getattr(_variation_counts, "cache", None)
+    if cache is not None and stock_type.pk in cache["unit_costs"]:
+        return cache["unit_costs"][stock_type.pk]
+    return stock_type.current_unit_cost_ht
+
+
+def _read_unit_costs(stock_type_ids, costs: dict) -> None:
+    """Each article's `current_unit_cost_ht` into `costs`, one query for
+    all: the same exact Decimal sums over every movement (value over
+    quantity, 0 with nothing on hand), read as three columns rather than
+    built into a StockMovement each - thousands on every page costing the
+    recipes, for one average per article.
+
+    A movement's quantity and unit cost are all the average reads of it. The
+    articles costed from here carry no movements prefetch: a reader of
+    `current_quantity` / `current_value_ht` on them is a query per article,
+    so it goes through `scoped_unit_cost` instead."""
+    quantities = {pk: Decimal("0") for pk in stock_type_ids}
+    values = dict(quantities)
+    for stock_type_id, quantity, unit_cost_ht in (
+        StockMovement.objects.filter(stock_type_id__in=list(quantities))
+        .order_by()
+        .values_list("stock_type_id", "quantity", "unit_cost_ht")
+    ):
+        quantities[stock_type_id] += quantity
+        values[stock_type_id] += quantity * unit_cost_ht
+    for pk, quantity in quantities.items():
+        costs[pk] = (values[pk] / quantity) if quantity else Decimal("0")
 
 
 def _bounds(low, high) -> tuple | None:
@@ -363,17 +397,19 @@ class Recipe(models.Model):
     def load_choice_groups(cls, recipes) -> None:
         """Read the choice groups of `recipes`, and of every sub-recipe they
         reach, into the open `variation_scope`: one query per LEVEL of
-        nesting (and one for its stock items' movements), where
+        nesting (and one for its stock items' costs), where
         `choice_groups()` reads one recipe at a time - and costing a recipe
         asks every sub-recipe below it, so a page costing fifty cocktails
         read their syrups two queries each.
 
         Each recipe gets exactly what its own `choice_groups()` would have
         read: the same rows in the same order (group, then id), with their
-        stock items and movements, their sub-recipes, and each ingredient
-        pointing back at the recipe it belongs to. A recipe the scope already
-        holds is not read again, a cycle is read once, and outside a scope
-        nothing is read: there would be nowhere to keep it.
+        stock items, their sub-recipes, and each ingredient pointing back at
+        the recipe it belongs to. Their stock items' costs are summed into
+        the scope (`_read_unit_costs`, `scoped_unit_cost`) rather than their
+        movements prefetched. A recipe the scope already holds is not read
+        again, a cycle is read once, and outside a scope nothing is read:
+        there would be nowhere to keep it.
         """
         cache = getattr(_variation_counts, "cache", None)
         if cache is None:
@@ -385,11 +421,19 @@ class Recipe(models.Model):
             for ingredient in (
                 RecipeIngredient.objects.filter(recipe_id__in=level)
                 .select_related("stock_type", "sub_recipe")
-                .prefetch_related("stock_type__movements")
                 .order_by("group", "id")
             ):
                 ingredient.recipe = level[ingredient.recipe_id]
                 read[ingredient.recipe_id].append(ingredient)
+            costs = cache["unit_costs"]
+            unpriced = {
+                ingredient.stock_type_id
+                for ingredients in read.values()
+                for ingredient in ingredients
+                if ingredient.stock_type_id and ingredient.stock_type_id not in costs
+            }
+            if unpriced:
+                _read_unit_costs(unpriced, costs)
             for pk, ingredients in read.items():
                 known[pk] = cls._bucket(ingredients)
             level = {
@@ -1122,7 +1166,7 @@ class RecipeIngredient(models.Model):
         used - meaningless for a stock item, which has one price.
         """
         if self.stock_type_id:
-            return self.stock_type.current_unit_cost_ht
+            return scoped_unit_cost(self.stock_type)
         return self.sub_recipe.unit_cost_ht(sub_index)
 
     def cost_ht(self, sub_index: int = 0) -> Decimal:
