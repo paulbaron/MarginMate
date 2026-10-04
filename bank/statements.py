@@ -470,6 +470,10 @@ def _reading(content: bytes, layout: Layout):
         from .ofx import OfxReading
 
         return OfxReading(content, layout)
+    if layout.file_type == StatementFormat.FileType.CAMT053:
+        from .camt import CamtReading
+
+        return CamtReading(content, layout)
     raise ValueError(f"Ce type de fichier ne se lit pas : « {echoed(layout.file_type)} ».")
 
 
