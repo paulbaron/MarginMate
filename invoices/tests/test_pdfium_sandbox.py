@@ -193,6 +193,39 @@ class SandboxTests(SimpleTestCase):
         self.assertEqual(len(self.made), 3)
         self.assertNothingLeft()
 
+    def test_the_folders_are_made_under_the_server_s_own_parent(self):
+        with mock.patch.object(tempfile, "tempdir", self.folder):
+            list(ocr.page_images(self.drawn()))
+        self.assertEqual(len(self.made), 1)
+        self.assertEqual(os.path.dirname(self.made[0]), os.path.join(self.folder, "marginmate-pdfium"))
+        self.assertTrue(os.path.basename(self.made[0]).startswith("pdfium-"))
+        self.assertNothingLeft()
+
+    def test_what_a_server_killed_mid_render_left_is_swept_at_start_up(self):
+        """Its `finally` never ran (a crash, a power cut): a folder of up to
+        RENDER_OUTPUT_BYTES stayed in TEMP for good. The next start removes
+        the pdfium-* folders of the parent older than an hour - and nothing
+        else, in the parent or beside it."""
+        from django.apps import apps
+
+        parent = os.path.join(self.folder, "marginmate-pdfium")
+        old = time.time() - 2 * 3600
+        folders = {name: os.path.join(parent, name) for name in ("pdfium-ancien", "pdfium-recent", "autre-ancien")}
+        folders["dehors"] = os.path.join(self.folder, "pdfium-dehors")
+        for name, folder in folders.items():
+            os.makedirs(folder)
+            with open(os.path.join(folder, "1"), "wb") as handle:
+                handle.write(b"P6 1 1 255 ...")
+            if name != "pdfium-recent":
+                os.utime(folder, (old, old))
+        with mock.patch.object(tempfile, "tempdir", self.folder):
+            apps.get_app_config("invoices").ready()
+        self.assertEqual(sorted(os.listdir(parent)), ["autre-ancien", "pdfium-recent"])
+        self.assertTrue(os.path.exists(os.path.join(folders["dehors"], "1")))
+        # No parent yet (nothing ever drawn): nothing to sweep.
+        with mock.patch.object(tempfile, "tempdir", os.path.join(self.folder, "vide")):
+            apps.get_app_config("invoices").ready()
+
     def test_what_pdfium_cannot_open_is_said_as_before(self):
         """PDFium's own error was « PDF illisible », by kind, its words in
         the server's log: so is what its process says it could not open,

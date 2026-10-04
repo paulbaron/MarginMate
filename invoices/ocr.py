@@ -451,7 +451,8 @@ def _drawn_pages(path: str):
     from invoices import pdfium_sandbox
     from invoices.pdfium_worker import LIMITS
 
-    folder = tempfile.mkdtemp(prefix="pdfium-")
+    os.makedirs(drawn_parent(), exist_ok=True)
+    folder = tempfile.mkdtemp(prefix=DRAWN_PREFIX, dir=drawn_parent())
     try:
         limits = {name: globals()[name] for name in LIMITS}
         if not PDFIUM_LOCK.acquire(timeout=PDFIUM_WAIT_SECONDS):
@@ -483,6 +484,48 @@ def _drawn_pages(path: str):
 
 #: What is said of a refusal from PDFium's process at most: its sentence.
 SAID_CHARS = 300
+#: Each document's pages are written in a folder of their own (DRAWN_PREFIX),
+#: under this one in TEMP, removed by `_drawn_pages` whatever happens - but
+#: not when the server itself dies mid-render (a crash, a kill, a power cut):
+#: such a folder, up to RENDER_OUTPUT_BYTES, stayed for good. So the next
+#: start sweeps them (`sweep_drawn_folders`), only these, and only past
+#: DRAWN_FOLDER_SECONDS: a folder lives while its pages are drawn and OCRed,
+#: minutes for 30 pages.
+DRAWN_PARENT = "marginmate-pdfium"
+DRAWN_PREFIX = "pdfium-"
+DRAWN_FOLDER_SECONDS = 3600
+
+
+def drawn_parent() -> str:
+    import tempfile
+
+    return os.path.join(tempfile.gettempdir(), DRAWN_PARENT)
+
+
+def sweep_drawn_folders() -> None:
+    """Remove what a server killed mid-render left under drawn_parent(): the
+    DRAWN_PREFIX folders older than DRAWN_FOLDER_SECONDS (invoices/apps.py,
+    at start-up). Nothing else is touched, and a folder that cannot be
+    removed is left for the next start."""
+    import shutil
+    import time
+
+    try:
+        entries = list(os.scandir(drawn_parent()))
+    except OSError:
+        return  # nothing drawn yet on this machine
+    oldest = time.time() - DRAWN_FOLDER_SECONDS
+    for entry in entries:
+        try:
+            left = (
+                entry.name.startswith(DRAWN_PREFIX)
+                and entry.is_dir(follow_symlinks=False)
+                and entry.stat(follow_symlinks=False).st_mtime < oldest
+            )
+        except OSError:
+            continue
+        if left:
+            shutil.rmtree(entry.path, ignore_errors=True)
 
 
 def _drawn_page(path: str):
