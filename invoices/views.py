@@ -560,21 +560,27 @@ def invoice_type_form(request, pk=None):
             if source_form.is_valid():
                 start = source_form.cleaned_data["test_start_date"] or (timezone.localdate() - timedelta(days=30))
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
-                test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
-                thread = threading.Thread(
-                    target=bound(test_email_pattern_task),
-                    args=(
-                        test_job.id,
-                        start,
-                        end,
-                        source_form.cleaned_data["sender_pattern"],
-                        source_form.cleaned_data["subject_pattern"],
-                        source_form.cleaned_data["body_pattern"],
-                        source_form.cleaned_data["attachment_pattern"],
-                    ),
-                    daemon=True,
-                )
-                thread.start()
+                # Here, not in the form's clean(): the test dates are drawn by
+                # hand without their errors, and they never stop a save.
+                problem = gather_range_problem(start, end)
+                if problem:
+                    messages.error(request, problem)
+                else:
+                    test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
+                    thread = threading.Thread(
+                        target=bound(test_email_pattern_task),
+                        args=(
+                            test_job.id,
+                            start,
+                            end,
+                            source_form.cleaned_data["sender_pattern"],
+                            source_form.cleaned_data["subject_pattern"],
+                            source_form.cleaned_data["body_pattern"],
+                            source_form.cleaned_data["attachment_pattern"],
+                        ),
+                        daemon=True,
+                    )
+                    thread.start()
         else:
             if type_form.is_valid() and source_form.is_valid():
                 saved = _save_invoice_type(request, type_form, invoice_type, source_form, "email", return_to)

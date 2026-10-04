@@ -19,7 +19,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from invoices.models import ScrapeJob
+from invoices.models import InvoiceType, ScrapeJob
 from recipes.models import SalesImportJob
 
 
@@ -188,10 +188,17 @@ class GatherPeriodBoundsTests(TestCase):
         self.assertFalse(ScrapeJob.objects.exists())
         self.assertContains(response, "Période impossible")
 
-    def test_a_period_left_blank_and_one_that_holds_still_start(self):
+    def test_a_period_left_blank_still_starts(self):
         self.post("", "")
-        self.post("2000-01-01", timezone.localdate().isoformat())
         self.assertEqual(ScrapeJob.objects.count(), 1)
+
+    def test_a_period_from_2000_to_today_starts(self):
+        """Alone: a second post would meet the first's job and be turned away
+        as « déjà en cours » before its period was looked at."""
+        today = timezone.localdate()
+        self.post("2000-01-01", today.isoformat())
+        job = ScrapeJob.objects.get()
+        self.assertEqual((job.range_start, job.range_end), (date(2000, 1, 1), today))
 
     def test_the_boxes_say_so_to_the_browser(self):
         page = self.client.get(reverse("invoices:invoice_list"))
@@ -200,18 +207,45 @@ class GatherPeriodBoundsTests(TestCase):
         self.assertContains(page, f'name="end_date" min="2000-01-01" max="{today}"')
 
     def test_a_source_test_takes_the_same_rule(self):
-        from invoices.forms import EmailInvoiceSourceForm, gather_range_problem
+        from invoices.forms import gather_range_problem
 
         self.assertTrue(gather_range_problem(date(26, 9, 1), None))
         self.assertTrue(gather_range_problem(None, timezone.localdate() + timedelta(days=1)))
         self.assertTrue(gather_range_problem(date(2026, 9, 2), date(2026, 9, 1)))
         self.assertEqual(gather_range_problem(None, None), "")
         self.assertEqual(gather_range_problem(date(2000, 1, 1), timezone.localdate()), "")
-        form = EmailInvoiceSourceForm(
-            {"sender_pattern": "factures@", "test_start_date": "0026-09-01", "test_end_date": "2026-09-01"}
-        )
-        self.assertFalse(form.is_valid())
-        self.assertIn("test_start_date", form.errors)
+
+    def mailbox(self, action):
+        return {
+            "name": "Traiteur Exemple - Factures",
+            "supplier": "new",
+            "new_name": "Traiteur Exemple",
+            "source_kind": "EMAIL",
+            "parser_key": "",
+            "is_active": "on",
+            "action": action,
+            "sender_pattern": r"factures@traiteur\.exemple",
+            "subject_pattern": "",
+            "body_pattern": "",
+            "attachment_pattern": r"\.pdf$",
+            "test_start_date": "0026-09-01",
+            "test_end_date": "2026-09-01",
+        }
+
+    def test_a_mailbox_test_says_why_it_starts_nothing(self):
+        """Put on the form, the refusal sat on a box the page draws by hand,
+        without its errors: « Tester » did nothing, and said nothing."""
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            response = self.client.post(reverse("invoices:invoice_type_create"), self.mailbox("test"))
+        thread.assert_not_called()
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_mailbox_saves_whatever_its_test_dates(self):
+        """The test dates are only « Tester »'s: they never stopped a save."""
+        response = self.client.post(reverse("invoices:invoice_type_create"), self.mailbox("save"))
+        self.assertRedirects(response, reverse("invoices:invoice_type_list"), fetch_redirect_response=False)
+        self.assertTrue(InvoiceType.objects.filter(name="Traiteur Exemple - Factures").exists())
 
 
 class MetroPauseOnThePageTests(TestCase):

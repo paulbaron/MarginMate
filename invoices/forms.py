@@ -788,13 +788,6 @@ class EmailInvoiceSourceForm(forms.ModelForm):
             "attachment_pattern": "Pièce jointe (regex)",
         }
 
-    def clean(self):
-        cleaned = super().clean()
-        problem = gather_range_problem(cleaned.get("test_start_date"), cleaned.get("test_end_date"))
-        if problem:
-            self.add_error("test_start_date", problem)
-        return cleaned
-
 
 from .ocr import IMAGE_EXTENSIONS
 
