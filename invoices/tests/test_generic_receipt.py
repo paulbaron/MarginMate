@@ -654,6 +654,16 @@ class LineShapeTests(SimpleTestCase):
         self.assertEqual(_ticket_number("Ticket:0012345", date(2026, 9, 18)), "0012345")
         self.assertEqual(_ticket_number("Ticket:160074", date(2026, 9, 18)), "160074")
 
+    def test_a_number_printed_with_a_dot_is_read_whole(self):
+        """An ice supplier's « Numéro de facture : 20260712.61297 »: cut at the
+        dot it was the date, and a second delivery that day was refused as a
+        duplicate of the first. A sentence's dot after a number is not one."""
+        day = date(2026, 7, 12)
+        self.assertEqual(_ticket_number("Numéro de facture : 20260712.61297\nTotal", day), "20260712.61297")
+        self.assertEqual(_ticket_number("Numéro de facture : 20260712.61299\nTotal", day), "20260712.61299")
+        self.assertEqual(_ticket_number("Facture N° 1234. Merci", day), "1234")
+        self.assertEqual(_ticket_number("Facture # FR-F090—264", day), "FR-F090264")
+
     def test_lines_set_aside_are_said(self):
         """A header or a total read among the items is left out when the rest
         adds up - and said, in case it was an item after all."""

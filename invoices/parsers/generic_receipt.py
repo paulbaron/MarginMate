@@ -242,7 +242,10 @@ IBAN_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{2,4}){3,9}(?![A-
 DOCUMENT_WORDS = r"(?:facture|document|commande|pi[eè]ce|avoir|bon\s+de\s+livraison)"
 # What a document's own reference is made of: its characters, and a dash a
 # PDF's rules left inside it ("FR-F033—763"), taken back out in _ticket_number.
-REFERENCE = r"[A-Z0-9][A-Z0-9\-/\u2013\u2014]{3,}"
+# A dot too ("20250314.38604"): cut at it, an ice supplier's number was its
+# date, and a second delivery that day was refused as a duplicate. A
+# sentence's dot after a number is stripped in _ticket_number.
+REFERENCE = r"[A-Z0-9][A-Z0-9.\-/\u2013\u2014]{3,}"
 # "N°", "No", "Nº" with an ordinal indicator, "#".
 NUMBER_MARK = r"(?:n\s*[°\u00bao]\.?|num[ée]ro|#)"
 DOCUMENT_NUMBER_RES = (
