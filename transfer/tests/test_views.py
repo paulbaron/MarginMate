@@ -418,9 +418,9 @@ class ConfigurationOnlyTests(FakeSectionsMixin, TestCase):
         """A part whose lane is missing, or whose suppliers' is, cannot be
         exported: the link leaves it out rather than be refused."""
         with registry.swap({key: FAKES[key] for key in INFO if key != "fournisseurs"}):
-            self.assertEqual(views.configuration_keys(), ["regles_banque"])
+            self.assertEqual(views.configuration_keys(), ["formats_caisse", "regles_banque"])
             href = self.link(self.client.get(reverse("transfer:data_home")))
-        self.assertEqual(parse_qs(urlsplit(href).query), {"cocher": ["regles_banque"]})
+        self.assertEqual(parse_qs(urlsplit(href).query), {"cocher": ["formats_caisse", "regles_banque"]})
 
     def test_only_the_export_tab_offers_it(self):
         self.assertTrue(self.link(self.client.get(reverse("transfer:data_home"))))
