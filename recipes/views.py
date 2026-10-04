@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import ProtectedError, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
@@ -30,6 +30,7 @@ from .models import (
     Recipe,
     RecipeSale,
     SaleDocument,
+    SaleDocumentLine,
     SalesImportJob,
     variation_scope,
 )
@@ -272,7 +273,16 @@ def recipe_delete(request, pk):
         messages.error(request, f'Impossible de supprimer "{recipe.name}" : utilisée comme ingrédient dans {used_by}.')
         return redirect("recipes:recipe_detail", pk=pk)
     name = recipe.name
-    recipe.delete()
+    try:
+        with transaction.atomic():
+            recipe.delete()
+    except ProtectedError as exc:
+        # A sale document's lines PROTECT their recipe: the document must
+        # keep saying what was sold. Said as delete_stock_type says it.
+        documents = {obj.document_id for obj in exc.protected_objects if isinstance(obj, SaleDocumentLine)}
+        where = f"utilisée dans {len(documents)} document(s) de vente" if documents else "encore utilisée"
+        messages.error(request, f'Impossible de supprimer "{name}" : {where}.')
+        return redirect("recipes:recipe_detail", pk=pk)
     messages.success(request, f'"{name}" supprimée.')
     return redirect("recipes:recipe_list")
 
