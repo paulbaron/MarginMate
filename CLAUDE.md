@@ -529,10 +529,13 @@ handlers render them.
   server's path. `common.error_for_page(exc, said=(…))` keeps the app's own
   French refusals (`said`) and turns anything else into one fixed sentence
   by kind (`SERVER_ERROR`, `UNREADABLE_IMAGE`, `UNREADABLE_PDF`), the detail
-  to the log. Left as they were: the gather's and the till import's job logs
-  (`invoices/tasks.py`, `recipes/tasks.py`), shown in the owner's espace
-  only (`integrations_allowed`), still carry the exception and its
-  traceback.
+  to the log. The gather's, a source test's and the till import's job logs
+  (`invoices/tasks.py`, `recipes/tasks.py`) are drawn in every espace since
+  the connectors opened to every bar (04/10/2026): outside the platform
+  owner's espace `common.job_line` cuts a traceback and Selenium's stack and
+  hides the server's paths, the line whole going to the server's log
+  (« Every espace's connectors », under « Gathering invoices »); the owner's
+  keep the exception and its traceback.
 - Every `next` / `retour` goes through `common.safe_next(request, default)`
   or `local_path` (LB-5): it starts with « / », not « // », holds no control
   character and names an allowed host - `?next=abc` was reversed by
@@ -2705,9 +2708,11 @@ model is a migration to apply to the real database, for a word.
 **« Identifiants »** (`/identifiants/`, `accounts/credentials.py`, the
 store `accounts/vault.py`; 01/10/2026, the owner: « renseigner les logins et
 mots de passe des différents sites et de mon email sur une page »): the
-mailbox, Metro, L'Addition and every portal (one account per pair of names,
-two sources of one site share it), typed on a page reached from « Données »'s
-header and the Sources tab - no topbar link (the bar's rows are measured).
+mailbox, Metro, L'Addition, the AI reading's key and every portal (one
+account per pair of names, two sources of one site share it), typed on a
+page reached from « Données »'s header and the Sources tab - no topbar link
+(the bar's rows are measured). Another bar's page holds the mailbox,
+L'Addition and the AI reading only (« Every espace's connectors », below).
 **Third-party passwords: what protects them** (security review of 01/10/2026,
 the owner: « users will enter passwords from sensitive websites »; five
 auditors and their skeptics, 25 confirmed findings - each rule below is one):
@@ -2811,17 +2816,23 @@ auditors and their skeptics, 25 confirmed findings - each rule below is one):
   the two sent a new login with an old password - a refused sign-in Metro's
   firewall counts. Metro reads it once a run (`metro_credentials`).
 - **Keyed by the .env's own names**, so every connector asks one question:
-  `vault.setting(name)` (the page's value, else `settings.<name>`) for Metro,
-  the mailbox and L'Addition, and `website.credentials` reads the store
-  before the .env for a portal - read at every call, never cached. It also
+  `vault.setting(name)` (the page's value, else - in the platform owner's
+  espace only - `settings.<name>`, `vault.server_setting`) for Metro, the
+  mailbox, L'Addition and the AI reading, and `website.credentials` reads
+  the store before the .env for a portal - read at every call, never
+  cached. `vault.ready(*names)` says whether a connector would sign in. It also
   refuses a portal naming an application variable (`app_env_name`) at run
   time, whatever the form and the import let through.
 - **A password is never shown back**: always an empty `new-password` field,
   a placeholder saying one is stored, blank keeps it, « Effacer » removes it;
   a login is shown. A value only in the .env is said (« Fichier .env »),
   never printed. A posted name no account offers is ignored.
-- Only where `integrations_allowed()` (anywhere else: the refusal sentence,
-  a POST 403). `never_cache`.
+- Every espace's owner (since 04/10/2026; it was the platform owner's
+  espace only), his password confirmed. Another bar's page offers no Metro
+  and no portal, says no « Fichier .env » and names its fields after their
+  account (`FIELD_ALIASES`: `boite_adresse`, `caisse_mot_de_passe`…), so no
+  server variable's name reaches it (`STARTED_OVER_HOSTED`,
+  `vault.WEAK_KEY_HOSTED`). `never_cache`.
 - Tests: `accounts/tests/test_credentials.py` - every test removes both
   files before and after (the test espace's folder is the whole run's),
   patches `credentials._env_file` off the real .env, confirms the password
@@ -2854,6 +2865,101 @@ table was found only where two rows aligned: one row alone is no table
 without its header. A parser that reads nothing, or warns (`ParsedInvoice.warnings`),
 leaves the message on the invoice (`error_message`) and holds it in "À
 vérifier" - an empty invoice used to say "ce fournisseur n'a pas de parseur".
+
+#### Every espace's connectors (04/10/2026)
+
+The connectors opened to every bar, each signing in with what it typed on
+its own « Identifiants »; the reference is `invoices/integrations.py`'s
+docstring. Two gates (`accounts/tenancy.py`), asked by every entry point on
+its own - the views, the task bodies, each connector last:
+- `integrations_allowed()` - **any bound espace**: the invoice mailbox (its
+  sources, « Tester », the returnables slips), L'Addition's sales import and
+  the AI reading. Refused unbound only. No kill switch: an espace closed
+  (`Tenant.is_active`) is bound by no request.
+- `server_accounts_allowed()` - **the platform owner's espace only**
+  (`uses_server_integrations`; accounts.E005 unchanged: the server's .env
+  accounts are still one owner's): the .env's values as a fallback
+  (`vault.server_setting` - `setting`, `settings_of` and `ready` fall back
+  only through it, so another bar never signs in with the owner's
+  accounts), a server command's or setting's name on a page
+  (`recipes.integration.till_commands_shown`; elsewhere « récupérez ou
+  importez de nouveau les ventes … », `TILL_REIMPORT`), `laddition_open`,
+  and two connectors that stay his:
+  - **Metro**: every bar's sign-in would leave from the server's one IP,
+    which Metro's firewall judges for everybody (it blocked the owner
+    twice); a pause per espace protects nobody. `scrape_metro_invoices`,
+    `own_module_suppliers`, the gather (a METRO posted elsewhere fails on
+    its own line) and `metro_now`; elsewhere `integrations.METRO`, « à
+    configurer ». Its PDFs dropped by hand are read by its reader in every
+    espace.
+  - **the supplier portals**: the server's Chrome, on the owner's home
+    network, goes wherever a portal's page sends it (the router, MarginMate
+    on 127.0.0.1), and there is no egress proxy. The connector
+    (`website.credentials`, `_visit`), the gather, `test_website_task`, the
+    source form's channel and its « Tester », the gather card and the
+    Sources tab; elsewhere `integrations.PORTALS`.
+- **Offered once filled in** (another bar only; the owner's espace is never
+  asked, his .env or page stand): the gather card and Consignes offer its
+  mailbox sources and slips once `vault.ready(INVOICE_EMAIL_ADDRESS,
+  INVOICE_EMAIL_APP_PASSWORD)` (`integrations.mailbox_offered`, ONE
+  `vault.load()` per page), else « Boîte mail : à renseigner sur la page
+  Identifiants. » - a source that could only fail is not ticked at every
+  gather; « Analyse IA » once its key is (`ai_offered`), the upload form
+  refusing it before anything is sent.
+- **The mailbox's guards** (another bar's unless said):
+  - `EmailInvoiceSource.clean` runs the pattern guard
+    (`returnables.patterns.compile_pattern(..., flags=0)`) after the plain
+    `re.compile`, whose « Expression régulière invalide » stays - the form
+    and « Données » alike; the gather and « Tester » match with
+    `invoice_mail_matcher` (case-sensitive and single-line as `re`, the
+    body to 100 000 characters, the source stopped after three timeouts).
+    The owner's patterns are `re`'s, as always.
+  - `invoices/scrapers/egress.py`: the IMAP server's name is resolved
+    (`egress.resolve`, looked up at each call) before IMAP4_SSL, and
+    anything but a public unicast address refused - loopback, private,
+    link-local, CGNAT, multicast, reserved, unspecified, an IPv4-mapped IPv6
+    unwrapped; « Identifiants » refuses a local name (« localhost », a
+    single label, `.local`, `.lan`…). The connection resolves again: a name
+    rebinding in between still meets the TLS check of its certificate.
+  - in every espace, imaplib's `read(size)` of a literal past 50 MB is
+    refused (`generic_email._open_mailbox`, the capped class built at the
+    call so a test's stand-in for IMAP4_SSL still applies).
+  - **`NoNetworkTestCase` refuses `socket.getaddrinfo` of a name** (the
+    machine's own and addresses written as such pass): patch
+    `egress.resolve`, never resolve for real.
+- **The AI reading** (`parsers/llm_fallback.py`): runs inside the upload's
+  request, so `anthropic.Anthropic(api_key, timeout=60, max_retries=0)`
+  (Cloudflare answers the browser at 100 s), two process-wide slots taken
+  without waiting (`integrations.AI_BUSY`), every SDK error a fixed French
+  sentence read off the SDK's class names (`_said`) - all
+  `integrations.AiReadingRefused`, in `receipt_batches.READING_REFUSALS`.
+  `MODEL` and the forced `tool_choice` are unchanged: Sonnet 5.5 and Opus 5.5
+  refuse a forced tool.
+- **Chrome** (`invoices/scrapers/chrome.py`): another bar's always headless
+  (`headless()` - a window would open on the server's desktop), and
+  `browser_slot()`: two sessions for every other espace together, one each,
+  never waited for (« Tous les navigateurs du serveur sont occupés … »); the
+  owner's not counted. Wired into L'Addition's session only - Metro and the
+  portals are the owner's.
+- **Clean job logs** (`common.job_line`, in `ScrapeJob.append_log`, the text
+  of `update_progress` and `SalesImportJob.append_log`): outside the owner's
+  espace a line is cut at « Traceback (most recent call last): » and at
+  Selenium's « Stacktrace: », a path in the espace's own folder reduced to
+  its file's name, any other absolute path « [fichier du serveur] », and
+  sent whole to the `marginmate.jobs` logger (WARNING) with the espace's
+  folder; a line that was only a traceback is not written. The gather's
+  and the source tests' lines are French.
+- **Tests**: `invoices/tests/test_tenancy.py::GateTests` pins the
+  cross-espace guarantee - the owner's .env values in the settings, another
+  bar with nothing typed reaches none of them (Metro refused, the mailbox
+  `MAILBOX_MISSING`, the AI `AI_KEY_MISSING`, L'Addition types nothing:
+  `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
+  `test_ai_reading.py`, `test_chrome_policy.py`, `test_job_logs.py`,
+  `accounts/tests/test_credentials_hosted.py`.
+- **Not done, on purpose**: a kill switch per espace, an egress proxy that
+  would let the portals open, a server-wide Metro throttle, fair OCR between
+  bars, several mailboxes per espace. Every bar's store sits on the owner's
+  PC under his Windows account (« Not done, the owner's », above).
 
 ### Bank statements (`bank/`)
 
@@ -5677,9 +5783,12 @@ independent - which is what `MAX_AMOUNT` bounds.
 records sales. Add `--dry-run` first: it reports which till products match a
 recipe and which don't, without writing. `--file x.xlsx` skips the download.
 
-Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
-(`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
-run time, same as the Metro scraper.
+Credentials come from the espace's « Identifiants » (`accounts/vault.py`),
+else - in the platform owner's espace only - `.env` (`LADDITION_EMAIL` /
+`LADDITION_PASSWORD`), and are typed by the browser at run time, same as the
+Metro scraper. Every espace fetches its own sales since 04/10/2026
+(« Every espace's connectors », under « Gathering invoices »);
+`laddition_open` stays the owner's.
 
 Four things that cost real debugging time:
 

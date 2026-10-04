@@ -447,7 +447,7 @@ def invoice_type_list(request):
 
 
 def invoice_type_form(request, pk=None):
-    """A kind of invoice to gather: from the shared mailbox (patterns on
+    """A kind of invoice to gather: from the espace's mailbox (patterns on
     the emails) or from the supplier's customer portal (a login page and
     the two names its credentials are kept under). Only the
     chosen kind's settings are validated and saved; "Tester" runs either

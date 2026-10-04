@@ -260,7 +260,7 @@ def find_matching_emails(
     should_cancel=None,
     compile=None,
 ) -> list[EmailMatch]:
-    """Searches the shared invoice mailbox for emails matching every given
+    """Searches the espace's invoice mailbox for emails matching every given
     pattern (blank subject/body pattern = match anything), fetching each
     matched attachment's bytes into memory (nothing written to disk here -
     see scrape_email_invoices for that). `on_progress(matched, total)` fires

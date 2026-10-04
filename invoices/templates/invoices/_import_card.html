@@ -100,9 +100,9 @@ parts trigger `documents-changed` when they end).
     <div id="import-fetch" role="tabpanel" data-import-panel="recuperer" hidden>
         {% if gather_refused %}
         {% comment %}
-        Metro, the mailbox and the portals are the server's own accounts
-        (invoices/integrations.py): a tenant that may not use them gets the
-        sentence and no form - trigger_gather refuses a post all the same.
+        Unbound only (invoices/integrations.py): the sentence and no form -
+        trigger_gather refuses a post all the same. Another bar's card lists
+        its mailbox's sources and says what it does not search (gather_notes).
         {% endcomment %}
         <div class="message">{{ gather_refused }}</div>
         {% else %}

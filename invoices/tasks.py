@@ -705,7 +705,7 @@ def test_email_pattern_task(
     body_pattern: str,
     attachment_pattern: str,
 ) -> None:
-    """Dry-run: searches the shared mailbox for emails matching the given
+    """Dry-run: searches the espace's mailbox for emails matching the given
     patterns and records what it found in job.test_matches - nothing is
     written to disk and nothing is imported. Lets a new invoice type's
     patterns be verified against real mail before it's ever used in a real
