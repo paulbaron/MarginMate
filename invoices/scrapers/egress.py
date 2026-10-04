@@ -67,14 +67,18 @@ def local_name(host: str) -> bool:
 
 
 def address_allowed(text: str) -> bool:
-    """Whether a resolved address is a public unicast one (an IPv4-mapped
-    IPv6 address judged as its IPv4)."""
+    """Whether a resolved address is a public unicast one (an IPv6 address
+    wrapping an IPv4 one - IPv4-mapped, 6to4 - judged as its IPv4: Python
+    calls 2002:c0a8:0101::1 global, and a 6to4 relay takes it to
+    192.168.1.1)."""
     try:
         address = ipaddress.ip_address(str(text).split("%", 1)[0])
     except ValueError:
         return False
     if address.version == 6 and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
+    elif address.version == 6 and address.sixtofour is not None:
+        address = address.sixtofour
     return (
         address.is_global
         and not address.is_multicast

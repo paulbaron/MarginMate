@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, datetime, timedelta
 from io import StringIO
+from pathlib import Path
 from unittest import mock
 
 from django.apps import apps
@@ -393,6 +395,29 @@ class GateTests(TwoTenantsTestCase):
                 credentials(portal_recipe(), env_file=None, environ=environ),
                 ("gerant@exemple.invalid", "secret-essai"),
             )
+
+    def test_a_portal_s_visit_makes_no_folder_and_starts_no_browser_for_another_bar(self):
+        """The connector's own gate, before a folder is made, the kept pages
+        pruned, a credential read or a browser started - whoever called it
+        (fetch_website_invoices, list_website_invoices)."""
+        from invoices.scrapers import website
+
+        folder = Path(tempfile.mkdtemp()) / "portail"
+        driver_factory = mock.Mock(side_effect=AssertionError("a browser started"))
+        for visit in (website.fetch_website_invoices, website.list_website_invoices):
+            with (
+                self.subTest(visit=visit.__name__),
+                bound_tenant(self.bar_b),
+                mock.patch.object(website, "prune_dumps") as prune,
+                mock.patch.object(website, "credentials") as read,
+                self.assertRaises(website.WebsiteError) as refused,
+            ):
+                visit(portal_recipe(), str(folder), START, END, driver_factory=driver_factory)
+            self.assertEqual(str(refused.exception), integrations.PORTALS)
+            prune.assert_not_called()
+            read.assert_not_called()
+        driver_factory.assert_not_called()
+        self.assertFalse(folder.exists())
 
     @override_settings(**SERVER_ENV)
     def test_the_ai_reading_never_bills_the_server_s_key(self):

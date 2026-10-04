@@ -529,7 +529,12 @@ def invoice_type_form(request, pk=None):
         elif request.POST.get("action") == "test":
             # Only the patterns need to be valid to try them - name/supplier
             # can still be blank/invalid while iterating on a regex.
-            if source_form.is_valid():
+            if source_form.is_valid() and _a_test_runs_here():
+                # Another bar's « Tester » is one mailbox search at a time:
+                # each click was a thread signing in to a server it names,
+                # over the dates it chose (the owner's tests run as always).
+                messages.error(request, TEST_RUNNING)
+            elif source_form.is_valid():
                 start = source_form.cleaned_data["test_start_date"] or (timezone.localdate() - timedelta(days=30))
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
                 test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
@@ -659,6 +664,21 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
             "depuis leur page.",
         )
     return redirect(return_to or "invoices:invoice_type_list")
+
+
+TEST_RUNNING = "Un test de source est déjà en cours : attendez qu'il se termine."
+
+
+def _a_test_runs_here() -> bool:
+    """Whether a source's « Tester » of this espace is running, outside the
+    platform owner's espace - a test whose thread died is reaped first, so
+    it never holds the button for good (common.JobLogMixin)."""
+    if server_accounts_allowed():
+        return False
+    ScrapeJob.reap_stale()
+    return ScrapeJob.objects.filter(
+        kind=ScrapeJob.Kind.TEST, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
+    ).exists()
 
 
 def _test_website(request, type_form, website_form):

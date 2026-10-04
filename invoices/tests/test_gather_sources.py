@@ -119,6 +119,20 @@ class MetroInTheGatherTests(TestCase):
         find_slips.assert_called_once()
         self.assertEqual(find_slips.call_args.kwargs["sender_pattern"], seeded.sender_pattern)
 
+    def test_metro_switched_off_is_said_only_when_metro_was_asked_for(self):
+        """« Metro supplier is not configured as scrapable, skipping. » was
+        written on every gather that did not even ask for Metro."""
+        from invoices.models import Supplier
+
+        Supplier.objects.filter(code="METRO").update(is_scrapable=False)
+        said = "Metro : la récupération automatique est désactivée pour ce fournisseur, rien n'est cherché."
+        job, scrape_metro, *_ = self.gather(lambda *a, **k: [], codes={f"type-{self.mail_type.id}"})
+        scrape_metro.assert_not_called()
+        self.assertNotIn(said, job.log)
+        job, scrape_metro, *_ = self.gather(lambda *a, **k: [])
+        scrape_metro.assert_not_called()
+        self.assertIn(said, job.log)
+
     def test_one_sign_in_asked_for_passes_the_pause(self):
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], metro_now=True)
         self.assertTrue(scrape_metro.call_args.kwargs["ignore_pause"])

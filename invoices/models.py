@@ -202,6 +202,19 @@ class EmailInvoiceSource(models.Model):
         "body_pattern": "Motif de contenu",
         "attachment_pattern": "Motif de pièce jointe",
     }
+    #: What the guard tells a pattern that finds something in an empty text
+    #: - it would keep every e-mail, or every attachment -, field by field:
+    #: the slips' sentence about lines means nothing here.
+    EMPTY_MATCH_REASONS = {
+        "sender_pattern": "le motif retient un expéditeur vide, donc tous les e-mails : pour tous les expéditeurs, "
+        "écrivez @",
+        "subject_pattern": "le motif retient un objet vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "body_pattern": "le motif retient un contenu vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "attachment_pattern": "le motif retient un nom vide, donc toutes les pièces jointes : pour toutes, écrivez "
+        "un point (.)",
+    }
 
     def clean(self):
         """Each pattern compiles - and outside the platform owner's espace
@@ -233,6 +246,8 @@ class EmailInvoiceSource(models.Model):
                         field_label=self.PATTERN_LABELS[field_name],
                         max_length=self._meta.get_field(field_name).max_length,
                         flags=0,
+                        strip=False,
+                        empty_reason=self.EMPTY_MATCH_REASONS[field_name],
                     )
                 except patterns.PatternError as exc:
                     errors[field_name] = str(exc)

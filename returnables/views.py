@@ -205,7 +205,9 @@ def _gather_context(today: date, slips_only: bool = False) -> dict:
     # gather that could only fail.
     bound = integrations_allowed()
     allowed = bound and integrations.mailbox_offered()
-    job, running = _slips_job() if allowed else (None, False)
+    # A gather already running (or just ended) is shown and holds the button
+    # wherever the espace is bound - its mailbox emptied since included.
+    job, running = _slips_job() if bound else (None, False)
     # Each format's own start (returnables.mail: a few days before its newest
     # MAILED slip, else 90 days back); the gather searches from the earliest.
     starts = [fetch_start(fmt, None, today) for fmt in mail_formats] if allowed else []

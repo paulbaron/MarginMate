@@ -143,6 +143,12 @@ class _Refused(Exception):
         self.reason = reason
 
 
+class _MatchesEmpty(_Refused):
+    """Step 7's refusal: the pattern finds something in an empty text. Its
+    reason is the slips' unless the caller says what it means for its field
+    (`compile_pattern(empty_reason=)`)."""
+
+
 # -- The standard parser's errors, in French ------------------------------------------------------------------------
 
 #: (start of the stdlib message, what the page says). The first that the
@@ -420,27 +426,41 @@ def _checked(pattern: str, required_groups: tuple, max_length: int, flags: int =
     except TimeoutError:
         raise _Refused("le motif est trop lent") from None
     if empty is not None:
-        raise _Refused("le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne")
+        raise _MatchesEmpty("le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne")
     if any(name not in compiled.groupindex for name in required_groups):
         raise _Refused(f"le motif doit contenir {_groups_sentence(required_groups)}")
     return compiled
 
 
 def compile_pattern(
-    text, *, field_label: str, required_groups=(), max_length: int = MAX_PATTERN_LENGTH, flags: int = FLAGS
+    text,
+    *,
+    field_label: str,
+    required_groups=(),
+    max_length: int = MAX_PATTERN_LENGTH,
+    flags: int = FLAGS,
+    strip: bool = True,
+    empty_reason: str | None = None,
 ):
-    """The pattern `text` (stripped), checked then compiled with `flags`
-    (IGNORECASE | MULTILINE unless told) - or PatternError, a French sentence
-    starting with `field_label`. A blank pattern is refused here: whether a
-    field may be blank is its caller's to decide, before calling
-    (`compile_field` does)."""
-    pattern = (text or "").strip()
-    if not pattern:
+    """The pattern `text` (stripped, unless `strip` is False: an invoice
+    source's pattern is matched as `re` matched it, a trailing space
+    included), checked then compiled with `flags` (IGNORECASE | MULTILINE
+    unless told) - or PatternError, a French sentence starting with
+    `field_label`. A blank pattern is refused here: whether a field may be
+    blank is its caller's to decide, before calling (`compile_field` does).
+    `empty_reason`: what a pattern finding something in an empty text is
+    told, where the slips' sentence about lines would mean nothing."""
+    pattern = text or ""
+    if strip:
+        pattern = pattern.strip()
+    if not pattern.strip():
         raise PatternError(f"{field_label} : le motif est vide.")
     if len(pattern) > max_length:
         raise PatternError(f"{field_label} : {max_length} caractères au plus ({len(pattern)} ici).")
     try:
         return _checked(pattern, tuple(required_groups), max_length, flags)
+    except _MatchesEmpty as refused:
+        raise PatternError(f"{field_label} : {empty_reason or refused.reason}.") from None
     except _Refused as refused:
         raise PatternError(f"{field_label} : {refused.reason}.") from None
 
@@ -667,14 +687,25 @@ def mail_matcher(text, *, log=None) -> MailMatcher:
 INVOICE_PATTERN_MAX_LENGTH = 500
 
 
-def invoice_mail_matcher(text, *, log=None, field_label="Motif de la source") -> MailMatcher:
+def invoice_mail_matcher(
+    text, *, log=None, field_label="Motif de la source", empty_reason: str | None = None
+) -> MailMatcher:
     """The `compile` an invoice source's patterns are handed to
     find_matching_emails with, outside the platform owner's espace: checked
     like any pattern, compiled with `flags=0` (case-sensitive and
-    single-line, as `re.compile` always matched them), matched on
+    single-line, as `re.compile` always matched them) and not stripped (a
+    trailing space is part of what `re` matched), matched on
     INVOICE_MAIL_TEXT_LIMIT characters with a timeout, the source stopped
-    after MAX_MAIL_TIMEOUTS of them."""
-    compiled = compile_pattern(text, field_label=field_label, max_length=INVOICE_PATTERN_MAX_LENGTH, flags=0)
+    after MAX_MAIL_TIMEOUTS of them. `field_label` and `empty_reason` name
+    the field as the source's form does (invoices.models.EmailInvoiceSource)."""
+    compiled = compile_pattern(
+        text,
+        field_label=field_label,
+        max_length=INVOICE_PATTERN_MAX_LENGTH,
+        flags=0,
+        strip=False,
+        empty_reason=empty_reason,
+    )
     return MailMatcher(
         compiled, log, limit=INVOICE_MAIL_TEXT_LIMIT, max_timeouts=MAX_MAIL_TIMEOUTS, field_label=field_label
     )

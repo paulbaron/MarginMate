@@ -105,6 +105,10 @@ parts trigger `documents-changed` when they end).
         its mailbox's sources and says what it does not search (gather_notes).
         {% endcomment %}
         <div class="message">{{ gather_refused }}</div>
+        {% elif gather_to_fill %}
+        {% comment %}Another bar with no mailbox on « Identifiants »: nothing to gather, so no form (invoices/workspace.py).{% endcomment %}
+        <div class="message">{{ gather_to_fill }}</div>
+        {% for note in gather_notes %}<p class="muted">{{ note }}</p>{% endfor %}
         {% else %}
         <form method="post" action="{% url 'invoices:gather' %}" class="inline-form">
             {% csrf_token %}

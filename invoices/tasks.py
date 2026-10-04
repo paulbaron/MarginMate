@@ -12,11 +12,12 @@ from django.utils import timezone
 
 from accounts import paths
 from accounts.tenancy import bound, integrations_allowed, server_accounts_allowed
+from common import error_for_page
 
 from . import integrations
 from .importing import DuplicateInvoiceError, RoutedToReturnablesError, parse_and_import
 from .models import Invoice, InvoiceType, ScrapeJob, Supplier
-from .scrapers.generic_email import find_matching_emails, scrape_email_invoices
+from .scrapers.generic_email import failure_said, find_matching_emails, scrape_email_invoices
 from .scrapers.metro import MetroError, MetroPaused, scrape_metro_invoices
 from .scrapers.website import WebsiteError, WebsiteRecipe, fetch_website_invoices, list_website_invoices
 
@@ -346,7 +347,9 @@ def gather_invoices_task(
         job.append_log("Annulé par l'utilisateur.")
         job.status = ScrapeJob.Status.CANCELLED
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
-        detail = str(exc).strip() or exc.__class__.__name__
+        # Another bar's card shows this: never a library's words there
+        # (common.error_for_page); the owner reads the exception as always.
+        detail = (str(exc).strip() or exc.__class__.__name__) if server_accounts_allowed() else error_for_page(exc)
         job.append_log(f"Récupération interrompue par une erreur : {detail}\n{traceback.format_exc()}")
         # The card shows the log's last line in plain view: the reason, not
         # the traceback's last frame.
@@ -383,7 +386,9 @@ def _gather_email(
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
         from returnables.patterns import PatternError
 
-        detail = str(exc).strip() or exc.__class__.__name__
+        # Another bar reads a fixed sentence, never the library's words
+        # (generic_email.failure_said); the owner the exception as always.
+        detail = failure_said(exc)
         job.append_log(f"{invoice_type.name} : échec de la boîte mail - {detail}\n{traceback.format_exc()}")
         # A pattern the guard refuses, or a server refused, is the source's
         # or the « Identifiants »'s to correct, said as it is.
@@ -504,7 +509,7 @@ def _gather_slips(
     except _Cancelled:
         raise
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
-        detail = str(exc).strip() or exc.__class__.__name__
+        detail = failure_said(exc)
         job.append_log(f"{slips_label(fmt)} : échec - {detail}\n{traceback.format_exc()}")
         # A pattern the guard refuses is the format's to correct, not the
         # mailbox's.
@@ -749,7 +754,7 @@ def test_email_pattern_task(
         if job.status == ScrapeJob.Status.CANCELLED:
             job.append_log("Annulé par l'utilisateur.")
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
-        detail = str(exc).strip() or exc.__class__.__name__
+        detail = failure_said(exc)
         job.append_log(f"Échec du test : {detail}\n{traceback.format_exc()}")
         job.status = ScrapeJob.Status.FAILED
     finally:

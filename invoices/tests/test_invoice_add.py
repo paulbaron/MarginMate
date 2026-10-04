@@ -650,7 +650,7 @@ class SlipsGatherTests(TestCase):
             kind=ScrapeJob.Kind.GATHER,
             status=ScrapeJob.Status.SUCCESS,
             progress={"bons-1": {"label": "Bons", "found": 1}, "type-4": {"label": "Eau Exemple", "found": 2}},
-            log="Matched: 'Facture Exemple' from 'factures@example.invalid' (1 attachment(s))",
+            log="Retenu : « Facture Exemple » de factures@example.invalid (1 pièce(s) jointe(s)).",
             finished_at=timezone.now(),
         )
         page = self.client.get(RETURNABLES_HOME)

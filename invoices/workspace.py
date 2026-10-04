@@ -356,11 +356,12 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
         # What another espace's gather does not search, said under its sources.
-        "gather_notes": (
-            []
-            if server or not allowed
-            else [*([] if mailbox else [integrations.MAILBOX_TO_FILL]), integrations.METRO, integrations.PORTALS]
-        ),
+        "gather_notes": [] if server or not allowed else [integrations.METRO, integrations.PORTALS],
+        # Another espace whose mailbox is not filled in has nothing to gather
+        # (Metro and the portals are the owner's): the sentence in place of
+        # the form, never « Aucune source configurée » and a button answering
+        # « Aucune source cochée ».
+        "gather_to_fill": integrations.MAILBOX_TO_FILL if allowed and not server and not mailbox else None,
         "ai_refused": (
             integrations.AI_READING
             if not allowed
