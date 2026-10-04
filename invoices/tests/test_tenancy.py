@@ -40,7 +40,7 @@ from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Suppl
 from invoices.parsers import LLM_PARSER_KEY
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
 from invoices.tests.pdf_files import write_pdf
-from tests.factories import make_invoice, make_supplier
+from tests.factories import make_invoice, make_invoice_type, make_supplier
 
 START, END = date(2026, 1, 1), date(2026, 1, 31)
 
@@ -96,11 +96,19 @@ class GateTests(TwoTenantsTestCase):
 
     def reopen_the_owners_integrations_in_b(self):
         """What a « Données » import or the admin could do to Beta's rows:
-        the data must not be what keeps the owner's accounts out of reach."""
+        the data must not be what keeps the owner's accounts out of reach.
+        A new hosted espace starts without the original bar's mailbox source
+        (invoices.seeds): Beta is given one, or the mailbox went untested."""
         with bound_tenant(self.bar_b):
             Supplier.objects.filter(code="METRO").update(is_scrapable=True)
+            if not InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL).exists():
+                make_invoice_type(
+                    supplier=make_supplier(code="GROSSISTE_B", name="Grossiste Beta"), name="Grossiste Beta - Factures"
+                )
             InvoiceType.objects.update(is_active=True)
-            return [f"type-{pk}" for pk in InvoiceType.objects.values_list("pk", flat=True)]
+            codes = [f"type-{pk}" for pk in InvoiceType.objects.values_list("pk", flat=True)]
+        self.assertTrue(codes, "Beta holds a mailbox source, or the gate is proven on Metro alone")
+        return codes
 
     # ------------------------------------------------------------ the views
 
