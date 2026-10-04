@@ -130,6 +130,14 @@ class GatherPeriodTests(TestCase):
         )
         self.assertNotEqual(self.start_date_shown()[0], date(2026, 1, 1))
 
+    def test_a_period_typed_before_2000_is_not_offered_again(self):
+        """A gather asked from « 26 » (0026-09-01) before the period was
+        checked: offered again, the date box refused its own value and the
+        start had to be typed again. The earliest a document may be dated is
+        offered instead."""
+        gather_job(ScrapeJob.Status.FAILED, range_start=date(26, 9, 1), range_end=date(26, 9, 18))
+        self.assertEqual(self.start_date_shown(), (date(2000, 1, 1), date(2000, 1, 1)))
+
     def test_a_gather_that_went_well_offers_what_arrived_since(self):
         gather_job(ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 18), progress={})
         self.assertNotEqual(self.start_date_shown()[0], date(2026, 1, 1))

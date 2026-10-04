@@ -28,7 +28,7 @@ from accounts.tenancy import integrations_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
 from . import integrations
-from .forms import CHANNELS, InvoiceUploadForm, ReceiptBatchUploadForm
+from .forms import CHANNELS, EARLIEST_DOCUMENT_DATE, InvoiceUploadForm, ReceiptBatchUploadForm
 from .models import Invoice, InvoiceLine, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from .tasks import default_gather_start, slips_code, slips_label
 
@@ -309,6 +309,11 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         asked_until = period_job.range_end
         if asked_until and asked_until < timezone.localdate(period_job.started_at):
             gather_end = asked_until  # a past period, asked on purpose
+    # Never below the date boxes' min (gather_range_problem): a period typed
+    # « 26 » before it was checked, or an e-invoice dated 0001 as the newest
+    # in, was offered, refused by the box and had to be typed again.
+    gather_start = max(gather_start, EARLIEST_DOCUMENT_DATE)
+    gather_end = max(gather_end, EARLIEST_DOCUMENT_DATE)
 
     recent_batches = list(ReceiptBatch.objects.all()[:5])
     senders_shown = _name_senders(request, recent_batches)
