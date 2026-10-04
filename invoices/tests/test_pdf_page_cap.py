@@ -760,6 +760,40 @@ class DrawnContentTests(TestCase):
 
         self.assertEqual(llm_fallback._extract_text(self.path).count("REPRISE VIDE"), 1)
 
+    def test_a_file_pdfminer_cannot_weigh_is_never_drawn(self):
+        """PDFium rebuilds a PDF cut before its xref, which pdfminer cannot
+        open: the weighing let it through, and the 30 MB-stroke page it
+        refuses reached PDFium (702 MB). page_images now refuses what it
+        could not weigh, « PDF illisible » - the text layer and the count
+        still let it pass, as before, for what reads it next to say."""
+        from common import UNREADABLE_PDF, UnreadablePdf, error_for_page
+        from returnables.tests.test_reading import pdf_drawing_a_form
+
+        content = pdf_drawing_a_form(3, 4_000)
+        self.write(content[: content.rindex(b"xref")])
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000):
+            ocr.check_page_count(self.path)
+            self.assertEqual(ocr.text_layer_pages(self.path), [])
+            for name, reader in {
+                "page_images": lambda path: list(ocr.page_images(path)),
+                "ocr_pdf": ocr.ocr_pdf,
+            }.items():
+                with self.subTest(reader=name), mock.patch("invoices.pdfium_sandbox.run", never("PDFium")):
+                    with self.assertRaises(UnreadablePdf) as refused:
+                        reader(self.path)
+                    self.assertEqual(error_for_page(refused.exception), UNREADABLE_PDF)
+
+    def test_a_stream_pdfminer_cannot_decode_is_never_drawn(self):
+        """A stream pdfminer cannot decode weighed nothing, and went on to
+        PDFium all the same."""
+        from common import UnreadablePdf
+        from returnables.tests.test_reading import pdf_with_streams
+
+        self.write(pdf_with_streams([(["Inconnu"], b"0 0 m 1 1 l S\n" * 10)]))
+        ocr.check_page_count(self.path)
+        with mock.patch("invoices.pdfium_sandbox.run", never("PDFium")), self.assertRaises(UnreadablePdf):
+            list(ocr.page_images(self.path))
+
 
 class TooManyCodesTests(TestCase):
     """pdfminer expands a font's ToUnicode ranges code by code: an 872-byte

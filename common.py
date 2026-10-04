@@ -258,7 +258,8 @@ _PDF_LIBRARIES = ("pypdfium2", "pdfminer", "pdfplumber")
 class UnreadablePdf(RuntimeError):
     """A PDF the app itself found unreadable, said as a PDF library's error
     is (UNREADABLE_PDF): what PDFium could not open in the process it runs
-    in (invoices.ocr.page_images). Its words are for the server's log."""
+    in, or pdfminer could not weigh before (invoices.ocr.page_images). Its
+    words are for the server's log."""
 
 
 def _raised_in(exc: BaseException) -> str:

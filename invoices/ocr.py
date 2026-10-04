@@ -399,7 +399,8 @@ def page_images(path: str):
     at MIN_RENDER_SCALE (a bigger page is rendered at a lower resolution).
 
     A PDF is drawn by PDFium in a process of its own (`_drawn_pages`), never
-    in this one; refused here first by its weighing (`_weigh_contents`).
+    in this one; refused here first by its weighing (`_weigh_contents`,
+    which refuses what pdfminer cannot weigh: UnreadablePdf).
     """
     if path.lower().endswith(IMAGE_EXTENSIONS):
         from PIL import Image, ImageOps, ImageSequence
@@ -415,7 +416,7 @@ def page_images(path: str):
                 yield ImageOps.exif_transpose(frame).convert("RGB")
         return
 
-    _weigh_contents(path)
+    _weigh_contents(path, strict=True)
     yield from _drawn_pages(path)
 
 
@@ -579,7 +580,7 @@ def _too_heavy() -> DocumentTooBig:
     return DocumentTooBig(TOO_HEAVY_CONTENT.format(weight=weight(MAX_INFLATE_TOTAL)))
 
 
-def _weigh_contents(path: str) -> None:
+def _weigh_contents(path: str, strict: bool = False) -> None:
     """Refuse (DocumentTooBig) a PDF whose pages' content streams, and the
     forms they draw, inflate past MAX_INFLATE_TOTAL together - before
     pdfplumber or PDFium decodes one (security audit: a 718 KB file listing
@@ -592,30 +593,42 @@ def _weigh_contents(path: str) -> None:
     (`_decode_drawn`): past MAX_RUN_TOTAL drawn, or a page drawing more than
     reading.MAX_PAGE_GLYPHS XObjects and annotations, DocumentTooBig. A file
     pdfminer cannot open or walk, or a stream it cannot decode, passes: what
-    is wrong with it is said by what reads it next."""
+    is wrong with it is said by what reads it next - unless `strict`
+    (`page_images`, before PDFium): then a file this cannot weigh, a stream
+    it cannot decode, or no page to weigh, is UnreadablePdf, « PDF
+    illisible ». PDFium rebuilds what pdfminer cannot open: the page of
+    30 MB of strokes this refuses, cut before its xref, went through to
+    PDFium (702 MB). pdfminer weighs every one of 1 374 real invoices, every
+    stream decoded."""
     import itertools
 
     from pdfminer.pdfdocument import PDFDocument
     from pdfminer.pdfpage import PDFPage
     from pdfminer.pdfparser import PDFParser
 
+    from common import UnreadablePdf
     from returnables import reading
 
     with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
-        drawn = [MAX_RUN_TOTAL]
+        drawn, pages = [MAX_RUN_TOTAL], 0
         try:
             with open(path, "rb") as handle:
                 document = PDFDocument(PDFParser(handle))
                 for page in itertools.islice(PDFPage.create_pages(document), MAX_PAGES + 1):
-                    _decode_drawn(page, budget, drawn)
-        except DocumentTooBig:
+                    pages += 1
+                    _decode_drawn(page, budget, drawn, strict)
+        except (DocumentTooBig, UnreadablePdf):
             raise
-        except Exception as error:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file
+        except Exception as error:  # pdfminer raises its own zoo for a broken file
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
+            if strict:
+                raise UnreadablePdf(f"pdfminer : {type(error).__name__}: {error}") from error
             return
         if budget[0] < 0:
             raise _too_heavy()
+        if strict and not pages:
+            raise UnreadablePdf("pdfminer : aucune page.")
 
 
 #: What draws an XObject in a content stream, read as PDFium reads it: the
@@ -675,7 +688,7 @@ def _drawn(data: bytes) -> tuple[Counter, int]:
     return names, inline
 
 
-def _decode_drawn(page, budget: list, drawn: list) -> None:
+def _decode_drawn(page, budget: list, drawn: list, strict: bool = False) -> None:
     """Decode every content stream `page` draws, charging each to `drawn`
     as often as PDFium draws it: its /Contents, every form each time a Do
     draws it, every annotation's appearances (security review: PDFium
@@ -686,13 +699,15 @@ def _decode_drawn(page, budget: list, drawn: list) -> None:
     XObjects, inline images and annotations on the page, PDFium keeping an
     object of each. The forms its resources hold that nothing draws are
     decoded too. A form is decoded once a page, and never drawn inside
-    itself, as pdfminer and PDFium do; what cannot be found draws nothing."""
+    itself, as pdfminer and PDFium do; what cannot be found draws nothing.
+    A stream pdfminer cannot decode weighs nothing - UnreadablePdf when
+    `strict`."""
     import copy
 
     from pdfminer.pdftypes import PDFStream, dict_value, list_value, resolve1
     from pdfminer.psparser import LIT
 
-    from common import group_thousands, weight
+    from common import UnreadablePdf, group_thousands, weight
     from returnables import reading
 
     def resolved(item):
@@ -706,9 +721,11 @@ def _decode_drawn(page, budget: list, drawn: list) -> None:
     def decoded(stream) -> bytes:
         try:
             return copy.copy(stream).get_data()
-        except Exception as error:  # noqa: BLE001 - a damaged stream is the reader's to say
+        except Exception as error:  # a damaged stream is the reader's to say
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
+            if strict:
+                raise UnreadablePdf(f"pdfminer : un flux illisible ({type(error).__name__}).") from error
             return b""
 
     known = {}
