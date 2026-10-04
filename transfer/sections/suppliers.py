@@ -21,9 +21,13 @@ history: no `SupplierChange` is recorded (§6.6).
 
 An archive written before 04/10/2026 carries the AI reading's pseudo-supplier
 (`RETIRED_AI_CODE`, `RETIRED_AI_READER`), which invoices/0037 removed with the
-reading: it is never created again as such. Nothing this run imports filed
-under it, it is left out, said; something is, it comes as an ordinary
-supplier, its reader key emptied (`_retired_ai`).
+reading: it is never created again as such, and its reader key is never
+written (`_retired_ai`). Where 0037 kept it here - something named it - the
+record is that supplier's, read as an ordinary one's. Where it is gone, it
+comes back as an ordinary supplier only when this run imports something
+filed under it (`_filed_under_by_this_run`), else it is left out, said. No
+new shop takes its code (`invoices.receipts.RETIRED_CODES`), so OTHER here is
+always that supplier.
 """
 
 from __future__ import annotations
@@ -148,17 +152,45 @@ def _retired_ai(record: dict) -> bool:
     return record.get("code") == RETIRED_AI_CODE and record.get("parser_key") == RETIRED_AI_READER
 
 
-def _filed_under_by_this_run(ctx, code: str) -> bool:
-    """Whether a section this run imports files something under `code` - it
-    names it among its `supplier_names`, the table every section filing a
-    record under a supplier writes. Every such section requires
-    « Fournisseurs », so one not imported here brings nothing that would
-    need it."""
+def _filed_under_by_this_run(ctx, record: dict) -> bool:
+    """Whether this run imports something filed under the archive's
+    supplier `record`: its own known prices, or a record of another section
+    of the run - one naming it among its `supplier_names`, the table every
+    section filing a record under a supplier writes. A section left out of
+    the run brings nothing.
+
+    « Banque » is read by its payee names alone: its `supplier_names` also
+    names the suppliers of the invoices its payments settle, and those
+    invoices come only with « Factures » - which, imported in the same run,
+    names them itself. Read whole, a payment with « Factures » left out
+    brought back a supplier with nothing under it."""
+    from transfer.sections.bank import KEY as BANK
+
+    items = record.get("item_prices")
+    if isinstance(items, list) and items:
+        return True
+    code = record["code"]
     for key in ctx.strategies:
         if key == KEY:
             continue
-        names = ctx.reader.section(key).payload().get("supplier_names")
-        if isinstance(names, dict) and code in names:
+        payload = ctx.reader.section(key).payload()
+        if key == BANK:
+            aliases = payload.get("aliases")
+            # An archive is read, never trusted: a code that is no text is
+            # left to the bank's own refusal, never hashed here.
+            named = (
+                {
+                    alias["supplier"]
+                    for alias in aliases
+                    if isinstance(alias, dict) and isinstance(alias.get("supplier"), str)
+                }
+                if isinstance(aliases, list)
+                else set()
+            )
+        else:
+            names = payload.get("supplier_names")
+            named = names if isinstance(names, dict) else {}
+        if code in named:
             return True
     return False
 
@@ -340,13 +372,17 @@ class SuppliersSection(Section):
                     block(ctx, code)
                 continue
             if _retired_ai(record):
-                if not _filed_under_by_this_run(ctx, code):
-                    report.note(AI_LEFT_OUT.format(name=name))
-                    if code not in by_code:
-                        block(ctx, code)
-                    continue
-                report.note(AI_ORDINARY.format(name=name))
+                # Kept here by 0037 (something named it), it is that
+                # supplier, ordinary: matched by its code like any other -
+                # left out, « Remplacer » would have pruned it, and the rows
+                # naming it with it.
                 record = {**record, "parser_key": ""}
+                if code not in by_code:
+                    if not _filed_under_by_this_run(ctx, record):
+                        report.note(AI_LEFT_OUT.format(name=name))
+                        block(ctx, code)
+                        continue
+                    report.note(AI_ORDINARY.format(name=name))
             supplier = by_code.get(code)
             if supplier is not None:
                 claimed[supplier.pk] = code

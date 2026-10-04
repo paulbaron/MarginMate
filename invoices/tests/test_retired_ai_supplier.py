@@ -28,6 +28,21 @@ from tests.factories import make_invoice, make_product, make_supplier
 MIGRATION = importlib.import_module("invoices.migrations.0037_retire_ai_reading_supplier")
 SEED = importlib.import_module("invoices.migrations.0002_seed_suppliers")
 NODE = ("invoices", "0037_retire_ai_reading_supplier")
+#: Every (model, field) pointing at Supplier when 0037 was written
+#: (04/10/2026) - CASCADE, SET_NULL and PROTECT alike, the hidden
+#: SupplierChange.other_supplier included. A literal, never the live model:
+#: see `MigrationShapeTests`.
+RELATIONS_AT_0037 = {
+    ("inventory.product", "supplier"),
+    ("invoices.supplierchange", "supplier"),
+    ("invoices.supplierchange", "other_supplier"),
+    ("invoices.invoicetype", "supplier"),
+    ("invoices.invoice", "supplier"),
+    ("invoices.shopitemprice", "supplier"),
+    ("bank.counterpartyalias", "supplier"),
+    ("returnables.slipformat", "supplier"),
+    ("returnables.pickup", "supplier"),
+}
 
 
 def seeded_ai_supplier() -> Supplier:
@@ -147,11 +162,17 @@ class MigrationShapeTests(TestCase):
         seeded = next(supplier for supplier in SEED.SUPPLIERS if supplier["code"] == "OTHER")
         self.assertEqual((MIGRATION.CODE, MIGRATION.AI_READER_KEY), (seeded["code"], seeded["parser_key"]))
 
-    def test_the_model_it_walks_knows_every_relation_to_a_supplier(self):
-        """What the migration sees is the state its dependencies build - the
-        apps whose models point at Supplier must come before it, or a
-        relation is never asked and a CASCADE takes its rows."""
+    def test_the_model_it_walks_knows_every_relation_to_a_supplier_of_its_day(self):
+        """What the migration sees is the state its dependencies build: on
+        04/10/2026, every relation to a supplier (`RELATIONS_AT_0037`) - one
+        left out is never asked, and a CASCADE takes its rows.
+
+        Compared with that day's list, never with today's model. Once
+        shipped, 0037 runs in every espace and is never edited: a key to
+        Supplier added by a later migration is none of its business, and a
+        dependency added to it then would stop every espace that applied it
+        (InconsistentMigrationHistory, `migrate_tenants` failing at the
+        deploy)."""
         state = MigrationLoader(connection).project_state(NODE, at_end=False)
         walked = relations_to(state.apps.get_model("invoices", "Supplier"))
-        self.assertEqual(walked, relations_to(Supplier))
-        self.assertIn(("invoices.supplierchange", "other_supplier"), walked)
+        self.assertEqual(walked, RELATIONS_AT_0037)

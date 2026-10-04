@@ -14,7 +14,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from bank.models import CounterpartyAlias
+from bank.models import BankTransaction, CounterpartyAlias
 from inventory.models import Product
 from invoices.models import (
     Invoice,
@@ -37,6 +37,7 @@ from transfer.tests.support import (
     import_archive,
     round_trip,
 )
+from transfer.tests.test_bank_section import make_line, pay
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
 #: What separates an amount's thousands in the report (common.THOUSANDS_SEPARATOR).
@@ -734,16 +735,25 @@ class OlderArchiveTests(TestCase):
     so nothing of the archive is lost. Every other record imports as
     before."""
 
-    def old_archive(self, keys, *, filed=False):
+    def old_archive(self, keys, *, filed=False, priced=False, payee=False, paid=False):
         """Export `keys` from this database holding the pseudo-supplier as
-        0002 seeded it - a document filed under it when `filed` -, as an
-        older version did, then take both away, as 0037 does in the database
-        imported into."""
+        0002 seeded it, as an older version did, then take it away with
+        everything naming it, as 0037 does in the database imported into.
+        Under it: a document when `filed`, a known price when `priced`, a
+        payee name learnt when `payee`, and when `paid` a document a bank
+        line pays."""
         ai = Supplier.objects.create(**OLD_AI)
-        if filed:
-            make_invoice(supplier=ai, invoice_number="IA-ESSAI-1")
+        if filed or paid:
+            invoice = make_invoice(supplier=ai, invoice_number="IA-ESSAI-1")
+        if priced:
+            price(ai, "0.70", "Article essai")
+        if payee:
+            CounterpartyAlias.objects.create(supplier=ai, name="PAYEUR IA ESSAI")
+        if paid:
+            pay(make_line(date(2026, 8, 4), "PAYEUR IA ESSAI", "-12.00"), invoice)
         reader = export_archive(keys)
         self.addCleanup(reader.close)
+        BankTransaction.objects.all().delete()
         Invoice.objects.filter(supplier=ai).delete()
         ai.delete()
         records = {record["code"]: record for record in reader.section("fournisseurs").payload()["suppliers"]}
@@ -809,6 +819,94 @@ class OlderArchiveTests(TestCase):
                     set(Invoice.objects.filter(supplier=kept).values_list("invoice_number", flat=True)),
                     {"ICI-1", "IA-ESSAI-1"},
                 )
+
+    def test_its_own_known_prices_bring_it_as_an_ordinary_supplier(self):
+        """Its prices travel in its own record: left out, they were dropped
+        with no line saying so - where 0037 keeps a supplier a price
+        names."""
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                reader = self.old_archive({"fournisseurs"}, priced=True)
+                report = import_archive(reader, strategy).section("fournisseurs")
+                kept = Supplier.objects.get(code="OTHER")
+                self.assertEqual((kept.name, kept.parser_key), ("Autre (analyse IA)", ""))
+                self.assertEqual(
+                    list(kept.item_prices.values_list("unit_price_ttc", "label")), [(Decimal("0.70"), "Article essai")]
+                )
+                self.assertIn(section.AI_ORDINARY.format(name="Autre (analyse IA)"), report.notes)
+                self.assertEqual((report.skipped, report.conflicts), ([], []))
+                kept.delete()
+
+    def test_a_payee_name_learnt_for_it_brings_it_as_an_ordinary_supplier(self):
+        reader = self.old_archive({"fournisseurs", "banque"}, payee=True)
+        run = import_archive(reader, MERGE)
+        kept = Supplier.objects.get(code="OTHER")
+        self.assertEqual(kept.parser_key, "")
+        self.assertTrue(CounterpartyAlias.objects.filter(supplier=kept, name="PAYEUR IA ESSAI").exists())
+        self.assertIn(section.AI_ORDINARY.format(name="Autre (analyse IA)"), run.section("fournisseurs").notes)
+
+    def test_a_payment_of_its_document_without_the_documents_leaves_it_out(self):
+        """« Banque » names the suppliers of the documents its lines pay, and
+        those documents come with « Factures » only: with « Factures » left
+        out, the payment brings nothing that would need the supplier - it
+        came back empty, under « des données de l'import y sont rangées »."""
+        reader = self.old_archive({"fournisseurs", "factures", "banque"}, paid=True)
+        self.assertIn("OTHER", reader.section("banque").payload()["supplier_names"])
+        run = import_archive(reader, {"fournisseurs": MERGE, "banque": MERGE})
+        self.assert_no_ai_supplier()
+        self.assertIn(section.AI_LEFT_OUT.format(name="Autre (analyse IA)"), run.section("fournisseurs").notes)
+        self.assertEqual(BankTransaction.objects.count(), 1)
+
+    def test_with_its_documents_the_payment_follows_them(self):
+        reader = self.old_archive({"fournisseurs", "factures", "banque"}, paid=True)
+        import_archive(reader, MERGE)
+        kept = Supplier.objects.get(code="OTHER")
+        self.assertEqual(kept.parser_key, "")
+        self.assertEqual(list(BankTransaction.objects.values_list("payments__invoice__supplier", flat=True)), [kept.pk])
+
+    def test_replace_never_prunes_the_one_0037_kept_nor_what_names_it(self):
+        """0037 kept it here, a payee name naming it: an older archive's
+        record of it, with nothing filed under it, is that supplier's. Left
+        out, « Remplacer » took it for one the archive does not have and
+        deleted it - its payee name with it (CASCADE)."""
+        reader = self.old_archive({"fournisseurs"})
+        kept = Supplier.objects.create(**{**OLD_AI, "parser_key": ""})
+        CounterpartyAlias.objects.create(supplier=kept, name="PAYEUR IA ESSAI")
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                report = import_archive(reader, strategy).section("fournisseurs")
+                self.assertEqual(Supplier.objects.get(pk=kept.pk).parser_key, "")
+                self.assertTrue(CounterpartyAlias.objects.filter(supplier=kept).exists())
+                self.assertEqual(report.tallies["fournisseurs"].deleted, 0)
+                self.assertEqual((report.conflicts, report.kept), ([], []))
+                self.assertFalse([note for note in report.notes if "analyse IA a été retirée" in note])
+
+    def test_no_new_shop_takes_its_code(self):
+        """So OTHER here is always the supplier 0037 kept, and an archive's
+        record of it is matched by its code."""
+        from invoices.receipts import RETIRED_CODES
+
+        self.assertIn(section.RETIRED_AI_CODE, RETIRED_CODES)
+
+    def test_what_another_section_holds_is_read_never_trusted(self):
+        """Read by hand off sections an archive may forge: a payee name's
+        code that is no text, a table that is no table, are nothing filed
+        under it - never a 500 on the preview."""
+        from types import SimpleNamespace
+
+        payloads = {
+            "fournisseurs": {},
+            "banque": {"aliases": [{"supplier": ["OTHER"]}, "OTHER", {"name": "X"}], "supplier_names": {"OTHER": "x"}},
+            "factures": {"supplier_names": ["OTHER"]},
+        }
+        ctx = SimpleNamespace(
+            strategies=dict.fromkeys(payloads, MERGE),
+            reader=SimpleNamespace(section=lambda key: SimpleNamespace(payload=lambda: payloads[key])),
+        )
+        record = {**OLD_AI, "item_prices": "illisible"}
+        self.assertFalse(section._filed_under_by_this_run(ctx, record))
+        payloads["banque"]["aliases"].append({"supplier": "OTHER", "name": "PAYEUR"})
+        self.assertTrue(section._filed_under_by_this_run(ctx, record))
 
     def test_its_documents_not_imported_in_this_run_leave_it_out(self):
         """« Fournisseurs » alone: what the archive filed under it is not

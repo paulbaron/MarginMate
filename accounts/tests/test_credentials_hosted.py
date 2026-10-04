@@ -30,17 +30,19 @@ from tests.runner import confirm_password
 URL = reverse("accounts:credentials")
 HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)"')
 SECRET = "Tres-Secret-456"
-#: What a server's .env holds: Metro, the mailbox, the till, a portal.
+#: What a server's .env holds: Metro, the mailbox, the till, a portal - and
+#: the key of the AI reading removed on 04/10/2026, until its line is deleted.
 SERVER_ENV_FILE = (
     "METRO_EMAIL=acheteur@exemple.invalid\n"
     "METRO_PASSWORD=secret-metro\n"
     "INVOICE_EMAIL_ADDRESS=factures@exemple.invalid\n"
     "INVOICE_EMAIL_APP_PASSWORD=secret-boite\n"
     "LADDITION_EMAIL=caisse@exemple.invalid\n"
+    "ANTHROPIC_API_KEY=cle-serveur\n"
     "BOX_LOGIN=gerant@exemple.invalid\n"
 )
 #: What a hosted bar's page must never hold.
-SERVER_WORDS = (".env", "METRO_", "INVOICE_", "LADDITION_", "BOX_", "DJANGO_", "manage.py")
+SERVER_WORDS = (".env", "METRO_", "INVOICE_", "LADDITION_", "ANTHROPIC_", "BOX_", "DJANGO_", "manage.py")
 
 
 class HostedCredentialsTests(TwoTenantsTestCase):
@@ -159,6 +161,24 @@ class HostedCredentialsTests(TwoTenantsTestCase):
         hosted = self.page(self.user_b)
         self.assertNotIn("OLD_EXEMPLE", hosted)
         self.assertIn("Effacer une valeur enregistrée", unescape(hosted))
+
+    def test_a_key_typed_for_the_removed_ai_reading_is_erased_without_its_name(self):
+        """A key typed for the AI reading before it went (04/10/2026) stays
+        in Beta's store until « Effacer »: offered in words, never by the
+        server variable it was kept under."""
+        with bound_tenant(self.bar_b):
+            vault.save({"ANTHROPIC_API_KEY": SECRET})
+        page = unescape(self.page(self.user_b))
+        self.assertIn("Identifiants qui ne servent plus", page)
+        self.assertIn("Effacer une valeur enregistrée", page)
+        self.assertNotIn(SECRET, page)
+        for word in SERVER_WORDS:
+            with self.subTest(word=word):
+                self.assertNotIn(word, page)
+        (box,) = re.findall(r'name="([^"]+__clear)"', page.split("Identifiants qui ne servent plus")[1])
+        self.post(self.user_b, **{box: "on"})
+        with bound_tenant(self.bar_b):
+            self.assertEqual(vault.load().values, {})
 
     def test_another_bar_s_mailbox_server_is_its_own_and_never_the_env_s(self):
         with bound_tenant(self.bar_b):

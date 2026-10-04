@@ -141,6 +141,18 @@ class CreateShopTests(TestCase):
             with self.subTest(name=name):
                 self.assertEqual(create_shop(name).code, code)
 
+    def test_never_the_code_of_the_removed_ai_reading_s_supplier(self):
+        """invoices/0037 took OTHER away; an archive written before
+        04/10/2026 still carries « Autre (analyse IA) » under it, and
+        « Données » pairs a supplier by its code - a shop of that code would
+        take that supplier and its documents."""
+        self.assertFalse(Supplier.objects.filter(code="OTHER").exists())
+        for name in ("Other", "other", "OTHER"):
+            with self.subTest(name=name):
+                shop = create_shop(name)
+                self.assertEqual(shop.code, "OTHER_2")
+                shop.delete()
+
     def test_what_is_refused(self):
         make_invoice(supplier=Supplier.objects.get(code="SABBH"), ocr_text="Sabbh Oriental\nRUE DU TEMPLE\n")
         make_invoice(supplier=Supplier.objects.get(code="FRANPRIX"), ocr_text="FRANPRIX\n2 RUE DU TEMPLE\n")

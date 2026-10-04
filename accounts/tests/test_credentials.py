@@ -565,6 +565,8 @@ class PageTests(ConfirmedCase):
         page = self.page()
         self.assertNotIn("Analyse IA", page)
         self.assertIn("Identifiants qui ne servent plus", page)
+        # An account's key, not a source's: the sentence says both.
+        self.assertIn("Enregistrés pour un compte ou une source qui n'existe plus", page)
         self.assertIn('name="ANTHROPIC_API_KEY__clear"', page)
         self.assertNotIn(SECRET, page)
         self.post(ANTHROPIC_API_KEY__clear="on")

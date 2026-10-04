@@ -327,6 +327,8 @@ class PortalTrustTests(TestCase):
             "LADDITION_PASSWORD",
             "DJANGO_SECRET_KEY",
             "METRO_PASSWORD",
+            # Read by nothing since 04/10/2026, still in an older .env.
+            "ANTHROPIC_API_KEY",
         ):
             with self.subTest(name=name):
                 report = self._import(forged_portal(username_env="PORTAIL_ESSAI_LOGIN", password_env=name))

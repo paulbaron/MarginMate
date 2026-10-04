@@ -5212,7 +5212,9 @@ imports (`transfer/legacy.py`).
   import tab compares like with like - count(), the manifest and the
   report's « fournisseurs » count the same suppliers: counted in the report
   only, one supplier made a merge of the 19/09 copy say « 30 inchangés » for
-  the 29 suppliers the page announced. A document updated, or given a file
+  the 29 suppliers the page announced (one exception, the removed AI
+  reading's supplier in an archive written before 04/10/2026: « Test
+  data »). A document updated, or given a file
   back by a merge,
   still counts the files it keeps - and, merged without a conflict, its
   lines - « inchangés » (`InvoicesSection._untouched_files`): a « Remplacer »
@@ -5362,8 +5364,9 @@ imports (`transfer/legacy.py`).
   portal naming a variable the application reads for itself is refused, by
   the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
   in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, Django,
-  the signatures and the mail server; a test checks the list against
-  config/settings.py). An import
+  the signatures and the mail server - and the removed AI reading's key,
+  which an older .env or « Identifiants » may still hold; a test checks the
+  list against config/settings.py). An import
   never switches a portal on **unless the archive is one this installation
   wrote itself**: a file in `backups/`, where only `safety.before` writes
   (`ImportContext.own_backup` - a manifest can claim any `reason`, so the
@@ -8657,7 +8660,8 @@ keeps** - it is set at creation only, and the owner's espace was adopted,
 never provisioned: nothing reaches it. Their readers and tills stay in the
 code (a till answers only where its row is, `receipts.configured_tills`;
 `create_shop` never takes a registry key as a code: « Sabbh » is
-`SABBH_2`). The seed migrations and `SEEDED_SOURCE` are unchanged, and
+`SABBH_2` - nor a retired one, `RETIRED_CODES`: « Other » is `OTHER_2`).
+The seed migrations and `SEEDED_SOURCE` are unchanged, and
 `SEEDED_SUPPLIERS` lost only OTHER (invoices/0037, below): a new espace holds
 a subset of the seeds. **A later data
 migration must not count on them**: `migrate_tenants` runs it in every
@@ -8682,12 +8686,34 @@ import (`parsers/llm_fallback.py`, the Anthropic SDK and its key
 deletes that supplier wherever no row names it - every relation to Supplier
 walked, CASCADE and hidden ones included - and keeps it as an ordinary
 supplier, its reader key emptied, where something does; no other supplier
-is touched. « Données » never creates it again from an older archive: left
-out, said, unless the run files something under it, then ordinary
-(`sections/suppliers._retired_ai`). `accounts/0004` rewords the admin's
-help of « utilise les accès du serveur ». A key typed on « Identifiants »
-before stays there until « Effacer » (« Identifiants qui ne servent
-plus »).
+is touched. Migrations `invoices/0037` and `accounts/0004` (which rewords
+the admin's help of « utilise les accès du serveur », no SQL), **WRITTEN and
+left to be applied** (the owner, after a backup, `migrate_tenants`; `serve`
+refuses to start until then). **0037's test compares the relations it walks
+with that day's literal list** (`RELATIONS_AT_0037`), never with the live
+model: a key to Supplier added later is none of its business, and a
+dependency added to it once applied is an InconsistentMigrationHistory in
+every espace.
+- **« Données »** never creates it again from an older archive, nor writes
+  its reader key (`sections/suppliers._retired_ai`). Kept here by 0037, the
+  record is that supplier's, matched by its code as any other (left out,
+  « Remplacer » pruned it and what named it). Gone here, it comes back as an
+  ordinary supplier only when the run imports something filed under it -
+  its own known prices, a record of another section naming it, « Banque »
+  by its payee names alone (its `supplier_names` also names the suppliers of
+  the documents its lines pay, which only « Factures » brings) - else it is
+  left out, said (`_filed_under_by_this_run`). No new shop takes the code
+  OTHER (`receipts.RETIRED_CODES`), so OTHER here is always that supplier.
+  **The one exception to count(), the manifest and the report counting the
+  same suppliers** (« Export, import and clear »): an archive written before
+  then counted its « fournisseurs » without it, so a run bringing it, or
+  merging it into an espace that kept it, reports one more than the archive
+  announced.
+- **`APP_ENV_PREFIXES` keeps `ANTHROPIC_`**: nothing reads the key, but an
+  older .env or « Identifiants » may still hold it, and a portal naming it
+  would have it typed into its page. A key typed on « Identifiants » before
+  stays there until « Effacer » (« Identifiants qui ne servent plus », in
+  words on another bar's page, its name on the owner's).
 
 ## Known data issues (not code bugs)
 

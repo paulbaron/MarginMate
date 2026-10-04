@@ -967,6 +967,14 @@ def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Ren
     return renamed
 
 
+#: Codes never given to a new shop: OTHER was the AI reading's
+#: pseudo-supplier (invoices/0037). An archive written before 04/10/2026
+#: still carries it, and « Données » pairs a supplier by its code - a shop
+#: named « Other » would take that archive's « Autre (analyse IA) » and the
+#: documents filed under it (transfer/sections/suppliers.py).
+RETIRED_CODES = frozenset({"OTHER"})
+
+
 def create_shop(name: str, header: str = "", ignoring=(), expenses_only: bool = False) -> Supplier:
     """A new shop, for tickets no known header was on. With `header`, its
     next tickets are recognised by it. Raises ValueError, for the operator:
@@ -986,8 +994,9 @@ def create_shop(name: str, header: str = "", ignoring=(), expenses_only: bool = 
     code, suffix = base, 1
     # Never a code a reader of the code answers to, its row absent or not: a
     # shop named « Sabbh » in an espace without Sabbh Oriental (invoices.seeds)
-    # would become that till (ticket_parser_for is keyed on the code).
-    while code in PARSER_REGISTRY or Supplier.objects.filter(code=code).exists():
+    # would become that till (ticket_parser_for is keyed on the code). Nor a
+    # retired one (`RETIRED_CODES`).
+    while code in PARSER_REGISTRY or code in RETIRED_CODES or Supplier.objects.filter(code=code).exists():
         suffix += 1
         code = f"{base}_{suffix}"
     supplier = Supplier.objects.create(

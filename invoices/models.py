@@ -288,6 +288,11 @@ APP_ENV_PREFIXES = (
     "MARGINMATE_",
     "EMAIL_",
     "DEFAULT_FROM_EMAIL",
+    # The AI reading's key: the reading went on 04/10/2026 and nothing reads
+    # it any more, but an older .env - or « Identifiants », until its
+    # « Effacer » - may still hold it, and a portal naming it would have it
+    # typed into its page.
+    "ANTHROPIC_",
 )
 APP_ENV_REFUSED = (
     "« {name} » est une variable de l'application elle-même (la boîte mail, la caisse, le module d'un "
