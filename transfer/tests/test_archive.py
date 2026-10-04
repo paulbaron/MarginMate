@@ -419,6 +419,16 @@ class RefusalTests(SimpleTestCase):
         with mock.patch.object(archive, "MAX_MANIFEST_BYTES", 1000):
             self.assertRefused(path, "Archive refusée : manifest.json est trop gros.")
 
+    def test_a_manifest_has_a_value_bound_of_its_own(self):
+        """A real manifest is a few values a file. With the archive's whole
+        budget (25 million), « "padding": [[], [], …] » under its 16 MB was
+        parsed at every stage, preview and import, and kept whole in the
+        stage's state.json (review 04/10/2026)."""
+        manifest = {**manifest_for(["fournisseurs"]), "padding": [[]] * 1_000_000}
+        path = write_zip({"fournisseurs.json": "{}"}, manifest)
+        with mock.patch("transfer.archive.json.loads", side_effect=AssertionError("parsed")):
+            self.assertRefused(path, "Archive refusée : manifest.json est trop gros.")
+
     def test_a_declared_section_missing(self):
         self.assertRefused(write_zip({}, manifest_for(["fournisseurs"])), "Archive refusée : fournisseurs.json manque.")
 

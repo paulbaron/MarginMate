@@ -60,6 +60,14 @@ LEGACY_UNENCODABLE = "Export d'associations refusé : il contient un caractère 
 #: values - some 0.9 GB parsed, review 04/10/2026), checked before it is read.
 MAX_LEGACY_BYTES = archive.MAX_MANIFEST_BYTES
 MAX_LEGACY_VALUES = 1_000_000
+#: What a stage keeps of its archive's manifest in state.json: what the
+#: pages read (the moment, the revision, each known section's counts). The
+#: state is read outside the import lock, at every view of the Importer tab
+#: (once per stage waiting) and of the stage's page: kept whole, a 16 MB
+#: manifest padded with « [[],[],…] » was some 360 MB and 4 s a read, for
+#: each stage left waiting (review 04/10/2026). A real one keeps a few KB.
+KEPT_MANIFEST = ("format", "version", "created_at", "app_revision", "reason")
+MAX_KEPT_BYTES = 64 * 1024
 
 
 def staging_dir() -> Path:
@@ -141,6 +149,25 @@ def _write_state(stage: Stage) -> None:
     os.replace(temporary, target)
 
 
+def _kept(reader: ArchiveReader) -> dict:
+    """The manifest as the stage keeps it (KEPT_MANIFEST); the known
+    sections' counts kept as they are, carved ones are read out of them
+    (archive.manifest_counts). Past MAX_KEPT_BYTES with the reader's notes,
+    the archive is refused."""
+    from transfer.registry import INFO
+
+    manifest = reader.manifest
+    kept = {key: manifest[key] for key in KEPT_MANIFEST if key in manifest}
+    kept["sections"] = {
+        key: {"counts": entry["counts"]} if "counts" in entry else {}
+        for key, entry in manifest.get("sections", {}).items()
+        if key in INFO
+    }
+    if len(json.dumps([kept, reader.notes], ensure_ascii=False).encode("utf-8")) > MAX_KEPT_BYTES:
+        raise ArchiveError(f"Archive refusée : {archive.MANIFEST} est trop gros.")
+    return kept
+
+
 def _staged(token: str, path: Path, archive_path: Path, *, source: str, legacy=False, backup="") -> Stage:
     """Open the archive with its full validation; an ArchiveError removes
     the stage and propagates."""
@@ -152,7 +179,7 @@ def _staged(token: str, path: Path, archive_path: Path, *, source: str, legacy=F
                 archive_path=archive_path,
                 created_at=timezone.now(),
                 source=source,
-                manifest=reader.manifest,
+                manifest=_kept(reader),
                 state={"sections": {}, "preview": None, "preview_at": None},
                 notes=list(reader.notes),
                 legacy=legacy,

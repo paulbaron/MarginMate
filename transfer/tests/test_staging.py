@@ -258,6 +258,63 @@ class PendingTests(FakeSectionsMixin, TestCase):
         self.assertEqual(staging.pending(), [])
 
 
+class StateTests(FakeSectionsMixin, TestCase):
+    """state.json is read at every view of the Importer tab (once per stage
+    waiting) and of the stage's page, outside the import lock: the whole
+    manifest kept there, a 16 MB one padded with « [[], [], …] » was some
+    360 MB and 4 s a read, for each stage left waiting (review 04/10/2026)."""
+
+    def setUp(self):
+        super().setUp()
+        no_stages()
+        self.addCleanup(no_stages)
+        fake_row("fournisseurs", "Fournisseur A")
+        reader = export_archive({"fournisseurs", "sources"})
+        reader.close()
+        self.archive_path = reader.path
+
+    def state_of(self, stage) -> dict:
+        return json.loads((stage.dir / staging.STATE).read_text(encoding="utf-8"))
+
+    def test_it_keeps_of_the_manifest_only_what_the_pages_read(self):
+        padded = forge(
+            self.archive_path,
+            manifest={"padding": [[]] * 50_000, "app_revision": "abc1234", "reason": "export", "cocktails": {}},
+        )
+        stage = staging.stage_upload(upload_of(padded))
+        with stage.open() as reader:
+            whole = reader.manifest
+        kept = self.state_of(stage)["manifest"]
+        self.assertEqual(set(kept), {"format", "version", "created_at", "app_revision", "reason", "sections"})
+        self.assertEqual(
+            kept["sections"], {key: {"counts": entry["counts"]} for key, entry in whole["sections"].items()}
+        )
+        self.assertLess((stage.dir / staging.STATE).stat().st_size, 2000)
+        [again] = staging.pending()
+        self.assertEqual((again.manifest, again.sections), (stage.manifest, {"fournisseurs", "sources"}))
+        self.assertEqual(again.manifest["app_revision"], "abc1234")
+        self.assertEqual(
+            archive.manifest_counts(again.manifest, "fournisseurs"), whole["sections"]["fournisseurs"]["counts"]
+        )
+
+    def test_an_old_archives_counts_are_kept_for_its_carved_parts(self):
+        stage = staging.stage_upload(upload_of(old_archive(banque=(OLD_BANK, OLD_BANK_COUNTS))))
+        self.assertEqual(self.state_of(stage)["manifest"]["sections"], {"banque": {"counts": OLD_BANK_COUNTS}})
+        self.assertEqual(staging.get(stage.token).sections, {"banque", "regles_banque"})
+
+    def test_what_it_would_keep_is_bounded_too(self):
+        """A section's counts, or its moment as text, can still be padded
+        within the manifest's own bounds: refused, nothing left staged."""
+        counts = {f"ligne {number}": number for number in range(20_000)}
+        sections = {"fournisseurs": {"file": "fournisseurs.json", "counts": counts, "requires": []}}
+        padded = forge(self.archive_path, manifest=lambda data: {**data, "sections": {**data["sections"], **sections}})
+        with self.assertRaises(ArchiveError) as caught:
+            staging.stage_upload(upload_of(padded))
+        self.assertEqual(str(caught.exception), "Archive refusée : manifest.json est trop gros.")
+        self.assertEqual(staging.pending(), [])
+        self.assertEqual([path for path in staging.staging_dir().iterdir() if staging.TOKEN_RE.match(path.name)], [])
+
+
 class TokenTests(TestCase):
     def test_a_token_of_the_wrong_shape_is_nothing(self):
         for token in ("", "abc", "../../etc", "a" * 21, "a" * 23, "a/" * 11, "é" * 22, None, 42):

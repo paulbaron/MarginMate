@@ -67,6 +67,11 @@ MAX_MANIFEST_BYTES = 16 * 1024**2
 #: stays in memory until the import ends, and one member just under the cap
 #: per section was some 10 GB again (audit 04/10/2026).
 MAX_JSON_VALUES = 25_000_000
+#: The manifest's own share: a real one is about 5 values a file, and
+#: holds MAX_MEMBERS files at most. With the whole budget, a 16 MB one of
+#: « [[],[],…] » was parsed at every stage, preview and import, and kept
+#: whole in the stage's state.json (review 04/10/2026).
+MAX_MANIFEST_VALUES = 10 * MAX_MEMBERS
 MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_RATIO = 200
 RATIO_MIN_BYTES = 10 * 1024**2
@@ -714,7 +719,11 @@ class ArchiveReader:
         if infos_by_name[MANIFEST].file_size > MAX_MANIFEST_BYTES:
             raise ArchiveError(f"Archive refusée : {MANIFEST} est trop gros.")
         manifest, values = _read_json(
-            self._zip, MANIFEST, MANIFEST, values_limit=self._values_left, max_bytes=MAX_MANIFEST_BYTES
+            self._zip,
+            MANIFEST,
+            MANIFEST,
+            values_limit=min(self._values_left, MAX_MANIFEST_VALUES),
+            max_bytes=MAX_MANIFEST_BYTES,
         )
         self._values_left -= values
         if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
