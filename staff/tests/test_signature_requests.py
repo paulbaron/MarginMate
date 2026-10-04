@@ -249,6 +249,31 @@ class LinkTests(RequestCase):
         requests_.note_link_opened(request, ip=IP, user_agent="Robot/0", now=NOW + dt.timedelta(minutes=61))
         self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 11)
 
+    def test_two_hundred_openings_in_a_request_s_life_at_most(self):
+        """Ten an hour was still ~10 000 hash-chained events over a link's
+        fortnight - more with each « Nouveau lien » - for a script changing
+        its device at every hit: the owner's month page and the proof file
+        grew with them."""
+        request, _token = self.create()
+        for hour in range(25):
+            for number in range(10):
+                at = NOW + dt.timedelta(hours=hour)
+                requests_.note_link_opened(request, ip=IP, user_agent=f"Robot/{number}", now=at)
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 200)
+        # Counted per kind and detail: the opened link takes nothing from a download.
+        requests_.note_download(request, private_files.DOCUMENT, ip=IP, user_agent=PHONE, now=NOW)
+        self.assertEqual(self.kinds(request).count(Kind.DOWNLOADED), 1)
+
+    def test_the_life_cap_counts_each_file_on_its_own(self):
+        request, _token = self.create()
+        with mock.patch.object(requests_, "REPEATED_EVENTS_PER_REQUEST", 2):
+            for hour in range(3):
+                at = NOW + dt.timedelta(hours=hour)
+                requests_.note_download(request, private_files.DOCUMENT, ip=IP, user_agent=PHONE, now=at)
+            requests_.note_download(request, private_files.EMPLOYEE_SIGNED, ip=IP, user_agent=PHONE, now=NOW)
+        files = [event.detail["file"] for event in request.events.filter(kind=Kind.DOWNLOADED)]
+        self.assertEqual(files, [private_files.DOCUMENT, private_files.DOCUMENT, private_files.EMPLOYEE_SIGNED])
+
 
 class LockTests(RequestCase):
     def test_the_month_is_read_only_while_a_request_holds_it(self):

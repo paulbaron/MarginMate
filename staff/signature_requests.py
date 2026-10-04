@@ -818,13 +818,23 @@ def index_links() -> tuple[int, int]:
 #: both databases grew without end.
 REPEATED_EVENTS_PER_HOUR = 10
 
+#: And at most this many of a kind and detail in a request's whole life: ten
+#: an hour from a script changing its device at every hit were still
+#: ~10 000 hash-chained events over a link's fortnight, and each « Nouveau
+#: lien » or countersignature gives it another. An employee opening his
+#: link once an hour stays far below it.
+REPEATED_EVENTS_PER_REQUEST = 200
+
 
 def _log_unless_repeated(request: SignatureRequest, kind: str, *, now=None, ip=None, user_agent="", detail=None):
     """`log_event`, unless this event - kind, device, detail - was logged in
     the hour before `now`, or `REPEATED_EVENTS_PER_HOUR` of this kind and
-    detail were. Checked in the transaction that appends it (IMMEDIATE in
-    production: two hits at once do not both find nothing) - with no upper
-    bound, since a hit that read the clock later may have logged first."""
+    detail were, or `REPEATED_EVENTS_PER_REQUEST` in the request's whole
+    life: past that, nothing more of that kind and detail is ever logged for
+    it (the owner's own downloads, logged alike, count too). Checked in the
+    transaction that appends it (IMMEDIATE in production: two hits at once
+    do not both find nothing) - with no upper bound, since a hit that read
+    the clock later may have logged first."""
     now = _now(now)
     ip, user_agent, detail = _clean_ip(ip), _clean_user_agent(user_agent), _clean_detail(detail)
     with transaction.atomic():
@@ -836,6 +846,9 @@ def _log_unless_repeated(request: SignatureRequest, kind: str, *, now=None, ip=N
             if (seen_detail or {}) == detail
         ]
         if len(devices) >= REPEATED_EVENTS_PER_HOUR or (ip, user_agent) in devices:
+            return None
+        logged = SignatureEvent.objects.filter(request=request, kind=kind, detail=detail).count()
+        if logged >= REPEATED_EVENTS_PER_REQUEST:
             return None
         return log_event(request, kind, at=now, ip=ip, user_agent=user_agent, detail=detail)
 
