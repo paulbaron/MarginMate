@@ -616,18 +616,29 @@ class MailMatcher:
     """What `mail_matcher` returns: `.search(text)` like a compiled
     pattern's, on the first MAIL_TEXT_LIMIT characters, with a timeout. A
     timeout is « no match » (a header anybody can write must not hang the
-    gather), logged."""
+    gather), logged and counted (`timed_out`): find_matching_emails takes
+    the search for an incomplete one - a mail left out for its pattern's
+    time is not one that does not match."""
 
     def __init__(self, pattern, log=None):
         self._pattern = pattern
         self._log = log
         self.pattern = pattern.pattern
+        self.timed_out = 0
+
+    def limits(self) -> tuple[int, float]:
+        """(characters matched, seconds a match may take)."""
+        return MAIL_TEXT_LIMIT, PATTERN_TIMEOUT
 
     def search(self, text):
+        text_limit, timeout = self.limits()
         try:
-            return self._pattern.search((text or "")[:MAIL_TEXT_LIMIT], timeout=PATTERN_TIMEOUT, concurrent=True)
+            return self._pattern.search((text or "")[:text_limit], timeout=timeout, concurrent=True)
         except TimeoutError:
-            message = f"motif trop lent sur un mail : ignoré ({shown_pattern(self._pattern)})"
+            self.timed_out += 1
+            message = (
+                f"motif trop lent sur un mail, laissé pour la prochaine recherche ({shown_pattern(self._pattern)})"
+            )
             logger.warning(message)
             if self._log is not None:
                 self._log(message)
@@ -679,25 +690,17 @@ def check_invoice_mail_pattern(text, *, field_label: str = "Motif de mail"):
 class InvoiceMailMatcher(MailMatcher):
     """`.search(text)` for an invoice source: the first
     INVOICE_MAIL_TEXT_LIMIT characters (a body, not only a header), timed; a
-    timeout is « no match », logged."""
+    timeout is « no match », logged and counted as MailMatcher's."""
 
-    def search(self, text):
-        try:
-            return self._pattern.search(
-                (text or "")[:INVOICE_MAIL_TEXT_LIMIT], timeout=INVOICE_MAIL_TIMEOUT, concurrent=True
-            )
-        except TimeoutError:
-            message = f"motif trop lent sur un mail : ignoré ({shown_pattern(self._pattern)})"
-            logger.warning(message)
-            if self._log is not None:
-                self._log(message)
-            return None
+    def limits(self) -> tuple[int, float]:
+        return INVOICE_MAIL_TEXT_LIMIT, INVOICE_MAIL_TIMEOUT
 
 
-def invoice_mail_matcher(text, *, log=None) -> InvoiceMailMatcher:
+def invoice_mail_matcher(text, *, field_label: str = "Motif de mail", log=None) -> InvoiceMailMatcher:
     """The `compile` an invoice source's patterns are handed to
-    find_matching_emails with (the gather and « Tester »)."""
-    return InvoiceMailMatcher(check_invoice_mail_pattern(text), log)
+    find_matching_emails with (the gather and « Tester »). `field_label`:
+    which of the source's patterns it is, named by a refusal."""
+    return InvoiceMailMatcher(check_invoice_mail_pattern(text, field_label=field_label), log)
 
 
 # -- Numbers, dates, times ------------------------------------------------------------------------------------------

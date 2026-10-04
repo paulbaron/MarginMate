@@ -308,6 +308,9 @@ class SandboxTests(SimpleTestCase):
         said = "Un autre document est en cours d'affichage : réessayez dans un instant."
         self.assertEqual(str(refused.exception), said)
         self.assertEqual(error_for_page(refused.exception, said=READING_REFUSALS), said)
+        # A passing refusal of its own: a gather fetches the document again
+        # (tasks._import_document_file returns None for it).
+        self.assertIsInstance(refused.exception, ocr.PdfiumBusy)
         self.assertNothingLeft()
         self.assertEqual(ocr.PDFIUM_WAIT_SECONDS, 2 * ocr.RENDER_SECONDS)
 

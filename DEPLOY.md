@@ -1051,7 +1051,10 @@ fichier ne reçoit plus de notifications.
 ## 15. Après la mise en ligne de l'audit du 04/10/2026
 
 L'audit n'ajoute aucune migration (celles de la section 14 sont appliquées par `deploy.cmd`). Trois
-choses à faire une seule fois, après `deploy.cmd`, quand aucune récupération ne tourne.
+choses à faire une seule fois, après `deploy.cmd`, quand aucune récupération ne tourne. Les
+récupérations automatiques et l'import automatique des ventes démarrent seuls : suspendez-les le
+temps de ces opérations comme le dit la section 14, « Un déploiement refusé, « Données » occupé »
+(décochez « Active » et « Actif »), puis recochez-les.
 
 **1. Le seuil de rapprochement des produits.** L'ancien `.env.example` disait
 `PRODUCT_FUZZY_MATCH_THRESHOLD=92`, une valeur qui range un produit « ZERO » ou « LIGHT » sous le

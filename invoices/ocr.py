@@ -342,6 +342,14 @@ class DocumentTooBig(ValueError):
     person: its words are said on the file's line."""
 
 
+class PdfiumBusy(DocumentTooBig):
+    """PDFIUM_LOCK not free within PDFIUM_WAIT_SECONDS (PDFIUM_BUSY): a
+    refusal of the moment, not of the document. Said on a file's line like
+    any DocumentTooBig; a gather fetches the document again (tasks.
+    _import_document_file: None) - taken once for a refusal of what it is,
+    it let an automatic gather's coverage move past it for good."""
+
+
 #: One process drawing a PDF at a time, for the whole server (`page_images`
 #: holds it while its PDFium process runs): it runs in a folder import's
 #: thread (receipt_batches, which takes no OCR_LOCK), a gather's, and the
@@ -439,7 +447,7 @@ def _drawn_pages(path: str):
     RENDER_OUTPUT_BYTES once written - past which, DocumentTooBig « trop
     lourd à afficher ». One such process at a time (PDFIUM_LOCK), held while
     it draws every page and never while the caller works on one: its OCR
-    takes seconds; waited for PDFIUM_WAIT_SECONDS at most (PDFIUM_BUSY,
+    takes seconds; waited for PDFIUM_WAIT_SECONDS at most (PdfiumBusy,
     a DocumentTooBig). The pages come back losslessly, the very pixels
     PDFium gave, one at a time from a private folder removed whatever
     happens. What PDFium cannot open is UnreadablePdf, said « PDF
@@ -457,7 +465,7 @@ def _drawn_pages(path: str):
     try:
         limits = {name: globals()[name] for name in LIMITS}
         if not PDFIUM_LOCK.acquire(timeout=PDFIUM_WAIT_SECONDS):
-            raise DocumentTooBig(PDFIUM_BUSY)
+            raise PdfiumBusy(PDFIUM_BUSY)
         try:
             outcome = pdfium_sandbox.run(os.path.abspath(path), folder, limits, RENDER_MEMORY, RENDER_SECONDS)
         finally:

@@ -1,7 +1,8 @@
 """A source's coverage moves only past what its search READ and imported
-(invoices/coverage.py): a search the mail server answered in part, or a
-document left unimported for want of the OCR or the database, leaves the
-source's line in error and its coverage where it was (rereview Q0, Q1).
+(invoices/coverage.py): a search the mail server answered in part, a mail a
+pattern was too slow on, an attachment the disk refused, or a document left
+unimported for want of the OCR, PDFium or the database, leaves the source's
+line in error and its coverage where it was (rereview Q0, Q1, merge review).
 
 No gather ever runs for real: the IMAP client is a fake (FakeMailbox), the
 imports are replaced where a test says so, the heartbeat too. Every name and
@@ -11,16 +12,20 @@ date is invented.
 import os
 import shutil
 import tempfile
+import threading
 from unittest import mock
 
 from django.db import OperationalError
 from django.test import override_settings
 
+from invoices import ocr
 from invoices.importing import DuplicateInvoiceError
-from invoices.models import GatherCoverage, InvoiceType, ScrapeJob
+from invoices.models import INVOICE_ATTACHMENT_PATTERN, EmailInvoiceSource, GatherCoverage, InvoiceType, ScrapeJob
+from invoices.scrapers import generic_email
 from invoices.tasks import OVERLAP_DAYS, gather_invoices_task
 from invoices.tests.test_auto_gather_coverage import CoverageCase
-from invoices.tests.test_email_search import INCOMPLETE, FakeMailbox, dated_mail
+from invoices.tests.test_email_search import INCOMPLETE, FakeMailbox, SlowOn, dated_mail
+from returnables import patterns
 
 #: What the seeded slip format's sender and subject patterns take.
 SLIP_SUBJECT = "Livraison du 10/02/2026 Tour. : ZZZ Compte : 00000"
@@ -89,6 +94,30 @@ class IncompleteMailboxSearchTests(CoverageCase):
         self.run_with("body-no")
         self.assertLessEqual(self.email_start(), self.days_ago(15))
 
+    def test_a_pattern_too_slow_on_a_mail_imports_the_rest_and_records_nothing(self):
+        """[merge review] A match timing out was « no match »: the mail was
+        left out, the search counted as whole, and the coverage moved past
+        it for good. The older mail's attachment name, then its subject,
+        takes the pattern too long."""
+        real = patterns.check_invoice_mail_pattern
+        for field, slow in (("attachment_pattern", INVOICE_ATTACHMENT_PATTERN), ("subject_pattern", "Facture")):
+            with self.subTest(field=field):
+                EmailInvoiceSource.objects.filter(invoice_type=self.cave).update(**{field: slow})
+
+                def check(text, slow=slow, **kwargs):
+                    compiled = real(text, **kwargs)
+                    return SlowOn(compiled, "ancienne") if text == slow else compiled
+
+                with mock.patch("returnables.patterns.check_invoice_mail_pattern", check):
+                    job, imported, emit = self.run_with("")
+                self.assertEqual(imported, ["recente.pdf"])
+                self.assertEqual(
+                    job.progress[self.email_code]["error"],
+                    "Boîte mail : Recherche incomplète : motif trop lent sur 1 e-mail(s).",
+                )
+                self.assertEqual(GatherCoverage.objects.get(code=self.email_code).searched_until, self.days_ago(21))
+                self.assertEqual(emit.call_args.args, ("invoices-auto-gather", "failed"))
+
 
 @override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
 class IncompleteSlipsSearchTests(CoverageCase):
@@ -147,6 +176,98 @@ class IncompleteSlipsSearchTests(CoverageCase):
         self.assertEqual(stored, [])
         self.assertIn("error", job.progress[self.slips_code])
         self.assertEqual(GatherCoverage.objects.get(code=self.slips_code).searched_until, self.days_ago(21))
+
+    def test_a_pattern_too_slow_on_a_mail_stores_the_rest_and_records_nothing(self):
+        """[merge review] The format's attachment pattern takes too long on
+        the older slip's name: that mail is not taken for nothing."""
+        real = patterns.compile_pattern
+
+        def compile_pattern(text, **kwargs):
+            return SlowOn(real(text, **kwargs), "T0001")
+
+        with mock.patch("returnables.patterns.compile_pattern", compile_pattern):
+            job, stored, emit = self.run_with("")
+        self.assertEqual(stored, ["T0002.pdf"])
+        self.assertEqual(
+            job.progress[self.slips_code]["error"],
+            "Boîte mail : Recherche incomplète : motif trop lent sur 1 e-mail(s).",
+        )
+        self.assertEqual(GatherCoverage.objects.get(code=self.slips_code).searched_until, self.days_ago(21))
+        self.assertEqual(emit.call_args.args, ("invoices-auto-gather", "failed"))
+
+
+class UnwrittenAttachmentTests(CoverageCase):
+    """[merge review] An attachment the disk refuses (full, a file locked, a
+    path too long) was skipped, said in the log only, and the coverage moved
+    past its mail. What was written is imported; the line is in error and
+    the range searched again."""
+
+    def setUp(self):
+        super().setUp()
+        GatherCoverage.objects.create(code=self.email_code, searched_until=self.days_ago(14))
+
+    def test_the_rest_is_imported_and_nothing_recorded(self):
+        matches = [
+            generic_email.EmailMatch(
+                str(number).encode(),
+                "factures@cave.exemple",
+                "Facture",
+                self.days_ago(days),
+                [generic_email.EmailAttachment(name, b"%PDF-1.4 exemple")],
+            )
+            for number, (name, days) in enumerate((("refusee.pdf", 10), ("facture.pdf", 2)), start=1)
+        ]
+        real_open = open
+
+        def refusing_open(path, *args, **kwargs):
+            if os.path.basename(str(path)) == "refusee.pdf":
+                raise OSError(28, "No space left on device")
+            return real_open(path, *args, **kwargs)
+
+        imported = []
+        with (
+            mock.patch("invoices.scrapers.generic_email.find_matching_emails", return_value=matches),
+            mock.patch("invoices.scrapers.generic_email.open", refusing_open, create=True),
+            mock.patch(
+                "invoices.tasks._import_document_file",
+                side_effect=lambda job, supplier, path, **kwargs: imported.append(os.path.basename(path)) or True,
+            ),
+        ):
+            job, _email, _slips, emit = self.gather(
+                {self.email_code}, email={"side_effect": generic_email.scrape_email_invoices}
+            )
+        self.assertEqual(imported, ["facture.pdf"])
+        self.assertEqual(
+            job.progress[self.email_code]["error"],
+            "Boîte mail : Recherche incomplète : 1 pièce(s) jointe(s) non enregistrée(s) sur le disque.",
+        )
+        self.assertEqual(GatherCoverage.objects.get(code=self.email_code).searched_until, self.days_ago(14))
+        self.assertEqual(emit.call_args.args, ("invoices-auto-gather", "failed"))
+        self.assertLessEqual(self.email_start(), self.days_ago(10))
+
+
+@override_settings(INVOICE_EMAIL_ADDRESS="factures@example.test", INVOICE_EMAIL_APP_PASSWORD="x")
+class RefusedStoredPatternTests(CoverageCase):
+    """[merge review] A source saved before the motif guard, with a pattern it
+    now refuses, failed every run as « Boîte mail : Motif de mail : … »: the
+    mailbox blamed, and not a word of which of its four patterns."""
+
+    def test_the_line_names_the_source_s_pattern_to_correct(self):
+        EmailInvoiceSource.objects.filter(invoice_type=self.cave).update(body_pattern="Votre {document")
+        GatherCoverage.objects.create(code=self.email_code, searched_until=self.days_ago(5))
+        job = ScrapeJob.objects.create(trigger=ScrapeJob.Trigger.AUTOMATIC, auto_gather_id=self.rule.pk)
+        with (
+            mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+            mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]),
+            mock.patch("notifications.events.emit") as emit,
+        ):
+            gather_invoices_task(job.id, None, None, {self.email_code}, False, unattended=True)
+        job.refresh_from_db()
+        error = job.progress[self.email_code]["error"]
+        self.assertTrue(error.startswith("Motif de la source à corriger : Motif de contenu : accolade"), error)
+        client.assert_not_called()
+        self.assertEqual(GatherCoverage.objects.get(code=self.email_code).searched_until, self.days_ago(5))
+        self.assertEqual(emit.call_args.args, ("invoices-auto-gather", "failed"))
 
 
 class FailedImportTests(CoverageCase):
@@ -212,6 +333,42 @@ class FailedImportTests(CoverageCase):
     def test_the_database_locked_on_a_document_of_a_reader_of_its_own(self):
         InvoiceType.objects.filter(pk=self.cave.pk).update(parser_key="cave_exemple")
         with mock.patch("invoices.tasks.parse_and_import", side_effect=OperationalError("database is locked")):
+            job, _email, _slips, emit = self.gather({self.email_code}, email=self.fetched)
+        self.assert_fetched_again(job, emit)
+
+    def pdfium_held(self):
+        """PDFIUM_LOCK held by another thread (a folder import drawing a heavy
+        document) past what a document waits for it."""
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with ocr.PDFIUM_LOCK:
+                held.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(10))
+        return mock.patch.object(ocr, "PDFIUM_WAIT_SECONDS", 0.05)
+
+    @staticmethod
+    def drawn(path, *args, **kwargs):
+        """A reader drawing the document's pages, as its OCR does."""
+        return list(ocr._drawn_pages(path))
+
+    def test_pdfium_busy_on_a_document_read_like_any(self):
+        """[merge review] PDFium busy was taken for a refusal of the document
+        (« Failed to import »): the coverage moved past it for good."""
+        with self.pdfium_held(), mock.patch("invoices.receipts.import_document", side_effect=self.drawn):
+            job, _email, _slips, emit = self.gather({self.email_code}, email=self.fetched)
+        self.assert_fetched_again(job, emit)
+        self.assertIn("Not imported now, fetched again next time", job.log)
+
+    def test_pdfium_busy_on_a_document_of_a_reader_of_its_own(self):
+        InvoiceType.objects.filter(pk=self.cave.pk).update(parser_key="cave_exemple")
+        with self.pdfium_held(), mock.patch("invoices.tasks.parse_and_import", side_effect=self.drawn):
             job, _email, _slips, emit = self.gather({self.email_code}, email=self.fetched)
         self.assert_fetched_again(job, emit)
 

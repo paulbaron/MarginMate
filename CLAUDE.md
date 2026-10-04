@@ -661,10 +661,12 @@ handlers render them.
   caller OCRs a page): a folder's thread reads its files without
   `receipts.OCR_LOCK` beside the requests and the gathers. A document holds
   the lock `RENDER_SECONDS` at most and waits for it `PDFIUM_WAIT_SECONDS`
-  (2 x RENDER_SECONDS) at most, then is `DocumentTooBig(PDFIUM_BUSY)`
-  (« réessayez dans un instant », on the file's line like any refusal): an
-  RLock serves its waiters in no order. The pages come back through a
-  folder of its own, `TEMP\marginmate-pdfium\pdfium-*`, removed whatever
+  (2 x RENDER_SECONDS) at most, then is `ocr.PdfiumBusy(PDFIUM_BUSY)`, a
+  DocumentTooBig (« réessayez dans un instant », on the file's line like any
+  refusal; a gather's import helpers return None for it, so the document is
+  fetched again - taken once for a refusal of the document, it let an
+  automatic gather's coverage move past it): an RLock serves its waiters
+  in no order. The pages come back through a folder of its own, `TEMP\marginmate-pdfium\pdfium-*`, removed whatever
   happens to the render; one left by a server killed mid-render is swept
   at start by every process (`ocr.sweep_drawn_folders` from
   `InvoicesConfig.ready`, `serve` included): only that parent's pdfium-*
@@ -3166,15 +3168,21 @@ morning's invoice email was left for a later run.
 raises `SEARCH_REFUSED` (« Recherche refusée par le serveur mail (NO). »):
 read as an empty range, the gather recorded it searched. A header or
 body FETCH answered NO, or raising OSError / TimeoutError, counts its
-batch unread and the other batches are read all the same; after phase 2
-the search raises `IncompleteSearch(unread, matches)` inside its try, so
-the logout still runs. `scrape_email_invoices` writes the attachments that
-were read onto `exc.downloaded` and re-raises. `_gather_email` and
-`_gather_slips` import or store what was read, say « Boîte mail :
-Recherche incomplète : N e-mail(s) non lu(s) par le serveur mail. » on the
-line and record no coverage: the range is searched again, its documents
-already in refused by their digest. « Tester » lists what was read and
-logs the sentence.
+batch unread and the other batches are read all the same. A mail a
+pattern was too slow on counts too (the matchers count their timeouts,
+`MailMatcher.timed_out`; an attachment name too slow drops that attachment
+only, the mail still matches): left out, it is no mail that does not
+match. After phase 2 the search raises `IncompleteSearch(unread, matches,
+slow=…)` inside its try, so the logout still runs. `scrape_email_invoices`
+writes the attachments that were read onto `exc.downloaded` and re-raises;
+an attachment the disk refuses makes it raise one too (`unwritten`, with
+what it wrote). `_gather_email` and `_gather_slips` import or store what
+was read, say « Boîte mail : Recherche incomplète : … » on the line (« N
+e-mail(s) non lu(s) par le serveur mail », « motif trop lent sur N
+e-mail(s) », « N pièce(s) jointe(s) non enregistrée(s) sur le disque »,
+joined by commas) and record no coverage: the range is searched again, its
+documents already in refused by their digest. « Tester » lists what was
+read, logs the sentence and puts it as its line's note.
 
 **A gather starts in one place**, `invoices.gathering.start_gather` (the
 form's `trigger_gather` and the automatic gathers): stale runs reaped, the
@@ -3192,14 +3200,20 @@ both use it): the shape check without compiling (« The motif guard », under
 case-sensitive unless the pattern says `(?i)`, a blank-matching « .* »
 accepted, unlike a returnables format -, 500 characters at most (the
 column), matched on the first 200 000 characters of the text with a 1 s
-timeout per match; a timeout is « no match », said in the job's log. It
+timeout per match; a timeout is « no match », said in the job's log, and
+makes the search an incomplete one (above). A refusal names its field
+(`generic_email.PATTERN_LABELS`: « Motif d'expéditeur / d'objet / de
+contenu / de pièce jointe »), and `_gather_email` says a stored pattern the
+guard refuses (saved before it) as « Motif de la source à corriger : … »,
+never « Boîte mail : », the way `_gather_slips` says a format's. It
 used to be a bare `re.compile` run on mail anybody can write: one
 backtracking pattern and one crafted body pinned the server's CPU for every
 bar (audit 04/10/2026). An attachment's file name
 (`generic_email.attachment_file_name`) is cut to 120 characters, its
 extension to 10, Windows' device names (CON, NUL, COM1...) are prefixed
 with « _ », and a write the disk refuses skips that attachment only, said
-in the log - a 300-character name failed the whole source at every gather.
+in the log and counted (an incomplete search, above) - a 300-character name
+failed the whole source at every gather.
 
 The gather form starts from **the newest invoice the gathered sources have
 already brought in** (`tasks.default_gather_start`, receipts and future dates
@@ -8948,14 +8962,16 @@ never a lost bon.
     enregistrée, reprise à la prochaine récupération. »; the next run
     searches from the restarted coverage. A name-only save still records.
   - **An incomplete IMAP search** (`generic_email.IncompleteSearch`, see
-    « Gathering invoices ») still imports or stores what was read; the
-    line says « Boîte mail : Recherche incomplète : N e-mail(s) non lu(s)
-    par le serveur mail. », `_searched` is not called, and the alert counts
-    a failed source. A SEARCH answered NO is a plain source error
-    (« Boîte mail : Recherche refusée par le serveur mail (NO). »).
-  - **A document not imported for want of the OCR or the database**
+    « Gathering invoices »: mails the server left unread, a pattern too
+    slow on, an attachment the disk refused) still imports or stores what
+    was read; the line says « Boîte mail : Recherche incomplète : … »,
+    `_searched` is not called, and the alert counts a failed source. A
+    SEARCH answered NO is a plain source error (« Boîte mail : Recherche
+    refusée par le serveur mail (NO). »).
+  - **A document not imported for want of the OCR, PDFium or the database**
     (`_import_document_file` returns None when the OCR lock wait runs out;
-    both import helpers return None on OperationalError) is counted:
+    both import helpers return None on OperationalError and on
+    `ocr.PdfiumBusy`) is counted:
     `_gather_email` puts `NOT_IMPORTED_NOW` on the line (« N document(s)
     non importé(s) faute de lecture ou de base disponible : repris à la
     prochaine récupération ») and records no coverage. A document refused
