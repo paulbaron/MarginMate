@@ -1024,9 +1024,11 @@ def lines_prefetch(lookup: str = "lines") -> Prefetch:
     invoice, on every invoice the bar has ever had. The lines come with
     their product and its article in the same query, because `_where_it_went`
     asks every line whose it is - prefetched as `lines__product__stock_type`
-    it would be three queries, and asked line by line one per line.
+    it would be three queries, and asked line by line one per line. Only
+    the columns those read (`_LINE_COLUMNS`), on either page.
     """
-    return Prefetch(lookup, queryset=InvoiceLine.objects.select_related("product__stock_type"))
+    lines = InvoiceLine.objects.select_related("product__stock_type").only(*_LINE_COLUMNS)
+    return Prefetch(lookup, queryset=lines)
 
 
 #: What `_where_it_went`, `Invoice.total_ht` and `Invoice.total_ttc` read of
@@ -1064,9 +1066,8 @@ def with_lines(queryset):
     """An Invoice queryset loaded the way `where_it_went` needs it - the
     columns it reads only (`_INVOICE_COLUMNS`, `_LINE_COLUMNS`): anything
     else asked of these invoices is a query per row. « Dépenses » reaches the
-    lines through a bank line and loads them whole (`lines_prefetch`)."""
-    lines = InvoiceLine.objects.select_related("product__stock_type").only(*_LINE_COLUMNS)
-    return queryset.select_related("supplier").only(*_INVOICE_COLUMNS).prefetch_related(Prefetch("lines", lines))
+    same lines through a bank line (`lines_prefetch`)."""
+    return queryset.select_related("supplier").only(*_INVOICE_COLUMNS).prefetch_related(lines_prefetch())
 
 
 def invoice_money(invoice: Invoice) -> Money:

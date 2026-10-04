@@ -29,12 +29,13 @@ from datetime import date
 from decimal import Decimal
 
 from django.db import connection
+from django.db.models import Prefetch
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from common import DateRange
 from invoices.importing import spread_charges
-from invoices.models import Invoice
+from invoices.models import Invoice, InvoiceLine
 from margins import computation
 from margins.computation import (
     CHARGES_KEY,
@@ -566,7 +567,10 @@ class TheColumnsReadTests(TestCase):
             self.figures(invoices)
 
     def test_the_columns_read_give_what_the_whole_rows_give(self):
-        whole = Invoice.objects.select_related("supplier").prefetch_related(computation.lines_prefetch())
+        # Whole rows, as nothing in the app loads them any more: the reference.
+        whole = Invoice.objects.select_related("supplier").prefetch_related(
+            Prefetch("lines", InvoiceLine.objects.select_related("product__stock_type"))
+        )
         self.assertEqual(
             self.figures(computation.with_lines(Invoice.objects.all())),
             self.figures(whole),
