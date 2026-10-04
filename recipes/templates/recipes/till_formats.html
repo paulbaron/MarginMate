@@ -34,7 +34,7 @@
                                     <span class="status-pill status-ERROR">à corriger</span>
                                     <p class="field-error">{{ row.problem }}</p>
                                 {% endif %}
-                                {% if row.no_money %}<p class="muted small">Sans colonne de montant : la recette de ces jours reste « non lue ».</p>{% endif %}
+                                {% if row.no_money %}<p class="muted small">{{ no_money }}</p>{% endif %}
                             </td>
                             <td>{{ row.fmt.get_kind_display }}</td>
                             <td>{{ row.columns }}</td>

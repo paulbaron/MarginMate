@@ -1093,7 +1093,7 @@ class TillFormat(models.Model):
     class Delimiter(models.TextChoices):
         SEMICOLON = ";", "Point-virgule ( ; )"
         COMMA = ",", "Virgule ( , )"
-        TAB = "	", "Tabulation"
+        TAB = "\t", "Tabulation"
         PIPE = "|", "Barre verticale ( | )"
 
     class DateFormat(models.TextChoices):

@@ -49,8 +49,13 @@ TEST, SAVE, DELETE = "tester", "enregistrer", "supprimer"
 NO_TEST_FILE = "Choisissez un fichier pour voir ce que le format en lit."
 UNKNOWN_ACTION = "Action inconnue : rien n'a changé."
 NAME_TAKEN = "Un format porte déjà ce nom."
-#: Said beside a « Ventes » format that reads no amount.
-NO_MONEY = "sans colonne de montant : la recette de ces jours reste « non lue »"
+#: Said beside a « Ventes » format that reads no amount, and by « Tester »:
+#: the money of a day already imported with its own stays (the import writes
+#: the quantities alone, tasks._sync_pos_products), any other is « non lu ».
+NO_MONEY = (
+    "Sans colonne de montant : aucune recette n'est lue. Un jour déjà importé avec la sienne la garde ; "
+    "les autres restent « non lus »."
+)
 FORMAT_ANCHOR = "format-{pk}"
 
 
@@ -276,7 +281,9 @@ def _saved(form: TillFormatForm) -> TillFormat | None:
 
 def _page(request, template: str, context: dict):
     return render(
-        request, template, {"example": FORMAT_EXAMPLE, "test_file": TEST_FILE, "test_day": TEST_DAY, **context}
+        request,
+        template,
+        {"example": FORMAT_EXAMPLE, "test_file": TEST_FILE, "test_day": TEST_DAY, "no_money": NO_MONEY, **context},
     )
 
 
@@ -347,7 +354,7 @@ CHOOSE_A_FILE = "Choisissez un fichier."
 ALREADY_RUNNING = "Une récupération est déjà en cours."
 DAY_UNREAD = "Jour des ventes illisible."
 DAY_NEEDED = "Indiquez le jour des ventes : ce format n'a pas de colonne du jour."
-DAY_TO_COME = "Le jour des ventes est à venir : vérifiez-le."
+DAY_TO_COME = till_file.DAY_TO_COME
 
 
 def _uploader(request) -> str:

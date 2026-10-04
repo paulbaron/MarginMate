@@ -27,9 +27,13 @@ from tests.factories import make_recipe
 from transfer.sections import till_links
 
 #: Calls that write or read a sale by its source: RecipeSale(...),
-#: RecipeSale.objects.<anything>(...), record_sales(...). A `source=`
-#: literal anywhere else (a staged archive's « envoi ») is not a sale's.
+#: RecipeSale.objects.<anything>(...), record_sales(...) - and any row
+#: written with a literal source (`WRITES`), whatever reaches it: a recipe's
+#: own manager (`recipe.sales.update_or_create(source=...)`) names no
+#: RecipeSale. A `source=` literal anywhere else (a staged archive's
+#: « envoi ») is not a sale's.
 SALE_CALLS = {"RecipeSale", "record_sales"}
+WRITES = {"create", "get_or_create", "update_or_create", "bulk_create"}
 
 
 def _root_name(node) -> str:
@@ -50,7 +54,10 @@ def spelt_sources(tree) -> list[int]:
     string literal."""
     lines = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _root_name(node.func) not in SALE_CALLS:
+        if not isinstance(node, ast.Call):
+            continue
+        writes = isinstance(node.func, ast.Attribute) and node.func.attr in WRITES
+        if not writes and _root_name(node.func) not in SALE_CALLS:
             continue
         for keyword in node.keywords:
             if keyword.arg == "source" and isinstance(keyword.value, ast.Constant):
@@ -88,10 +95,14 @@ class OneKeyTests(SimpleTestCase):
             "RecipeSale(recipe=r, source='api')\n"
             "RecipeSale.objects.update_or_create(recipe=r, source='csv')\n"
             "RecipeSale.objects.filter(source='laddition').exclude(sold_on__in=x)\n"
-            "Stage.objects.create(source='envoi')\n"
+            "recipe.sales.update_or_create(sold_on=day, source='api')\n"
+            "recipe.sales.create(source='csv', quantity=1)\n"
+            "anything.objects.get_or_create(source='caisse')\n"
+            "_staged(token, path, source='envoi')\n"
             "record_sales(entries, source=TILL_SOURCE)\n"
+            "recipe.sales.update_or_create(sold_on=day, source=MANUAL_SALE_SOURCE)\n"
         )
-        self.assertEqual(spelt_sources(tree), [1, 2, 3, 4, 5])
+        self.assertEqual(sorted(spelt_sources(tree)), [1, 2, 3, 4, 5, 6, 7, 8])
 
 
 class LabelsTests(SimpleTestCase):
@@ -143,3 +154,27 @@ class SalesTabWordsTests(TestCase):
         self.assertEqual([sale.quantity for sale in self.page(vente="main").context["sales"]], [6])
         # As stored, too: a key is no secret, only no word to show.
         self.assertEqual([sale.quantity for sale in self.page(vente="laddition").context["sales"]], [4])
+
+
+class WrittenAsNamedEscapesTests(SimpleTestCase):
+    """A no-break space, a tab or a byte order mark written as the character
+    itself is invisible to whoever reviews the code (CLAUDE.md, « An
+    invisible character is written as a named escape »): the till's code -
+    every file of the app, and its « Données » section - writes them as
+    escapes."""
+
+    INVISIBLE = {chr(code) for code in (0x09, 0xA0, 0x202F, 0x2007, 0x2009, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)}
+
+    def test_no_invisible_character_is_written_as_itself(self):
+        base = Path(settings.BASE_DIR)
+        files = [path for path in (base / "recipes").rglob("*") if path.suffix in (".py", ".html", ".js")]
+        files += [
+            base / "transfer" / "sections" / "till_formats.py",
+            base / "transfer" / "tests" / "test_till_formats_section.py",
+        ]
+        found = []
+        for path in files:
+            for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if self.INVISIBLE & set(text):
+                    found.append(f"{path.relative_to(base)}:{number}")
+        self.assertEqual(found, [])

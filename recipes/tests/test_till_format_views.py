@@ -21,7 +21,7 @@ from django.urls import reverse
 from accounts import paths
 from recipes.models import PosProduct, TillFormat
 from recipes.pos import till_file
-from recipes.till_views import FORMAT_EXAMPLE, TEST_FILE
+from recipes.till_views import FORMAT_EXAMPLE, NO_MONEY, TEST_FILE
 from tests.runner import employee_of_the_test_tenant
 
 FIELDS = {
@@ -99,6 +99,19 @@ class NewFormatTests(TestCase):
         self.assertIn(till_file.XLS_REFUSED, test.problem)
         test = self.client.post(self.URL, {**FIELDS, "action": "tester"}).context["test"]
         self.assertIn("Choisissez un fichier", test.problem)
+
+    def test_a_format_reading_no_amount_says_what_the_import_does_with_the_money(self):
+        """Its import writes the quantities alone: a day imported before
+        with its money keeps it - « reste non lue » was false of that day."""
+        from django.utils.html import escape
+
+        content = "Date;Article;Qté\n03/07/2026;Soda Exemple;4".encode()
+        fields = {**FIELDS, "amount_column": "", "rate_column": ""}
+        response = self.client.post(self.URL, {**fields, "action": "tester", TEST_FILE: upload(content)})
+        self.assertContains(response, escape(NO_MONEY))
+        self.assertNotContains(response, "reste « non lue »")
+        self.client.post(self.URL, {**fields, "action": "enregistrer"})
+        self.assertContains(self.client.get(self.URL), escape(NO_MONEY))
 
     def test_tester_a_format_with_no_day_column_at_the_day_given(self):
         content = "Article;Qté;Total TTC;TVA\nSoda Exemple;4;14,00;10".encode()

@@ -695,7 +695,7 @@ class TillFormatForm(forms.ModelForm):
             "product_column": "Ventes.",
             "quantity_column": "Ventes. Négative pour un remboursement.",
             "amount_column": (
-                "Ventes. Remises déduites ; une ligne offerte vaut 0. Sans elle, la recette des jours reste non lue."
+                "Ventes. Remises déduites ; une ligne offerte vaut 0. Sans elle, aucune recette n'est lue."
             ),
             "amount_is_unit_price": "Coché : multiplié par la quantité. Sinon, le montant de la ligne.",
             "amount_ht_column": "Facultatif : l'emporte sur le taux.",

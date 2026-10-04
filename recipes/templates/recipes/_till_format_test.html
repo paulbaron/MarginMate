@@ -57,9 +57,9 @@ None when nothing was tried.
                     <li>{{ export.entries|length }} (produit, jour), {{ export.total_quantity }} unité{{ export.total_quantity|pluralize }}{% if export.days %}, du {{ export.days.0|date:"d/m/Y" }} au {{ export.days.1|date:"d/m/Y" }}{% endif %}.</li>
                     {% if export.money_columns %}
                         <li>Recette : {{ export.revenue_ttc|money }} € TTC, {{ export.revenue_ht|money }} € HT{% if export.revenue_without_rate_ttc %}, dont {{ export.revenue_without_rate_ttc|money }} € TTC sans taux lisible (pas de HT){% endif %}.</li>
-                        {% if export.days_without_amount %}<li>{{ export.days_without_amount }} (produit, jour) laissé{{ export.days_without_amount|pluralize }} non lu{{ export.days_without_amount|pluralize }} : une ligne sans montant lisible.</li>{% endif %}
+                        {% if export.days_without_amount %}<li>{{ export.days_without_amount }} (produit, jour) sans recette lue : une ligne sans montant lisible. La recette déjà enregistrée de ce jour reste ; sinon, il reste « non lu ».</li>{% endif %}
                     {% else %}
-                        <li>Aucune colonne de montant : la recette de ces jours reste « non lue ».</li>
+                        <li>{{ no_money }}</li>
                     {% endif %}
                     {% if export.quantities_rounded %}<li>{{ export.quantities_rounded }} (produit, jour) à une quantité fractionnaire, arrondie à l'unité.</li>{% endif %}
                     {% if export.refund_lines %}<li>{{ export.refund_lines }} ligne{{ export.refund_lines|pluralize }} de remboursement.</li>{% endif %}
