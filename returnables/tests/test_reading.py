@@ -976,6 +976,19 @@ class GlyphBoundTests(SimpleTestCase):
         self.assertTrue(reading.glyphs_refused(caught.exception), repr(caught.exception))
         self.assertFalse(reading.glyphs_refused(ValueError("autre chose")))
 
+    def test_path_segments_count_as_glyphs(self):
+        """pdfminer and pdfplumber keep every point of a path painted:
+        2 MB of « 0 0 m 1 1 l S » took 520 MB and 22 s. Many strokes, or one
+        path of many segments, alike."""
+        strokes = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m 1 1 l S\n" * 600))])
+        one_path = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m " + b"1 1 l " * 1_200 + b"S\n"))])
+        for drawn in (strokes, one_path):
+            with self.subTest(size=len(drawn)):
+                with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(drawn)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                self.assertEqual(pdf_text(drawn), "REPRISE VIDE")
+
     def test_the_cap_is_a_page_s_not_the_document_s(self):
         from invoices.tests.test_pdf_page_cap import pdf_of_pages
 

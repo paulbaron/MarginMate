@@ -20,8 +20,9 @@
   (invoices.ocr.MAX_INFLATE_TOTAL, through `inflate_budget`).
 - **And what it draws** (`bound_pdf_glyphs`, process-wide too): a character
   object of about 2 KB for every glyph, so one compressed Tj of 600 000
-  « A » - a 1 KB file - took 1,4 GB. A page stops at MAX_PAGE_GLYPHS
-  (`GlyphLimit`): the slip is « trop long », Achats' reader DocumentTooBig.
+  « A » - a 1 KB file - took 1,4 GB; a path's every point is kept as well.
+  A page stops at MAX_PAGE_GLYPHS glyphs and segments (`GlyphLimit`): the
+  slip is « trop long », Achats' reader DocumentTooBig.
 - `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
   lines, what could not be read, the delivery date, the number, the
   delivery-note references, « annule et remplace », the printed total, the
@@ -92,9 +93,10 @@ MAX_TEXT_CHARS = 200_000
 #: (the UBA invoices' streams inflate 260 KB at most, fonts included).
 MAX_INFLATE_STAGE = 64 * 1024 * 1024
 MAX_INFLATE_TOTAL = 4 * 1024 * 1024
-#: The glyphs one page may draw, for every pdfminer reader of the process
-#: (bound_pdf_glyphs): the densest page of 1 374 real invoices (Metro's)
-#: draws 6 617.
+#: The glyphs one page may draw, its path segments counted with them, for
+#: every pdfminer reader of the process (bound_pdf_glyphs): the densest page
+#: of 1 374 real invoices (Metro's) draws 6 617 glyphs, the most segments
+#: one page paints are 4 634 (Free's).
 MAX_PAGE_GLYPHS = 30_000
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
@@ -475,20 +477,31 @@ def bound_pdf_glyphs() -> None:
     makes one for every glyph a Tj draws, about 2 KB each, held until the
     page is done, and one compressed Tj of 600 000 « A » - a PDF of 1 KB -
     took 1,4 GB and 24 s in the slips' reading, Achats' text layer and the
-    suppliers' readers alike. Counted on the device, which pdfplumber makes
-    for each page (and pdfminer starts each page on with begin_page)."""
+    suppliers' readers alike. A painted path's segments count as glyphs,
+    before its curve is made: pdfminer and pdfplumber keep every point, and
+    2 MB of « 0 0 m 1 1 l S » took 520 MB and 22 s. Counted on the device,
+    which pdfplumber makes for each page (and pdfminer starts each page on
+    with begin_page)."""
     from pdfminer.converter import PDFLayoutAnalyzer
 
     if getattr(PDFLayoutAnalyzer.render_char, "glyph_bound", False):
         return
-    render_char, begin_page = PDFLayoutAnalyzer.render_char, PDFLayoutAnalyzer.begin_page
+    render_char, paint_path = PDFLayoutAnalyzer.render_char, PDFLayoutAnalyzer.paint_path
+    begin_page = PDFLayoutAnalyzer.begin_page
 
-    def bounded_render_char(self, *args, **kwargs):
-        drawn = getattr(self, "_glyphs_drawn", 0) + 1
+    def draw(device, count):
+        drawn = getattr(device, "_glyphs_drawn", 0) + count
         if drawn > MAX_PAGE_GLYPHS:
             raise GlyphLimit("trop de caractères sur une page")
-        self._glyphs_drawn = drawn
+        device._glyphs_drawn = drawn
+
+    def bounded_render_char(self, *args, **kwargs):
+        draw(self, 1)
         return render_char(self, *args, **kwargs)
+
+    def bounded_paint_path(self, gstate, stroke, fill, evenodd, path):
+        draw(self, len(path))
+        return paint_path(self, gstate, stroke, fill, evenodd, path)
 
     def counted_begin_page(self, *args, **kwargs):
         self._glyphs_drawn = 0
@@ -496,6 +509,7 @@ def bound_pdf_glyphs() -> None:
 
     bounded_render_char.glyph_bound = True
     PDFLayoutAnalyzer.render_char = bounded_render_char
+    PDFLayoutAnalyzer.paint_path = bounded_paint_path
     PDFLayoutAnalyzer.begin_page = counted_begin_page
 
 

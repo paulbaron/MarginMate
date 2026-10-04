@@ -444,7 +444,7 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
         self.assertEqual(str(refused.exception), f"{TOO_LONG} La facture n'a pas été modifiée.")
 
 
-TOO_DENSE = "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères sur une page."
+TOO_DENSE = "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères ou traits sur une page."
 
 
 class TooManyGlyphsTests(TestCase):
