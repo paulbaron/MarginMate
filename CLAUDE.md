@@ -31,8 +31,8 @@ or `uv run python manage.py test --settings=config.settings_test` (the same
 `default` and the central `accounts`, `tests/runner.py`), a temporary
 `TENANTS_ROOT` (every folder is the test espace's, `accounts.paths`), a test
 client logged in as the test espace's owner,
-and **blanks every credential** so no test can reach the real mailbox, the
-real Metro site or the Anthropic API. `tests/support.py::NoNetworkTestCase`
+and **blanks every credential** so no test can reach the real mailbox or
+the real Metro site. `tests/support.py::NoNetworkTestCase`
 additionally makes an accidental outbound connection fail loudly.
 
 Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
@@ -251,8 +251,8 @@ steps (the one-off move included).
 - **DEVELOPMENT**: this folder - one of the copies where the owner and
   coding sessions edit; each pushes its `main` to GitHub.
   Its .env says `DJANGO_DEBUG=True`, local hosts only, no `MARGINMATE_HTTPS`,
-  **no integration credentials** (Metro, the mailbox, L'Addition, the AI,
-  the mail server, the portals' variables: blank, so a gather from here
+  **no integration credentials** (Metro, the mailbox, L'Addition, the mail
+  server, the portals' variables: blank, so a gather from here
   refuses instead of reaching Metro), and points `MARGINMATE_TENANTS_ROOT` /
   `MARGINMATE_ACCOUNTS_DB` at `..\data-dev\` - a copy of a production
   backup, made by `refresh_dev_data.cmd`. runserver on 8000, which
@@ -564,12 +564,11 @@ handlers render them.
   tens of thousands. `ocr.check_page_count` (pdfminer's own walk of the page
   tree, stopped at `MAX_PAGES` + 1, never pdfium's count, which believes the
   /Count a file declares) runs in `receipts.import_document` after the
-  e-invoice and before the bon guard, at the top of
-  `importing.parse_and_import` and before the AI upload's bon guard;
-  `ocr.pdf_pages` is how a reader walks a PDF (refused past the cap, each
-  page closed once read): the text layer, `InvoiceParser.parse`, the AI
-  reader. `einvoice.embedded_xml` opens a pdfminer document, never a
-  pdfplumber one (it runs first, on every PDF). A bon (`returnables.
+  e-invoice and before the bon guard, and at the top of
+  `importing.parse_and_import`; `ocr.pdf_pages` is how a reader walks a PDF
+  (refused past the cap, each page closed once read): the text layer,
+  `InvoiceParser.parse`. `einvoice.embedded_xml` opens a pdfminer document,
+  never a pdfplumber one (it runs first, on every PDF). A bon (`returnables.
   reading.pdf_text`) is counted the same way, to its own 5 pages, before
   pdfplumber opens it. **Never `len(pdf.pages)` on a file from outside.**
 - **One call into PDFium at a time** (`ocr.PDFIUM_LOCK`, re-entrant): it is
@@ -1033,7 +1032,7 @@ read as seven characters because the OCR was given their logo, the only
 image in the file, for the page - an embedded image is the page only when it
 covers it (`ocr.covers_page`). `invoices/ocr.py` stands in for `extract_text()`, and
 `parsers/receipt_base.py::ReceiptParser` is the only class allowed to
-override `parse()` besides the LLM fallback. The ticket reader still
+override `parse()`. The ticket reader still
 implements `parse_pages` **only**, so every layout is still testable from
 hand-written text with no photo and no OCR engine — `test_parser_contract.py`
 enforces that the override lives in the base and nowhere else.
@@ -1630,7 +1629,7 @@ and `detect_shop` who printed it. The import reports each file as what
 it became, and links a ticket to its review screen, an invoice to its lines.
 `/invoices/upload/` still takes one PDF with its supplier named by hand -
 folded under the import card, for a document that says nothing about its
-sender, or for the AI pseudo-supplier.
+sender.
 
 **The review screen is the deliverable, not the parser.** The import card
 takes a batch (`/invoices/tickets/`) and detects each shop from its own
@@ -1855,9 +1854,9 @@ looks like its name, date, total: `receipts.first_reading`) and, once the
 batch has finished, offers the suppliers on that row - or a **new shop**
 (`receipts.create_shop`), named and given the text its tickets print at the
 top (`Supplier.ticket_header`). The ticket is read whatever the shop:
-`receipts.parser_for` gives every supplier but the AI pseudo-supplier a
-reader, the configured till's or the same reader without settings (a Metro
-paper ticket included). **The header is given from the review screen, not from the import card**: the
+`receipts.parser_for` gives every supplier a reader, the configured
+till's or the same reader without settings (a Metro paper ticket
+included). **The header is given from the review screen, not from the import card**: the
 card is filled in before anyone has seen the document, so it asks for a name
 only, and the review page - the photo beside it - has the box, filled in with
 what the document seems to print (`header_guess`) and with its own top lines
@@ -2207,9 +2206,8 @@ supplier) and opens on the correction page beside its PDF; the supplier learns
 what it prints. A supplier with its own reader (Metro, UBA...) keeps it, and a
 digital invoice dropped among ticket photos and filed by hand under one goes
 through it (`receipts.import_invoice_pdf`, when the file has a text layer; a
-scan is read as a ticket whatever the supplier). The AI pseudo-supplier is
-still offered there, last. A reader that fails or reads nothing (or the AI
-pseudo-supplier, which has none) still files the ticket, empty, with a failed
+scan is read as a ticket whatever the supplier). A reader that fails or
+reads nothing still files the ticket, empty, with a failed
 "Lecture automatique" check - that check is also what puts it in the review
 queue, which lists only receipts with checks. Either way the operator lands on
 the review screen, which also takes the ticket's date and total (a blank
@@ -2221,14 +2219,13 @@ lists « — Lecteur générique — », then the readers of a PDF layout by the
 `label`, sorted (Cecina (Vignerons de Cessenon), Metro, UBA:
 `parsers.layout_readers`) - never a till (keyed on its supplier's code, its
 settings one shop's tickets: every bar saw the original bar's local shops'
-codes there) nor the AI reader. A key saved before (a till's, one since
+codes there). A key saved before (a till's, one since
 removed) stays offered under its name, so no source becomes invalid. The
 sources table, an import's « Le lecteur X n'a trouvé aucune ligne » and the
 « Données » import's « garde son lecteur » note name a reader the same way
-(`parsers.reader_label`, `InvoiceType.reader_name`; the AI reader is
-« Analyse IA », `AI_READER_LABEL`, as the PDF import's select names its
-group); a new reader needs a `label` (`test_parser_contract`). The hand PDF
-import reads with the SUPPLIER's reader alone (`parse_and_import(supplier)`):
+(`parsers.reader_label`, `InvoiceType.reader_name`); a new reader needs a
+`label` (`test_parser_contract`). The hand PDF import reads with the
+SUPPLIER's reader alone (`import_document(supplier=)`):
 its card names the select's group (« Si son fournisseur est dans le groupe
 « Lecteur dédié »… »), never a source's « Lecteur ».
 
@@ -2755,11 +2752,11 @@ model is a migration to apply to the real database, for a word.
 **« Identifiants »** (`/identifiants/`, `accounts/credentials.py`, the
 store `accounts/vault.py`; 01/10/2026, the owner: « renseigner les logins et
 mots de passe des différents sites et de mon email sur une page »): the
-mailbox, Metro, L'Addition, the AI reading's key and every portal (one
-account per pair of names, two sources of one site share it), typed on a
-page reached from « Données »'s header and the Sources tab - no topbar link
-(the bar's rows are measured). Another bar's page holds the mailbox,
-L'Addition and the AI reading only (« Every espace's connectors », below).
+mailbox, Metro, L'Addition and every portal (one account per pair of
+names, two sources of one site share it), typed on a page reached from
+« Données »'s header and the Sources tab - no topbar link (the bar's rows are
+measured). Another bar's page holds the mailbox and L'Addition only (« Every
+espace's connectors », below).
 **Third-party passwords: what protects them** (security review of 01/10/2026,
 the owner: « users will enter passwords from sensitive websites »; five
 auditors and their skeptics, 25 confirmed findings - each rule below is one):
@@ -2865,7 +2862,7 @@ auditors and their skeptics, 25 confirmed findings - each rule below is one):
 - **Keyed by the .env's own names**, so every connector asks one question:
   `vault.setting(name)` (the page's value, else - in the platform owner's
   espace only - `settings.<name>`, `vault.server_setting`) for Metro, the
-  mailbox, L'Addition and the AI reading, and `website.credentials` reads
+  mailbox and L'Addition, and `website.credentials` reads
   the store before the .env for a portal - read at every call, never
   cached. `vault.ready(*names)` says whether a connector would sign in. It also
   refuses a portal naming an application variable (`app_env_name`) at run
@@ -2920,8 +2917,8 @@ its own « Identifiants »; the reference is `invoices/integrations.py`'s
 docstring. Two gates (`accounts/tenancy.py`), asked by every entry point on
 its own - the views, the task bodies, each connector last:
 - `integrations_allowed()` - **any bound espace**: the invoice mailbox (its
-  sources, « Tester », the returnables slips), L'Addition's sales import and
-  the AI reading. Refused unbound only. No kill switch: an espace closed
+  sources, « Tester », the returnables slips) and L'Addition's sales import.
+  Refused unbound only. No kill switch: an espace closed
   (`Tenant.is_active`) is bound by no request.
 - `server_accounts_allowed()` - **the platform owner's espace only**
   (`uses_server_integrations`; accounts.E005 unchanged: the server's .env
@@ -2955,8 +2952,6 @@ its own - the views, the task bodies, each connector last:
   gather (Metro and the portals are the owner's) the card draws that
   sentence and the notes in place of the form (`gather_to_fill`). Consignes
   still shows, and is held by, a gather running whatever the mailbox.
-  « Analyse IA » once its key is (`ai_offered`), the upload form refusing it
-  before anything is sent.
 - **The mailbox's guards** (another bar's unless said):
   - `EmailInvoiceSource.clean` runs the pattern guard
     (`returnables.patterns.compile_pattern(..., flags=0, strip=False)`)
@@ -3008,16 +3003,6 @@ its own - the views, the task bodies, each connector last:
   - **`NoNetworkTestCase` and `TenancyTestCase` refuse `socket.getaddrinfo`
     of a name** (the machine's own and addresses written as such pass):
     patch `egress.resolve`, never resolve for real.
-- **The AI reading** (`parsers/llm_fallback.py`): runs inside the upload's
-  request, so `anthropic.Anthropic(api_key, timeout=60, max_retries=0)`
-  (Cloudflare answers the browser at 100 s), two process-wide slots taken
-  without waiting (`integrations.AI_BUSY`) and ONE per other espace
-  (`_ai_slot`, `AI_BUSY_HERE`: one bar's two uploads took both and refused
-  every other bar; the owner's not counted per espace), every SDK error a
-  fixed French sentence read off the SDK's class names (`_said`) - all
-  `integrations.AiReadingRefused`, in `receipt_batches.READING_REFUSALS`.
-  `MODEL` and the forced `tool_choice` are unchanged: Sonnet 5.5 and Opus 5.5
-  refuse a forced tool.
 - **Chrome** (`invoices/scrapers/chrome.py`): another bar's always headless
   (`headless()` - a window would open on the server's desktop), and
   `browser_slot()`: two sessions for every other espace together, one each,
@@ -3040,9 +3025,9 @@ its own - the views, the task bodies, each connector last:
 - **Tests**: `invoices/tests/test_tenancy.py::GateTests` pins the
   cross-espace guarantee - the owner's .env values in the settings, another
   bar with nothing typed reaches none of them (Metro refused, the mailbox
-  `MAILBOX_MISSING`, the AI `AI_KEY_MISSING`, L'Addition types nothing and
-  starts no browser: `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
-  `test_ai_reading.py`, `test_chrome_policy.py`, `test_job_logs.py`,
+  `MAILBOX_MISSING`, L'Addition types nothing and starts no browser:
+  `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
+  `test_chrome_policy.py`, `test_job_logs.py`,
   `accounts/tests/test_credentials_hosted.py`.
 - **The till's tab names no server variable** to another bar
   (`recipes/tests/test_tenants.py::test_another_bar_s_tab_names_no_server_variable`,
@@ -5224,13 +5209,11 @@ imports (`transfer/legacy.py`).
   19/09 read as 43 years of sales (211 products over 662 days). The
   manifest's counts are `count()`'s, under the same labels (« prix connus »
   is the review page's word, since an « article » is a StockType), so the
-  import tab compares like with like. The AI pseudo-supplier is no supplier
-  on the page: count(), the manifest and the report's « fournisseurs » all
-  leave it out (`suppliers._tally`). A change to it is counted on a row of
-  its own (« fiche de l'analyse IA »), so the preview shows it and the
-  safety archive still takes the section. Counted in the report only, a
-  merge of the 19/09 copy said « 30 inchangés » for the 29 suppliers the
-  page announced. A document updated, or given a file back by a merge,
+  import tab compares like with like - count(), the manifest and the
+  report's « fournisseurs » count the same suppliers: counted in the report
+  only, one supplier made a merge of the 19/09 copy say « 30 inchangés » for
+  the 29 suppliers the page announced. A document updated, or given a file
+  back by a merge,
   still counts the files it keeps - and, merged without a conflict, its
   lines - « inchangés » (`InvoicesSection._untouched_files`): a « Remplacer »
   restore of that copy that updated one ticket counted 1 518 of its 1 520
@@ -5378,8 +5361,8 @@ imports (`transfer/legacy.py`).
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
   the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
-  in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, the AI,
-  Django, the signatures and the mail server; a test checks the list against
+  in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, Django,
+  the signatures and the mail server; a test checks the list against
   config/settings.py). An import
   never switches a portal on **unless the archive is one this installation
   wrote itself**: a file in `backups/`, where only `safety.before` writes
@@ -8374,8 +8357,7 @@ consignes : rangé dans Consignes (bon n° X) — ce n'est pas une facture. »
 a `DuplicateInvoiceError`: no Invoice. Several formats recognising it is
 refused the same way, naming them - filed as a purchase, it would be
 silently wrong money. Anything else (no format, a PDF over 5 MB or 5 pages,
-no text) is imported as before. The « Analyse IA » upload goes through it
-too, before `parse_and_import`. A folder import draws a routed bon « Rangé
+no text) is imported as before. A folder import draws a routed bon « Rangé
 dans Consignes », and one several formats recognise « Erreur » (stored
 nowhere, said in the batch's log); naming the shop of a kept file that turns
 out to be a bon does the same. Without the guard, UBA's bon was recognised by its printed
@@ -8662,21 +8644,22 @@ arithmetic isn't exact decimal either — see the comments on
 database, the test one included.
 
 **What a new espace starts with (`invoices/seeds.py`, 04/10/2026).** The test
-database, `_template` and the owner's espace hold every seed: Metro, UBA,
-« Autre (analyse IA) » (0002), « UBA - Factures » (0007), Franprix, Monoprix,
-Sabbh Oriental, Wing Seng (0012), the three returnable types and « UBA — bon
-du livreur » (returnables/0002). UBA, Sabbh Oriental and Wing Seng are the
-bar the app was written for: a new espace that is NOT the owner's drops them,
-with UBA's mailbox source and slip format (`forget_original_bar_suppliers`, a
-step of `accounts.provisioning.HOSTED_ESPACE_STEPS`, one transaction), and
-keeps Metro (not fetching), the AI reader, Franprix, Monoprix and the types.
-So **`Tenant.uses_server_integrations` also decides which seeds a new espace
+database, `_template` and the owner's espace hold every seed: Metro, UBA
+(0002), « UBA - Factures » (0007), Franprix, Monoprix, Sabbh Oriental, Wing
+Seng (0012), the three returnable types and « UBA — bon du livreur »
+(returnables/0002). UBA, Sabbh Oriental and Wing Seng are the bar the app
+was written for: a new espace that is NOT the owner's drops them, with UBA's
+mailbox source and slip format (`forget_original_bar_suppliers`, a step of
+`accounts.provisioning.HOSTED_ESPACE_STEPS`, one transaction), and keeps
+Metro (not fetching), Franprix, Monoprix and the types. So
+**`Tenant.uses_server_integrations` also decides which seeds a new espace
 keeps** - it is set at creation only, and the owner's espace was adopted,
 never provisioned: nothing reaches it. Their readers and tills stay in the
 code (a till answers only where its row is, `receipts.configured_tills`;
 `create_shop` never takes a registry key as a code: « Sabbh » is
-`SABBH_2`). The seed migrations, `SEEDED_SUPPLIERS` and `SEEDED_SOURCE` are
-unchanged: a new espace holds a subset of the seeds. **A later data
+`SABBH_2`). The seed migrations and `SEEDED_SOURCE` are unchanged, and
+`SEEDED_SUPPLIERS` lost only OTHER (invoices/0037, below): a new espace holds
+a subset of the seeds. **A later data
 migration must not count on them**: `migrate_tenants` runs it in every
 espace, hosted ones included, so it looks UBA, SABBH, WINGSENG, « UBA -
 Factures » or the UBA slip format up with `.filter(...).first()` and does
@@ -8690,6 +8673,21 @@ the same pk in two espaces passes `pk=` to `make_format`), and a gate test
 needing a mailbox source in the hosted espace makes its own
 (`invoices/tests/test_tenancy.py`, `reopen_the_owners_integrations_in_b`) -
 otherwise its `assert_not_called()` on the mailbox proves nothing.
+
+**The AI reading was removed on 04/10/2026, never used** (the owner: « tu
+peux supprimer la clé IA »): the « Autre (analyse IA) » choice of the PDF
+import (`parsers/llm_fallback.py`, the Anthropic SDK and its key
+`ANTHROPIC_API_KEY`, its « Identifiants » card), and the pseudo-supplier
+0002 seeded for it (code OTHER, reader key LLM). Migration `invoices/0037`
+deletes that supplier wherever no row names it - every relation to Supplier
+walked, CASCADE and hidden ones included - and keeps it as an ordinary
+supplier, its reader key emptied, where something does; no other supplier
+is touched. « Données » never creates it again from an older archive: left
+out, said, unless the run files something under it, then ordinary
+(`sections/suppliers._retired_ai`). `accounts/0004` rewords the admin's
+help of « utilise les accès du serveur ». A key typed on « Identifiants »
+before stays there until « Effacer » (« Identifiants qui ne servent
+plus »).
 
 ## Known data issues (not code bugs)
 

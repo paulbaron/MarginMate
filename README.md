@@ -20,10 +20,10 @@ and keep a live view of stock quantity/value.
     any ticket, scan or PDF for what its numbers do and checks it against
     its own printed totals: a supplier needs no code of its own. Beside it,
     a few dedicated readers of one PDF layout (`metro.py`, `uba.py`,
-    `cecina.py`, each with a `label`), the tills configured for some shops,
-    and the AI reader (`llm_fallback.py`, the « Autre (analyse IA) »
-    pseudo-supplier, where an Anthropic key is set). The registry is
-    `registry.py`.
+    `cecina.py`, each with a `label`) and the tills configured for some
+    shops. The registry is `registry.py`. (The AI reader and its « Autre
+    (analyse IA) » supplier were removed on 04/10/2026, never used:
+    migration invoices/0037.)
   - `einvoice.py` - electronic invoices (Factur-X, UBL, CII), read as data,
     to the cent: since 1 September 2026 suppliers bill through an approved
     platform; the bar downloads them there and drops them in Achats (the
@@ -72,8 +72,7 @@ Edit `.env`:
 - `METRO_EMAIL` / `METRO_PASSWORD`, `INVOICE_EMAIL_ADDRESS` /
   `INVOICE_EMAIL_APP_PASSWORD` (the mailbox suppliers send invoices to: a
   Gmail **app password**, not the real password; `UBA_EMAIL_*` are the old
-  names, still read), `ANTHROPIC_API_KEY` (the « Autre (analyse IA) »
-  reader) - all optional. An espace's own accounts are typed on its
+  names, still read) - all optional. An espace's own accounts are typed on its
   « Identifiants » page; these lines stand in for the platform owner's espace
   only.
 
