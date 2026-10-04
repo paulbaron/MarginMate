@@ -172,3 +172,111 @@ class TheFileRefusedTests(SimpleTestCase):
             parse_sales_export(path)
         self.assertIn("XFD", str(caught.exception))
         self.assertIn(laddition_xlsx.NOT_THE_EXPORT, str(caught.exception))
+
+
+def _wide_workbook(rows: int) -> str:
+    """The lines sheet, its header the export's, every row below carrying
+    one more cell at XFD - a row padded to it is 16 384 cells."""
+    from xml.sax.saxutils import escape
+
+    def cell(ref, value):
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+
+    letters = "ABCDEFGH"
+    header = "".join(cell(f"{letters[at]}1", title) for at, title in enumerate(HEADER))
+    body = []
+    for number in range(2, rows + 2):
+        values = line("2026-06-01", "Pinte Exemple", "7.50", "20%")
+        cells = "".join(cell(f"{letters[at]}{number}", value) for at, value in enumerate(values))
+        body.append(f'<row r="{number}">{cells}{cell(f"XFD{number}", "loin")}</row>')
+    path = str(Path(tempfile.mkdtemp()) / "ventes.xlsx")
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", CONTENT_TYPES)
+        archive.writestr("xl/workbook.xml", WORKBOOK)
+        archive.writestr("xl/_rels/workbook.xml.rels", RELS)
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f'<sheetData><row r="1">{header}</row>{"".join(body)}</sheetData></worksheet>',
+        )
+    return path
+
+
+class AnUploadIsBoundedTests(SimpleTestCase):
+    """An export uploaded on « Ventes » is read only as wide as the columns
+    this parser reads, and holds at most MAX_ROWS rows and MAX_PRODUCTS
+    products a sheet: 20 000 rows each with a cell at XFD - a 104 KB upload -
+    took 11 s, in the one process every espace shares. The owner's fetched
+    exports are held to none of it."""
+
+    def widths(self, path, **kwargs) -> list[int]:
+        """The width of every row the parser was handed, header first."""
+        from recipes.pos import xlsx_reader
+
+        real = xlsx_reader.read_sheet
+        seen: list[int] = []
+
+        def spy(*args, **options):
+            for row in real(*args, **options):
+                seen.append(len(row))
+                yield row
+
+        with mock.patch.object(xlsx_reader, "read_sheet", spy):
+            result = parse_sales_export(path, **kwargs)
+        self.assertEqual(result.total_quantity, 3)
+        return seen
+
+    def test_an_upload_is_read_no_wider_than_the_columns_read(self):
+        path = _wide_workbook(3)
+        self.assertEqual(self.widths(path, untrusted=True), [len(HEADER)] * 4)
+        # The owner's downloads read as they always did.
+        self.assertEqual(self.widths(path), [len(HEADER)] + [16_384] * 3)
+
+    def test_an_upload_of_more_rows_than_a_file_may_hold_is_refused(self):
+        rows = [HEADER] + [line("2026-06-01", "Pinte Exemple", "7.50", "20%")] * 4
+        path = write_workbook(rows)
+        with mock.patch.object(laddition_xlsx, "MAX_ROWS", 3):
+            with self.assertRaises(LadditionExportError) as caught:
+                parse_sales_export(path, untrusted=True)
+            self.assertEqual(str(caught.exception), "Plus de 3 lignes : exportez une période plus courte.")
+            self.assertEqual(parse_sales_export(path).total_quantity, 4)
+
+    def test_an_upload_of_more_products_than_a_till_sells_is_refused(self):
+        path = write_workbook(
+            [HEADER] + [line("2026-06-01", f"Produit Exemple {number}", "1.00", "20%") for number in range(3)]
+        )
+        with mock.patch.object(laddition_xlsx, "MAX_PRODUCTS", 2):
+            with self.assertRaises(LadditionExportError) as caught:
+                parse_sales_export(path, untrusted=True)
+            self.assertIn("Plus de 2 produits différents", str(caught.exception))
+            self.assertEqual(len(parse_sales_export(path).products), 3)
+
+    def test_an_upload_s_ticket_sheet_is_bounded_too_the_lines_kept(self):
+        path = write_workbook(
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+            tickets=[TICKET_HEADER] + [ticket("2026-06-01", number, "7.5", "CB(7,50)") for number in range(3)],
+        )
+        with mock.patch.object(laddition_xlsx, "MAX_ROWS", 2):
+            result = parse_sales_export(path, untrusted=True, file_name="Lignes de ventes.xlsx")
+        self.assertEqual(result.total_quantity, 1)
+        self.assertFalse(result.payments_read)
+        self.assertEqual(
+            result.payment_sheet_errors,
+            ["Lignes de ventes.xlsx : Plus de 2 lignes : exportez une période plus courte."],
+        )
+
+
+class TheNameAPersonKnowsTests(SimpleTestCase):
+    def test_a_ticket_sheet_refused_names_the_file_uploaded_not_its_staging_name(self):
+        """An upload is read under « <uuid>.part »: a log line naming that is
+        a name nobody uploaded."""
+        source = write_workbook(
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")],
+            tickets=[TICKET_HEADER, ticket("2026-06-01", 1, "NaN", "CB(7,50)")],
+        )
+        staged = Path(source).with_name("0123456789abcdef.part")
+        Path(source).rename(staged)
+        result = parse_sales_export(staged, untrusted=True, file_name="Lignes de ventes.xlsx")
+        (said,) = result.payment_sheet_errors
+        self.assertTrue(said.startswith("Lignes de ventes.xlsx : "), said)
+        self.assertNotIn(".part", said)

@@ -10,9 +10,10 @@ how dates and decimals are printed, the hour the service ends, and how the
 till spells its means of payment. A day the file does not print (a daily Z
 report) is given with the upload (`day`).
 
-Pure: no database is written. `PosDailyPayment` is imported lazily for its
-vocabulary (as laddition_xlsx does), so this still loads without Django.
-`check_format` compiles a format - any object carrying its fields: a row, a
+Pure: no database is written, nothing is read from it but the payments'
+vocabulary (`PosDailyPayment`, imported lazily). It needs Django's settings
+all the same: `common.search_key` folds a title or a spelling, and the day a
+file may reach is today's (`timezone.localdate`). `check_format` compiles a format - any object carrying its fields: a row, a
 form's data, a test's namespace - or says what is wrong with it
 (FormatError: a field and a French sentence); `read` reads a file with it
 into the very `ParsedExport` L'Addition's reader returns, so the one writer
@@ -32,7 +33,9 @@ The rules, each a way a till's file could be silently wrong money:
   A date cell may carry its time (« 03/07/2026 23:41 », ISO's « T »,
   fractional seconds), or a time column may be named; an .xlsx date cell is
   Excel's serial number, in the 1904 calendar where the workbook says so.
-  Days between 2000 and 2099 only.
+  Days between 2000 and tomorrow only (`DayReader.latest`): « 99 » in a
+  jj/mm/aa column is 2099, and a day and a month the wrong way round can
+  land in the months to come - a sale there is a misread column.
 - **Money**: the line's amount TTC (remises déduites; a comp is 0), or a
   unit price multiplied by the quantity when the format says so. HT is
   worked out per rate bucket from French rates only (`KNOWN_RATES`, read as
@@ -42,7 +45,9 @@ The rules, each a way a till's file could be silently wrong money:
   `without_rate_ttc`. A (product, day) one of whose lines has no readable
   amount is left unread, not filed at what the rest took.
 - **Numbers are Decimal**: a text cell read digit for digit with the
-  format's decimal mark (no exponent, no NaN); an .xlsx numeric cell as the
+  format's decimal mark - a space or « ' » only between groups of three
+  digits (« 42 50 » is no 4 250, « 1 0,5 » no 10,5) -, no exponent, no NaN;
+  an .xlsx numeric cell as the
   number it is (`Decimal` of its text), its binary noise (10.499999999999998)
   rounded half up to the cent - and refused when the excess is more than
   noise (3.505 is no amount).
@@ -82,13 +87,16 @@ from .laddition_xlsx import (
     MAX_DAY_QUANTITY,
     MAX_LINE_QUANTITY,
     MAX_PAYMENT,
+    MAX_PRODUCTS,
     MAX_REVENUE,
+    MAX_ROWS,
     NAME_LENGTH,
     ZERO,
     DayMoney,
     DayPayment,
     ParsedExport,
     _to_ht,
+    with_progress,
 )
 
 # -- what a format may say -----------------------------------------------------------
@@ -161,10 +169,10 @@ MAX_COLUMN = 100
 TITLE_LENGTH = 100
 #: Where a header is looked for: a title row or two above it is common.
 HEADER_ROWS = 30
-#: What one file may hold. Past them it is no till's export of a period -
-#: or a period too long for one upload: refused, in French.
-MAX_ROWS = 500_000
-MAX_PRODUCTS = 5_000
+#: What one file may hold - `MAX_ROWS` and `MAX_PRODUCTS`, shared with an
+#: uploaded L'Addition export (laddition_xlsx): past them it is no till's
+#: export of a period, or a period too long for one upload. Refused, in
+#: French.
 #: A CSV line wider than this is no export (a « ; » repeated millions of
 #: times would be read into one row of millions of cells).
 MAX_SEPARATORS = 5_000
@@ -178,8 +186,12 @@ FILE_SUFFIXES = (".csv", ".txt", ".xlsx")
 #: Binary noise on an .xlsx number: below this, the figure is the rounded one.
 NOISE = Decimal("1E-9")
 #: Decimals a figure may carry: an amount TTC or paid, an amount HT (a line's
-#: HT is often printed to the tenth of a cent), a quantity (a weight).
-AMOUNT_PLACES, HT_PLACES, QUANTITY_PLACES = 2, 4, 3
+#: HT is often printed to the tenth of a cent), a quantity (a weight), a VAT
+#: rate stored as a number (0.055, or 5.5 as a percentage).
+AMOUNT_PLACES, HT_PLACES, QUANTITY_PLACES, RATE_PLACES = 2, 4, 3, 4
+#: The digits a number is written in: ASCII only (`str.isdigit` says yes to
+#: digits of other scripts, which Decimal reads).
+DIGITS = frozenset("0123456789")
 #: Excel's serial 0: 30/12/1899 (its 1900 calendar counts a 29/02/1900 that
 #: never was), or 01/01/1904 in the 1904 calendar.
 EXCEL_EPOCH = datetime(1899, 12, 30)  # noqa: DTZ001 - a calendar's origin, no moment
@@ -192,6 +204,7 @@ NOT_A_WORKBOOK = "Ce fichier n'est pas un classeur Excel (.xlsx) lisible."
 NO_DAY = "Ce format n'a pas de colonne du jour : indiquez le jour des ventes avec le fichier."
 DAY_GIVEN_TWICE = "Ce format lit le jour dans le fichier : laissez « Jour des ventes » vide."
 NOTHING_READ = "Aucune ligne lue dans ce fichier : vérifiez les colonnes du format."
+DAY_TO_COME = "Le jour des ventes est à venir : vérifiez-le."
 
 
 class TillFileError(ValueError):
@@ -533,10 +546,11 @@ def read_number(cell, decimal_mark: str, places: int) -> Decimal | None:
     """A cell's number, Decimal, or None when it holds no number at all.
     An .xlsx numeric cell is the number it is - its binary noise rounded
     half up to `places`, anything more refused (ValueError). A text cell is
-    read digit for digit: spaces of any kind and « ' » between thousands,
-    the other mark between groups of three digits, a sign in front or a
-    « - » behind, a « € » at either end; at most `places` decimals
-    (ValueError past them). Never an exponent, NaN or Infinity."""
+    read digit for digit: ONE kind of separator - a space of any kind, « ' »
+    or the other mark - and only between groups of exactly three digits
+    (« 1 234,50 »; « 42 50 », « 1 0,5 » and « 1 2 3 » are no number), a
+    sign in front or a « - » behind, a « € » at either end; at most `places`
+    decimals (ValueError past them). Never an exponent, NaN or Infinity."""
     if _is_number_cell(cell):
         try:
             number = Decimal(str(cell).strip())
@@ -548,23 +562,20 @@ def read_number(cell, decimal_mark: str, places: int) -> Decimal | None:
         if abs(number - rounded) >= NOISE:
             raise ValueError(f"plus de {places} décimales : « {_shown(number)} »")
         return rounded
-    text = "".join(char for char in str(cell).strip() if not char.isspace() and char != "'")
-    text = text.removesuffix("€").removeprefix("€")
+    text = str(cell).strip().removesuffix("€").removeprefix("€").strip()
     if not text:
         return None
     sign = ""
     if text[:1] in ("-", "+", "\N{MINUS SIGN}"):
-        sign, text = ("" if text[0] == "+" else "-"), text[1:]
+        sign, text = ("" if text[0] == "+" else "-"), text[1:].strip()
     elif text.endswith("-"):
-        sign, text = "-", text[:-1]
+        sign, text = "-", text[:-1].strip()
     if text.count(decimal_mark) > 1:
         return None
     whole, mark, fraction = text.partition(decimal_mark)
-    thousands = "." if decimal_mark == "," else ","
-    if thousands in whole:
-        if re.fullmatch(r"[0-9]{1,3}(?:" + re.escape(thousands) + r"[0-9]{3})+", whole) is None:
-            return None
-        whole = whole.replace(thousands, "")
+    whole = _ungrouped(whole, "." if decimal_mark == "," else ",")
+    if whole is None:
+        return None
     if (mark and not fraction) or not (whole or fraction):
         return None
     if not all(part.isascii() and part.isdigit() for part in (whole, fraction) if part):
@@ -576,6 +587,25 @@ def read_number(cell, decimal_mark: str, places: int) -> Decimal | None:
     return Decimal(f"{sign}{whole or '0'}.{fraction}" if mark else f"{sign}{whole}")
 
 
+def _ungrouped(whole: str, thousands: str) -> str | None:
+    """The digits of a number's whole part, its group separator taken out -
+    None when anything but ONE separator (a space of any kind, « ' », the
+    mark that is not the decimal one) stands between groups of exactly three
+    digits. Taken out wherever it stood, « 42 50 » read 4 250 € and
+    « 1 0,5 » 10,5 (« Combler les écarts » met the same bug)."""
+    separators = {char for char in whole if char not in DIGITS}
+    if not separators:
+        return whole
+    if len(separators) > 1:
+        return None
+    separator = separators.pop()
+    if not (separator.isspace() or separator in ("'", thousands)):
+        return None
+    if re.fullmatch(r"[0-9]{1,3}(?:" + re.escape(separator) + r"[0-9]{3})+", whole) is None:
+        return None
+    return whole.replace(separator, "")
+
+
 def _shown(number: Decimal) -> str:
     return format(number.normalize(), "f").replace(".", ",")
 
@@ -583,13 +613,38 @@ def _shown(number: Decimal) -> str:
 def read_rate(cell) -> Decimal | None:
     """A VAT rate as a percentage or a fraction - « 20 % », « 20 », « 0,2 »,
     « 0.2 » are 0.20 - against the French rates; None for anything else
-    (« 19,6 »). The sign is the amount's (a refund prints « -20 % »)."""
+    (« 19,6 »). The sign is the amount's (a refund prints « -20 % »). An
+    .xlsx numeric cell is the number it is, its binary noise rounded off
+    (Excel stores 5,5 % as 0.055000000000000007)."""
+    if _is_number_cell(cell):
+        value = _noiseless_rate(cell)
+        if value is None:
+            return None
+        return _known_rate(value, percentage=False)
     text = "".join(str(cell or "").split())
     percentage = "%" in text
     text = text.replace("%", "").replace(",", ".").lstrip("+-\N{MINUS SIGN}")
     if not text or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+", text):
         return None
-    value = Decimal(text)
+    return _known_rate(Decimal(text), percentage=percentage)
+
+
+def _noiseless_rate(cell) -> Decimal | None:
+    """An .xlsx numeric rate, its sign dropped, rounded to RATE_PLACES when
+    what it loses is binary noise (under NOISE); None for anything else."""
+    try:
+        value = abs(Decimal(str(cell).strip()))
+    except InvalidOperation:
+        return None
+    if not value.is_finite() or value > 100:
+        return None
+    rounded = value.quantize(Decimal(1).scaleb(-RATE_PLACES), rounding=ROUND_HALF_UP)
+    return rounded if abs(value - rounded) < NOISE else None
+
+
+def _known_rate(value: Decimal, *, percentage: bool) -> Decimal | None:
+    """The French rate `value` is, as a fraction or (unless a « % » said
+    which) a percentage."""
     # « 20 » and « 0,2 » never collide: no French rate is both a fraction
     # and a hundredth of another. A « % » printed says which it is.
     candidates = (value / 100,) if percentage else (value, value / 100)
@@ -620,16 +675,28 @@ def read_time(cell) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
+def latest_day(today: date | None = None) -> date:
+    """The last day a till's file may hold a sale on: tomorrow."""
+    if today is None:
+        from django.utils import timezone
+
+        today = timezone.localdate()
+    return today + timedelta(days=1)
+
+
 class DayReader:
     """A format's dates, read: the date with its time when it carries one,
     an .xlsx serial in the workbook's calendar, the business day shifted
     back before the end of the service."""
 
-    def __init__(self, layout: Layout, date1904: bool = False):
+    def __init__(self, layout: Layout, date1904: bool = False, today: date | None = None):
         self.layout = layout
         _label, pattern, self.order = DATE_FORMATS[layout.date_format]
         self.date_re = re.compile(rf"{pattern}(?:(?:[ T]|\s+){_TIME})?")
         self.epoch = EXCEL_EPOCH_1904 if date1904 else EXCEL_EPOCH
+        #: The last business day a file may hold: tomorrow (a server's
+        #: clock and a till's are not always on one day).
+        self.latest = latest_day(today)
 
     def __call__(self, cell, time_cell="") -> date | None:
         """The business day of a row - None when the cell holds no date at
@@ -645,6 +712,8 @@ class DayReader:
             raise ValueError(f"jour hors limites « {str(cell).strip()[:40]} » (de 2000 à 2099)")
         if self.layout.end_hour and time is not None and time[0] < self.layout.end_hour:
             day -= timedelta(days=1)
+        if day > self.latest:
+            raise ValueError(f"jour à venir « {str(cell).strip()[:40]} » (le {day:%d/%m/%Y})")
         return day
 
     def _moment(self, cell):
@@ -719,20 +788,32 @@ class TillReading:
     truncated: bool = False
 
 
-def read(source, layout: Layout, *, file_name: str, day: date | None = None, limit: int | None = None) -> TillReading:
+def read(
+    source,
+    layout: Layout,
+    *,
+    file_name: str,
+    day: date | None = None,
+    limit: int | None = None,
+    progress=None,
+) -> TillReading:
     """Read a till's file with a checked format - `TillFileError` for every
     way it is not one the format reads. `day`: the day of every row, for a
-    format with no day column (and refused for one that has it). `limit`:
-    stop after that many rows read (« Tester »)."""
+    format with no day column (and refused for one that has it, or one to
+    come). `limit`: stop after that many rows read (« Tester »). `progress`:
+    called as the rows go by (a job's heartbeat, laddition_xlsx's
+    `with_progress`)."""
     if layout.has(DAY) and day is not None:
         raise TillFileError(DAY_GIVEN_TWICE)
     if not layout.has(DAY) and day is None:
         raise TillFileError(NO_DAY)
     if day is not None and not FIRST_DAY <= day <= LAST_DAY:
         raise TillFileError("Jour des ventes hors limites (de 2000 à 2099).")
+    if day is not None and day > latest_day():
+        raise TillFileError(DAY_TO_COME)
     found = table(source, layout, file_name)
     reading = TillReading(ParsedExport())
-    rows = iter(found.rows)
+    rows = with_progress(iter(found.rows), progress)
     try:
         indexes = _locate(rows, layout, reading)
         day_of = DayReader(layout, found.date1904)

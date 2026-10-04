@@ -591,3 +591,174 @@ class ModelTests(TestCase):
         TillFormat(
             name="Caisse Exemple", day_column="Date", product_column="Article", quantity_column="Qté"
         ).full_clean()
+
+
+class NumberReaderTests(SimpleTestCase):
+    """`read_number` read « 42 50 » as 4 250: every space and « ' » was taken
+    out wherever it stood. A separator stands between groups of exactly
+    three digits now, one kind of it a number - the bug « Combler les
+    écarts » met once already."""
+
+    def read(self, text, mark=",", places=2):
+        return till_file.read_number(text, mark, places)
+
+    def test_a_space_anywhere_but_between_thousands_is_no_number(self):
+        for text in ("42 50", "1 0,5", "1 2 3", "12 ,50", "1 23,00", "1234 567", "12,5 0"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.read(text, places=3))
+
+    def test_thousands_are_grouped_by_one_kind_of_separator(self):
+        cases = {
+            "1 234,50": "1234.50",
+            "1\N{NO-BREAK SPACE}234,50": "1234.50",
+            "1\N{NARROW NO-BREAK SPACE}234\N{NARROW NO-BREAK SPACE}567,89": "1234567.89",
+            "1'234,50": "1234.50",
+            "1.234,50": "1234.50",
+            "12 345 678": "12345678",
+        }
+        for text, number in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(self.read(text), Decimal(number))
+        self.assertEqual(self.read("1,234.50", mark="."), Decimal("1234.50"))
+        self.assertIsNone(self.read("1 234.567,89"))
+        self.assertIsNone(self.read("1'234 567,89"))
+
+    def test_a_sign_and_a_euro_may_stand_apart_from_the_figure(self):
+        cases = {"12,50 €": "12.50", "€ 12,50": "12.50", "- 12,50": "-12.50", "12,50 -": "-12.50", "+ 3": "3"}
+        for text, number in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(self.read(text), Decimal(number))
+
+    def test_a_file_whose_amount_splits_its_digits_reads_it_unread_not_bigger(self):
+        export = reading([HEADER, "03/07/2026;Pinte;1;42 50;20"]).export
+        self.assertEqual(export.lines_without_amount, 1)
+        self.assertEqual(export.money, {})
+        self.assertIn("quantité illisible", refusal([HEADER, "03/07/2026;Pinte;1 0;6,50;20"]))
+
+
+class NumericRateTests(SimpleTestCase):
+    """Excel stores a percentage as a float: 5,5 % is 0.055000000000000007,
+    written as « 5.5000000000000004E-2 » by some. Read as text, no rate - and
+    every line's HT unknown."""
+
+    def test_a_rate_s_binary_noise_is_rounded_off(self):
+        from recipes.pos.xlsx_reader import Number
+
+        cases = {
+            "0.055000000000000007": "0.055",
+            "5.5000000000000004E-2": "0.055",
+            "2.1000000000000001E-2": "0.021",
+            "0.20000000000000001": "0.20",
+            "0.1": "0.10",
+            "20": "0.20",
+            "5.5000000000000009": "0.055",
+            "-0.2": "0.20",
+            "0": "0",
+        }
+        for text, rate in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(read_rate(Number(text)), Decimal(rate))
+
+    def test_more_than_noise_or_no_french_rate_is_no_rate(self):
+        from recipes.pos.xlsx_reader import Number
+
+        for text in ("0.0551", "0.196", "19.6", "NaN", "1E+400", "abc", "0.05500001"):
+            with self.subTest(text=text):
+                self.assertIsNone(read_rate(Number(text)))
+
+    def test_a_workbook_s_numeric_rates_give_the_line_its_ht(self):
+        workbook = xlsx_file(
+            [
+                ["Date", "Article", "Qté", "Total TTC", "TVA"],
+                [("n", "46206"), "Soda", ("n", "1"), ("n", "10.55"), ("n", "5.5000000000000004E-2")],
+            ]
+        )
+        export = reading(workbook, file_name="export.xlsx").export
+        self.assertEqual(export.lines_without_rate, 0)
+        self.assertEqual(export.money[("Soda", date(2026, 7, 3))].revenue_ht, Decimal("10.00"))
+
+
+class DaysToComeTests(SimpleTestCase):
+    """« 99 » in a jj/mm/aa column is 2099, and a day and a month the wrong
+    way round can land months ahead: a sale there is a misread column."""
+
+    def setUp(self):
+        self.enterContext(mock.patch("django.utils.timezone.localdate", return_value=date(2026, 7, 3)))
+
+    def test_tomorrow_reads_the_day_after_refuses_the_file(self):
+        self.assertEqual(reading([HEADER, "04/07/2026;Pinte;1;6,50;20"]).export.entries[0][1], date(2026, 7, 4))
+        said = refusal([HEADER, "02/07/2026;Pinte;1;6,50;20", "05/07/2026;Pinte;1;6,50;20"])
+        self.assertIn("Ligne 3 : jour à venir", said)
+        self.assertIn("05/07/2026", said)
+
+    def test_a_two_digit_year_far_ahead_is_refused(self):
+        fmt = sales_format(date_format="dd/mm/yy")
+        self.assertIn("jour à venir", refusal([HEADER, "03/07/99;Pinte;1;6,50;20"], fmt))
+
+    def test_a_sale_after_midnight_counts_for_the_evening_before(self):
+        fmt = sales_format(service_day_end_hour=5)
+        export = reading([HEADER, "05/07/2026 01:30;Pinte;1;6,50;20"], fmt).export
+        self.assertEqual(export.entries[0][1], date(2026, 7, 4))
+
+    def test_a_day_given_to_come_is_refused(self):
+        fmt = sales_format(day_column="")
+        lines = ["Article;Qté;Total TTC;TVA", "Pinte;1;6,50;20"]
+        self.assertEqual(refusal(lines, fmt, day=date(2026, 7, 5)), till_file.DAY_TO_COME)
+        self.assertEqual(reading(lines, fmt, day=date(2026, 7, 3)).export.entries[0][1], date(2026, 7, 3))
+
+    def test_payments_to_come_are_refused_too(self):
+        lines = ["Date;Moyen;Montant", "06/07/2026;CB;6,50"]
+        self.assertIn("jour à venir", refusal(lines, payments_format()))
+
+
+class DamagedWorkbookTests(SimpleTestCase):
+    """Bytes changed at random in a small workbook: every outcome a reading
+    or a French refusal. Before, a few in a thousand escaped as
+    NotImplementedError (« zip file version ») or ValueError (« negative
+    seek value »): a 500 on « Tester », the fixed sentence in the job."""
+
+    def test_no_mutation_escapes_as_anything_but_a_refusal(self):
+        import random
+
+        from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_export
+        from recipes.tests.test_pos_revenue import HEADER as LINES_HEADER
+        from recipes.tests.test_pos_revenue import line, write_workbook
+
+        with open(write_workbook([LINES_HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%")]), "rb") as file:
+            content = file.read()
+        fmt = sales_format(
+            decimal_mark=".",
+            date_format="yyyy-mm-dd",
+            day_column="Jour",
+            product_column="Nom",
+            quantity_column="Qte",
+            amount_column="Prix TTC",
+            rate_column="Taux",
+            sheet="SalesDocumentLines",
+        )
+        layout = check_format(fmt)
+        chance = random.Random(20261004)
+        for _attempt in range(400):
+            damaged = bytearray(content)
+            for _byte in range(chance.randint(1, 4)):
+                damaged[chance.randrange(len(damaged))] = chance.randrange(256)
+            try:
+                read(io.BytesIO(bytes(damaged)), layout, file_name="export.xlsx")
+            except TillFileError:
+                pass
+            try:
+                parse_sales_export(io.BytesIO(bytes(damaged)), untrusted=True, file_name="export.xlsx")
+            except LadditionExportError:
+                pass
+
+    def test_the_two_shapes_found_are_refused_in_french(self):
+        workbook = xlsx_file([["Date", "Article", "Qté", "Total TTC", "TVA"]]).getvalue()
+        version = bytearray(workbook)
+        version[version.find(b"PK\x01\x02") + 6] = 160
+        before = bytearray(workbook)
+        end = before.rfind(b"PK\x05\x06")
+        offset = int.from_bytes(before[end + 16 : end + 20], "little")
+        before[end + 16 : end + 20] = (offset + 100_000).to_bytes(4, "little")
+        for damaged in (version, before):
+            with self.subTest(damaged=bytes(damaged[:4])):
+                self.assertEqual(refusal(io.BytesIO(bytes(damaged)), file_name="export.xlsx"), till_file.NOT_A_WORKBOOK)

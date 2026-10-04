@@ -105,7 +105,7 @@ class PaymentsCellTests(SimpleTestCase):
         """A space, a no-break space, a narrow no-break space: the three look
         the same on screen, and a reader that knew only the first would stop
         « 1 350,00 » at « 1 »."""
-        for separator in (" ", " ", " "):
+        for separator in (" ", "\N{NO-BREAK SPACE}", "\N{NARROW NO-BREAK SPACE}"):
             with self.subTest(separator=hex(ord(separator))):
                 self.assertEqual(read_payments(f"Avoir(1{separator}350,00)"), [("Avoir", Decimal("1350.00"))])
 
@@ -172,8 +172,8 @@ class PaymentRowsTests(SimpleTestCase):
         result = self.parse(
             [
                 ticket("2026-06-01", 1, "1350", "Avoir(1 350,00)"),
-                ticket("2026-06-01", 2, "1250", "Chèque(1 250,00)"),
-                ticket("2026-06-01", 3, "2000", "CB(2 000,00)"),
+                ticket("2026-06-01", 2, "1250", "Chèque(1\N{NO-BREAK SPACE}250,00)"),
+                ticket("2026-06-01", 3, "2000", "CB(2\N{NARROW NO-BREAK SPACE}000,00)"),
             ]
         )
         self.assertEqual(paid(result, june(1), CREDIT), (Decimal("1350.00"), 1))

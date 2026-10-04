@@ -30,6 +30,13 @@ raise - refuses the file, as does a day outside 2000-2099 (a float's tiny
 noise, « 5.5E-17 », still reads as before: `_plain`); a name is cut to 255 (a name is not
 money). Every refusal is a `LadditionExportError` in French naming no path;
 the owner's downloaded exports never come near any of it.
+
+An uploaded export (`parse_sales_export(..., untrusted=True)`) is read
+only as wide as the columns this module reads (`LINE_COLUMNS`,
+`TICKET_COLUMNS`: the reader's `header_columns`), and holds at most
+`MAX_ROWS` rows a sheet and `MAX_PRODUCTS` products (`bounded`) - the
+limits of any till's file (recipes/pos/till_file.py). The owner's fetched
+exports are held to none of them: three years of lines read as before.
 """
 
 from __future__ import annotations
@@ -83,7 +90,7 @@ PAYMENT_AMOUNT = re.compile(r"^-?[0-9]+(?:[.,][0-9]{1,2})?$")
 #: A space, a no-break space, a narrow no-break space: which one a number
 #: formatter puts between thousands depends on its locale and version.
 #: Written as escapes on purpose - the three are indistinguishable on screen.
-THOUSANDS_SEPARATORS = (" ", " ", " ")
+THOUSANDS_SEPARATORS = (" ", "\N{NO-BREAK SPACE}", "\N{NARROW NO-BREAK SPACE}")
 
 ZERO = Decimal("0")
 CENTS = Decimal("0.01")
@@ -107,6 +114,26 @@ NAME_LENGTH = 255
 #: The days a till export may hold - the bank's bounds (bank/statements.py).
 FIRST_DAY = date(2000, 1, 1)
 LAST_DAY = date(2099, 12, 31)
+
+#: What one uploaded file may hold (`bounded`): past them it is no till's
+#: export of a period - or a period too long for one upload. Shared with
+#: any till's file (recipes/pos/till_file.py).
+MAX_ROWS = 500_000
+MAX_PRODUCTS = 5_000
+#: The columns read off each sheet, by their header: an upload is read no
+#: wider than the last of them (xlsx_reader's `header_columns`).
+LINE_COLUMNS = (
+    DAY_COLUMN,
+    NAME_COLUMN,
+    QUANTITY_COLUMN,
+    OFFERED_COLUMN,
+    CATEGORY_COLUMN,
+    TYPOLOGY_COLUMN,
+    PRICE_COLUMN,
+    DISCOUNT_COLUMN,
+    RATE_COLUMN,
+)
+TICKET_COLUMNS = (DAY_COLUMN, TICKET_COLUMN, TICKET_TOTAL_COLUMN, OVERPAID_COLUMN, PAYMENTS_COLUMN)
 
 #: What a file that is not this export is told, its detail in the log.
 NOT_THE_EXPORT = "Ce fichier n'est pas l'export « Lignes de ventes » de L'Addition."
@@ -393,7 +420,41 @@ def _to_ht(amount: Decimal, rate: Decimal) -> Decimal:
     return (amount / (Decimal("1") + rate)).quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
-def parse_rows(rows) -> ParsedExport:
+#: How many rows go by between two calls of a reading's `progress`.
+PROGRESS_ROWS = 5_000
+
+
+def with_progress(rows, progress):
+    """`rows` as they come, `progress()` called every PROGRESS_ROWS of them:
+    a job's heartbeat while a long file is read - a run silent for ten
+    minutes is reaped, and a second one could start beside it. The rows are
+    closed with it (an .xlsx holds its zip open until then)."""
+    if progress is None:
+        return rows
+
+    def beating():
+        try:
+            for number, row in enumerate(rows, start=1):
+                if number % PROGRESS_ROWS == 0:
+                    progress()
+                yield row
+        finally:
+            close = getattr(rows, "close", None)
+            if close is not None:
+                close()
+
+    return beating()
+
+
+def too_many_rows() -> LadditionExportError:
+    return LadditionExportError(f"Plus de {MAX_ROWS} lignes : exportez une période plus courte.")
+
+
+def too_many_products() -> LadditionExportError:
+    return LadditionExportError(f"Plus de {MAX_PRODUCTS} produits différents : ce n'est pas l'export d'une caisse.")
+
+
+def parse_rows(rows, *, bounded: bool = False) -> ParsedExport:
     """Aggregate raw `SalesDocumentLines` rows (header first) into totals per
     (till name, day).
 
@@ -416,11 +477,12 @@ def parse_rows(rows) -> ParsedExport:
       what the VAT return says: three sodas at 3,50 are 9,55 HT, not 9,54.
 
     Bounded (the module's docstring): a quantity, a (product, day)'s units
-    and its revenue, a name cut to 255. An arithmetic error is this file's
-    refusal, never a traceback.
+    and its revenue, a name cut to 255 - and with `bounded` (an upload) the
+    rows and the products. An arithmetic error is this file's refusal, never
+    a traceback.
     """
     try:
-        return _parse_rows(rows)
+        return _parse_rows(rows, bounded)
     except ArithmeticError as exc:
         logger.warning("Lignes de ventes : nombre illisible (%s)", exc)
         raise LadditionExportError("Ce fichier porte un nombre que le calcul ne peut pas lire.") from None
@@ -431,7 +493,7 @@ def _missing(sheet: str, missing: list[str]) -> LadditionExportError:
     return LadditionExportError(f"La feuille « {sheet} » n'a pas la ou les colonnes {columns} : {NOT_THE_EXPORT}")
 
 
-def _parse_rows(rows) -> ParsedExport:
+def _parse_rows(rows, bounded: bool = False) -> ParsedExport:
     rows = iter(rows)
     try:
         header = [str(cell or "").strip() for cell in next(rows)]
@@ -467,7 +529,9 @@ def _parse_rows(rows) -> ParsedExport:
     #: the end rather than filed at what the rest of the day took.
     incomplete: set[tuple[str, date]] = set()
 
-    for row in rows:
+    for number, row in enumerate(rows, start=1):
+        if bounded and number > MAX_ROWS:
+            raise too_many_rows()
         if len(row) <= max(day_at, name_at, quantity_at):
             result.skipped += 1
             continue
@@ -495,6 +559,8 @@ def _parse_rows(rows) -> ParsedExport:
         if offered_at is not None and str(row[offered_at] or "").strip().upper() == "OUI":
             result.offered += quantity
 
+        if bounded and name not in result.products and len(result.products) >= MAX_PRODUCTS:
+            raise too_many_products()
         product = result.products.setdefault(
             name,
             {"quantity": 0, "category": "", "typology": "", "first": day, "last": day},
@@ -610,7 +676,7 @@ def read_payments(text: str) -> list[tuple[str, Decimal]] | None:
     return payments
 
 
-def parse_payment_rows(rows) -> ParsedExport:
+def parse_payment_rows(rows, *, bounded: bool = False) -> ParsedExport:
     """Sum raw `SalesDocument` rows (header first) per (day, method).
 
     Only the payment fields of the result are filled. One ticket is:
@@ -629,16 +695,17 @@ def parse_payment_rows(rows) -> ParsedExport:
 
     A row with no day (the export's « Total » row prints « - ») is skipped
     and counted; a ticket id seen before in the same file is read once.
-    Bounded like the lines: each (day, method) fits `PosDailyPayment`.
+    Bounded like the lines: each (day, method) fits `PosDailyPayment` - and
+    with `bounded` (an upload), at most MAX_ROWS tickets.
     """
     try:
-        return _parse_payment_rows(rows)
+        return _parse_payment_rows(rows, bounded)
     except ArithmeticError as exc:
         logger.warning("Paiements : nombre illisible (%s)", exc)
         raise LadditionExportError("La feuille des tickets porte un nombre que le calcul ne peut pas lire.") from None
 
 
-def _parse_payment_rows(rows) -> ParsedExport:
+def _parse_payment_rows(rows, bounded: bool = False) -> ParsedExport:
     # The vocabulary has one home, the model; imported here so this module
     # still loads where Django is not set up (a probe script, a shell).
     from recipes.models import PosDailyPayment
@@ -668,7 +735,9 @@ def _parse_payment_rows(rows) -> ParsedExport:
         payment.amount += amount
         payment.count += 1
 
-    for row in rows:
+    for number, row in enumerate(rows, start=1):
+        if bounded and number > MAX_ROWS:
+            raise too_many_rows()
         day = _to_date(_cell(row, day_at))
         if day is None:
             result.ticket_rows_skipped += 1
@@ -739,7 +808,7 @@ def _file_name(path) -> str:
     return Path(str(getattr(path, "name", path) or "")).name or "fichier"
 
 
-def _add_payments(result: ParsedExport, path, *, untrusted: bool = False) -> None:
+def _add_payments(result: ParsedExport, path, *, untrusted: bool = False, shown: str = "", progress=None) -> None:
     """The payments sheet of the file just read, onto `result` - or said on
     it. Neither a file with no such sheet (an older export) nor one whose
     sheet does not read may cost that file its lines: the sales are read,
@@ -747,20 +816,25 @@ def _add_payments(result: ParsedExport, path, *, untrusted: bool = False) -> Non
     sheet is parsed apart, and only a complete reading is taken). Said in
     French: this module's own refusal or the reader's, else one fixed
     sentence for what the zip or the XML machinery raised (its detail - a
-    library's English - in the log)."""
+    library's English - in the log). `shown`: the file's name as its person
+    knows it - an upload is read under a staging name."""
     from .xlsx_reader import XlsxError, read_sheet, sheet_names
 
+    shown = shown or _file_name(path)
     try:
         if PAYMENTS_SHEET not in sheet_names(path, untrusted=untrusted):
             result.payment_sheets_missing += 1
             return
-        part = parse_payment_rows(read_sheet(path, PAYMENTS_SHEET, untrusted=untrusted))
+        rows = read_sheet(
+            path, PAYMENTS_SHEET, untrusted=untrusted, header_columns=TICKET_COLUMNS if untrusted else None
+        )
+        part = parse_payment_rows(with_progress(rows, progress), bounded=untrusted)
     except (LadditionExportError, XlsxError) as exc:
-        result.payment_sheet_errors.append(f"{_file_name(path)} : {exc}")
+        result.payment_sheet_errors.append(f"{shown} : {exc}")
         return
     except _unreadable() as exc:
-        logger.warning("Feuille des tickets illisible dans %s : %r", _file_name(path), exc)
-        result.payment_sheet_errors.append(f"{_file_name(path)} : la feuille ne se lit pas.")
+        logger.warning("Feuille des tickets illisible dans %s : %r", shown, exc)
+        result.payment_sheet_errors.append(f"{shown} : la feuille ne se lit pas.")
         return
     _take_payments(result, part)
 
@@ -816,7 +890,7 @@ def parse_payments_export(path) -> ParsedExport:
         raise _not_the_export(exc, path) from exc
 
 
-def parse_sales_export(path, *, untrusted: bool = False) -> ParsedExport:
+def parse_sales_export(path, *, untrusted: bool = False, file_name: str = "", progress=None) -> ParsedExport:
     """Read one downloaded .xlsx: its lines, then its payments.
 
     Uses this package's own reader rather than openpyxl, which refuses the
@@ -835,15 +909,20 @@ def parse_sales_export(path, *, untrusted: bool = False) -> ParsedExport:
     lines import all the same - see _add_payments.
 
     `untrusted`: a file a person uploaded - the reader's bounds on the zip
-    and its string table (xlsx_reader.check_untrusted).
+    and its string table (xlsx_reader.check_untrusted), each sheet read no
+    wider than the columns this module reads, the rows and products
+    bounded (the module's docstring). `file_name`: what a log line calls
+    the file (an upload is read under a staging name). `progress`: called
+    as the rows go by (`with_progress`).
     """
     from .xlsx_reader import read_sheet
 
     try:
-        result = parse_rows(read_sheet(path, SALES_SHEET, untrusted=untrusted))
+        rows = read_sheet(path, SALES_SHEET, untrusted=untrusted, header_columns=LINE_COLUMNS if untrusted else None)
+        result = parse_rows(with_progress(rows, progress), bounded=untrusted)
     except _unreadable() as exc:
         raise _not_the_export(exc, path) from exc
-    _add_payments(result, path, untrusted=untrusted)
+    _add_payments(result, path, untrusted=untrusted, shown=file_name, progress=progress)
     return result
 
 

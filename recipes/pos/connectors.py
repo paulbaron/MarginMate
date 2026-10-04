@@ -127,10 +127,11 @@ def resolve(value: str, file_name: str) -> Choice:
     return Choice(fmt.name, fmt, layout)
 
 
-def read_upload(path, choice: Choice, *, file_name: str, day: date | None = None):
+def read_upload(path, choice: Choice, *, file_name: str, day: date | None = None, progress=None):
     """The uploaded file read with its choice: a `ParsedExport`, or
     TillFileError in French. L'Addition's export through its own parser,
-    under the reader's bounds for an upload."""
+    under the reader's bounds for an upload. `progress`: called as the rows
+    are read (the job's heartbeat)."""
     from . import till_file
     from .laddition_xlsx import LadditionExportError, parse_sales_export
 
@@ -138,7 +139,7 @@ def read_upload(path, choice: Choice, *, file_name: str, day: date | None = None
         if day is not None:
             raise TillFileError(till_file.DAY_GIVEN_TWICE)
         try:
-            return parse_sales_export(path, untrusted=True)
+            return parse_sales_export(path, untrusted=True, file_name=file_name, progress=progress)
         except LadditionExportError as refusal:
             raise TillFileError(str(refusal)) from None
-    return till_file.read(path, choice.layout, file_name=file_name, day=day).export
+    return till_file.read(path, choice.layout, file_name=file_name, day=day, progress=progress).export
