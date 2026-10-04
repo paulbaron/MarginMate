@@ -67,7 +67,6 @@ from common import error_for_page
 
 from .einvoice import EInvoiceError
 from .importing import DuplicateInvoiceError, RoutedToReturnablesError
-from .integrations import AiReadingRefused
 from .models import ReceiptBatch
 from .ocr import DocumentTooBig
 from .receipts import (
@@ -91,10 +90,9 @@ REQUEUE_BATCHES = 20
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 #: The refusals a file's line says in their own words: the app's, written in
 #: French for the person (an electronic invoice it cannot take, a document
-#: too long or too large to read, the AI reading refused or busy). Anything
-#: else is said by kind (common.error_for_page), its detail in the server's
-#: log.
-READING_REFUSALS = (EInvoiceError, DocumentTooBig, AiReadingRefused)
+#: too long or too large to read). Anything else is said by kind
+#: (common.error_for_page), its detail in the server's log.
+READING_REFUSALS = (EInvoiceError, DocumentTooBig)
 
 # Held for a read and write of a batch's `results`, never across an import.
 # One for the process, every tenant included, on purpose: it makes writers

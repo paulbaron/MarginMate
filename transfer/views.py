@@ -116,7 +116,10 @@ TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
 #: archive's settings. A new hosted espace holds only some of them - not the
 #: original bar's UBA, SABBH and WINGSENG (invoices.seeds) - and is new too.
-SEEDED_SUPPLIERS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
+#: Not OTHER, the AI reading's « Autre (analyse IA) »: invoices/0037 removed
+#: it where nothing named it, and kept it as a supplier of the bar's own
+#: where something did.
+SEEDED_SUPPLIERS = {"METRO", "UBA", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 #: The sections whose rows the migrations install into every database too
 #: (the suppliers, the UBA mailbox search, the bank's format and recognition
 #: rules, the returnable types and the UBA slip format): merged into a new

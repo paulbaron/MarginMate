@@ -8,7 +8,7 @@ What it does, in order (`adopt`), after checking everything first (`plan`,
 which is also the whole of a dry run and writes nothing):
 
 1. a tenant for him - a Tenant with ``uses_server_integrations`` (his .env
-   accounts: Metro, the mailbox, L'Addition, the AI, the portals), CLOSED
+   accounts: Metro, the mailbox, L'Addition, the portals), CLOSED
    until the end, so nothing half-made can be reached;
 2. his database COPIED into it with SQLite's backup API, read through a
    read-only connection: the source is never moved nor written. Its -wal
@@ -248,8 +248,8 @@ def plan(*, email: str, name: str, source, folders: dict | None = None, leave_cu
     if owners.exists():
         named = ", ".join(f"« {tenant.name} » (dossier {tenant.dir_name})" for tenant in owners)
         raise AdoptionError(
-            f"L'espace {named} utilise déjà les accès du serveur (Metro, boîte aux lettres, L'Addition, analyse "
-            "IA, portails) : un seul espace le peut - un seul compte Metro, une seule pause. Fermez-le d'abord, ou "
+            f"L'espace {named} utilise déjà les accès du serveur (Metro, boîte aux lettres, L'Addition, "
+            "portails) : un seul espace le peut - un seul compte Metro, une seule pause. Fermez-le d'abord, ou "
             "relancez depuis son compte avec --leave-current."
         )
 
@@ -300,7 +300,7 @@ def describe(plan: Plan) -> list[str]:
         ),
         (
             f"Nouvel espace : « {plan.name} », avec les accès du serveur (Metro, boîte aux lettres, L'Addition, "
-            "analyse IA, portails du fichier .env)."
+            "portails du fichier .env)."
         ),
     ]
     for tenant in plan.leaving:

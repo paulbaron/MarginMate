@@ -65,7 +65,7 @@ not exist and a margin that is wrong.
                 <td>{% if can.owner %}<a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a>{% else %}{{ invoice_type.name }}{% endif %}</td>
                 <td class="muted"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier.pk %}">{{ invoice_type.supplier.name }}</a></td>
                 <td class="muted">{{ invoice_type.channel }}</td>
-                {# Empty means the one reader, not the AI - which is a supplier of its own. #}
+                {# Empty means the one generic reader. #}
                 <td class="muted">{{ invoice_type.reader_name }}</td>
                 <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
             </tr>

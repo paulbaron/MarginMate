@@ -8,9 +8,9 @@ What is not done here, on purpose:
   (« actif » unticked), which the pages and the signing links obey;
 - « utilise les accès du serveur » is read-only: ticked, it hands that bar
   the server's own accounts - Metro, the supplier portals, the .env's
-  mailbox, till and AI values - and the server's names on its pages (every
-  bar runs the mailbox, the till and the AI with its own « Identifiants »
-  anyway, accounts.tenancy.integrations_allowed). And « actif »
+  mailbox and till values - and the server's names on its pages (every bar
+  runs the mailbox and the till with its own « Identifiants » anyway,
+  accounts.tenancy.integrations_allowed). And « actif »
   never reopens a tenant using them while another one is open
   (`TenantAdminForm`): one Metro account, one pause - accounts.E005's rule,
   which the checks only say at the next start;

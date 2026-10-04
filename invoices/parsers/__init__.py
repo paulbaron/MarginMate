@@ -1,14 +1,9 @@
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
 from .cecina import CecinaParser
 from .generic_receipt import GenericReceiptParser, TicketShop
-from .llm_fallback import LLMFallbackParser
 from .metro import MetroParser
 from .registry import PARSER_REGISTRY, get_parser
 from .uba import UBAParser
-
-# The fallback "supplier" for documents nobody has a parser for. Its reader is
-# a language model, which nothing is sent to by default and a ticket never.
-LLM_PARSER_KEY = "LLM"
 
 
 def is_ticket_shop(supplier) -> bool:
@@ -21,37 +16,25 @@ def is_ticket_shop(supplier) -> bool:
 
     if ticket_parser_for(supplier.code) is not None:
         return True
-    if supplier.parser_key == LLM_PARSER_KEY:
-        return False
     parser = get_parser(supplier.parser_key)
     return parser is None or isinstance(parser, ReceiptParser)
 
 
 GENERIC_READER_CHOICE = ("", "— Lecteur générique —")
-#: The AI reader's name on screen, as the PDF import's select names its group
-#: (receipts.invoice_supplier_choices): « Le lecteur LLM » was the code's key.
-AI_READER_LABEL = "Analyse IA"
 
 
 def layout_readers() -> dict:
     """The readers of a PDF layout a source may choose (`InvoiceType.
-    parser_key`): the registry but the AI reader and the tills - a till is
-    keyed on its supplier's code, its settings are one shop's tickets."""
+    parser_key`): the registry but the tills - a till is keyed on its
+    supplier's code, its settings are one shop's tickets."""
     from .receipt_base import ReceiptParser
 
-    return {
-        key: parser
-        for key, parser in PARSER_REGISTRY.items()
-        if key != LLM_PARSER_KEY and not isinstance(parser, ReceiptParser)
-    }
+    return {key: parser for key, parser in PARSER_REGISTRY.items() if not isinstance(parser, ReceiptParser)}
 
 
 def reader_label(key: str) -> str:
-    """A reader's name on screen: its `label` (« Analyse IA » for the AI
-    reader), else its key - a reader without one, or a key no reader
-    answers to any more."""
-    if key == LLM_PARSER_KEY:
-        return AI_READER_LABEL
+    """A reader's name on screen: its `label`, else its key - a reader
+    without one, or a key no reader answers to any more."""
     return getattr(get_parser(key), "label", "") or key
 
 
@@ -81,14 +64,11 @@ def ticket_parser_for(supplier_code: str):
 
 
 __all__ = [
-    "AI_READER_LABEL",
     "GENERIC_READER_CHOICE",
-    "LLM_PARSER_KEY",
     "PARSER_REGISTRY",
     "CecinaParser",
     "GenericReceiptParser",
     "InvoiceParser",
-    "LLMFallbackParser",
     "MetroParser",
     "ParsedInvoice",
     "ParsedLine",

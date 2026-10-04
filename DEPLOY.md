@@ -444,7 +444,7 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    ```
 
    Puis **videz les identifiants** : `METRO_EMAIL`, `METRO_PASSWORD`, `INVOICE_EMAIL_ADDRESS`,
-   `INVOICE_EMAIL_APP_PASSWORD`, `LADDITION_EMAIL`, `LADDITION_PASSWORD`, `ANTHROPIC_API_KEY`,
+   `INVOICE_EMAIL_APP_PASSWORD`, `LADDITION_EMAIL`, `LADDITION_PASSWORD`,
    `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, et les variables des espaces clients
    (leurs noms sont dans Factures > Sources). Sans eux, une récupération lancée depuis la copie
    refuse ; avec eux, elle se connecterait pour de vrai à Metro et aux portails. Donnez aussi à la
@@ -814,8 +814,9 @@ récupérations lisent d'abord la page : rien ne change pour elles. Les lignes c
 - chaque espace client : ses deux variables, dont les noms sont sur la fiche de sa source (Achats >
   Sources).
 
-Le reste du `.env` reste en place : la clé secrète, la phrase de passe, les lignes de la section 5,
-`ANTHROPIC_API_KEY` et le serveur d'e-mails (`EMAIL_HOST`…), que la page ne prend pas.
+Le reste du `.env` reste en place : la clé secrète, la phrase de passe, les lignes de la section 5
+et le serveur d'e-mails (`EMAIL_HOST`…), que la page ne prend pas. Une ligne `ANTHROPIC_API_KEY`
+ne sert plus à rien (l'analyse IA est retirée, section 14) : supprimez-la.
 
 Puis relancez le serveur (Ctrl+C dans sa fenêtre, puis `schtasks /run /tn MarginMate`) : tant qu'il
 n'a pas redémarré, la page continue de signaler ces mots de passe « encore en clair » dans le
@@ -892,8 +893,8 @@ après la sauvegarde).
 Un bar invité dans son propre espace n'a plus seulement l'import à la main :
 
 - **Ses propres comptes**, saisis par son patron sur sa page **Identifiants** : sa boîte mail des
-  factures, son compte L'Addition et sa clé d'analyse IA (facturée sur son compte Anthropic). Il ne
-  voit jamais les comptes de votre `.env`, et ses récupérations ne s'en servent jamais.
+  factures et son compte L'Addition. Il ne voit jamais les comptes de votre `.env`, et ses
+  récupérations ne s'en servent jamais.
 - **Restent à votre espace seul** : Metro (toutes les connexions partiraient de l'adresse IP de
   votre box, que le pare-feu de Metro a déjà bloquée) et les espaces clients des fournisseurs (le
   navigateur du serveur irait sur votre réseau domestique). Ses factures Metro en PDF, déposées à
@@ -905,9 +906,19 @@ Un bar invité dans son propre espace n'a plus seulement l'import à la main :
 - **Ses fournisseurs** : un nouvel espace ne reçoit plus UBA, Sabbh Oriental ni Wing Seng ; votre
   espace les garde.
 
-Cette version ajoute deux migrations (`bank` 0009 et `recipes` 0018) : `deploy.cmd` les applique
-lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce qui est déjà dans votre espace ne
-change de sens.
+**L'analyse IA est retirée** : elle n'avait jamais servi. L'import d'un PDF ne propose plus
+« Autre (analyse IA) », et la page Identifiants n'a plus de carte « Analyse IA (Anthropic) ». Le
+fournisseur « Autre (analyse IA) » disparaît de chaque espace où rien n'y est rangé ; là où un
+document, un produit ou un autre enregistrement y est rangé, il reste, comme un fournisseur ordinaire.
+Si la page Identifiants avait une clé d'analyse IA enregistrée, elle la propose maintenant à effacer
+(« Effacer ANTHROPIC_API_KEY »). Si votre `.env` contient encore `ANTHROPIC_API_KEY`, supprimez la
+ligne.
+
+Cette version ajoute quatre migrations (`bank` 0009, `recipes` 0018, `invoices` 0037 et `accounts`
+0004) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
+qui est déjà dans votre espace ne change de sens ; `invoices` 0037 retire le fournisseur de l'analyse
+IA comme dit ci-dessus, et `accounts` 0004 ne change que le texte d'aide d'une case de
+l'administration.
 
 ## Limites connues
 

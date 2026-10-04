@@ -81,13 +81,11 @@ class CreateTenantTests(TenancyTestCase):
     def test_a_new_espace_starts_without_the_original_bar_s_suppliers(self):
         """UBA (with its mailbox source and its slip format), Sabbh Oriental
         and Wing Seng were the bar the app was written for: a new espace
-        keeps Metro (not fetching), the AI reader, Franprix, Monoprix and the
-        returnable types. The template keeps every seed."""
+        keeps Metro (not fetching), Franprix, Monoprix and the returnable
+        types. The template keeps every seed."""
         tenant = provisioning.create_tenant("Bar Nouveau")
         with bound_tenant(tenant):
-            self.assertEqual(
-                set(Supplier.objects.values_list("code", flat=True)), {"METRO", "OTHER", "FRANPRIX", "MONOPRIX"}
-            )
+            self.assertEqual(set(Supplier.objects.values_list("code", flat=True)), {"METRO", "FRANPRIX", "MONOPRIX"})
             self.assertFalse(Supplier.objects.get(code="METRO").is_scrapable)
             self.assertFalse(InvoiceType.objects.exists())
             self.assertFalse(SlipFormat.objects.exists())

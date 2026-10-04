@@ -141,14 +141,6 @@ class RereadTicketTests(TestCase):
             self.client.post(url, {"action": "reread"})
         self.assertEqual(sorted(line.quantity for line in paper.lines.all()), [2, 3])
 
-    def test_the_ai_pseudo_supplier_reads_nothing(self):
-        paper = make_invoice(supplier=Supplier.objects.get(code="OTHER"), parse_checks=CHECKED)
-        paper.source_file.save("ticket-autre.pdf", ContentFile(b"%PDF-1.4"), save=True)
-        url = reverse("invoices:receipt_review", args=[paper.pk])
-        self.assertNotContains(self.client.get(url), 'value="reread"')
-        response = self.client.post(url, {"action": "reread"})
-        self.assertTrue(any("pas lus automatiquement" in message for message in messages_of(response)))
-
 
 class RereadInvoiceTests(TestCase):
     def setUp(self):

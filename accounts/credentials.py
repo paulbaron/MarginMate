@@ -35,10 +35,10 @@ connectors sign in with what it typed here. The .env's values - shown as
 server's, and exist on the owner's page only
 (`accounts.tenancy.server_accounts_allowed`): another bar's page never reads
 the file, and its connectors never fall back on it (`vault.server_setting`).
-Another bar's page holds the accounts its connectors use - the mailbox,
-L'Addition, the AI reading - and neither Metro nor a portal, which are the
-owner's alone (invoices/integrations.py); its fields are named after their
-account (`FIELD_ALIASES`), so no server variable's name reaches it.
+Another bar's page holds the accounts its connectors use - the mailbox and
+L'Addition - and neither Metro nor a portal, which are the owner's alone
+(invoices/integrations.py); its fields are named after their account
+(`FIELD_ALIASES`), so no server variable's name reaches it.
 """
 
 from __future__ import annotations
@@ -180,21 +180,12 @@ FIXED_ACCOUNTS = [
             Credential("LADDITION_PASSWORD", "Mot de passe", secret=True),
         ],
     ),
-    Account(
-        "ai",
-        "Analyse IA (Anthropic)",
-        "La clé d'API qui lit les factures d'un fournisseur sans lecteur dédié (« Autre (analyse IA) »). Les "
-        "lectures sont facturées sur ce compte Anthropic (console.anthropic.com → API Keys).",
-        [
-            Credential("ANTHROPIC_API_KEY", "Clé d'API", secret=True),
-        ],
-    ),
 ]
 
 
 #: The accounts another bar's page offers: its connectors' own. Metro and
 #: the portals are the platform owner's alone (invoices/integrations.py).
-HOSTED_ACCOUNT_KEYS = ("mailbox", "laddition", "ai")
+HOSTED_ACCOUNT_KEYS = ("mailbox", "laddition")
 
 #: A credential's field on another bar's page: named after its account and
 #: its role, never after the server's variable its value is stored under
@@ -206,7 +197,6 @@ FIELD_ALIASES = {
     MAILBOX_HOST: "boite_serveur",
     "LADDITION_EMAIL": "caisse_identifiant",
     "LADDITION_PASSWORD": "caisse_mot_de_passe",
-    "ANTHROPIC_API_KEY": "ia_cle",
     "METRO_EMAIL": "metro_identifiant",
     "METRO_PASSWORD": "metro_mot_de_passe",
 }
@@ -218,7 +208,6 @@ ALIAS_WORDS = {
     MAILBOX_HOST: "le serveur de la boîte mail",
     "LADDITION_EMAIL": "l'identifiant L'Addition",
     "LADDITION_PASSWORD": "le mot de passe L'Addition",
-    "ANTHROPIC_API_KEY": "la clé d'API Anthropic",
     "METRO_EMAIL": "l'identifiant Metro",
     "METRO_PASSWORD": "le mot de passe Metro",
 }
@@ -242,7 +231,7 @@ def field_alias(name: str) -> str:
 def page_accounts(state: vault.VaultState):
     """(the accounts the page offers, the portals' report) for the bound
     espace: every fixed account and every portal's in the platform owner's,
-    the mailbox, L'Addition and the AI reading in any other."""
+    the mailbox and L'Addition in any other."""
     if server_accounts_allowed():
         report = portal_accounts(state.secret_names)
         return FIXED_ACCOUNTS + report.accounts, report

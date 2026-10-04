@@ -267,7 +267,7 @@ ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 #: The .env variables the application reads for itself (config/settings.py,
 #: invoices/apps.py), by family so that one added to a family later is
-#: covered: Metro's sign-in, the mailbox, the till, the AI, Django's own. A
+#: covered: Metro's sign-in, the mailbox, the till, Django's own. A
 #: gather types what a portal's variables hold into the portal's page, so a
 #: portal naming one of these would hand Metro's password to any site - and
 #: sign in to Metro outside its firewall's pause. One list, for the source
@@ -280,7 +280,6 @@ APP_ENV_PREFIXES = (
     "INVOICE_EMAIL_",
     "INVOICE_IMAP_",
     "LADDITION_",
-    "ANTHROPIC_",
     "SCRAPER_",
     "PRODUCT_FUZZY_",
     "RUN_MAIN",
@@ -289,10 +288,15 @@ APP_ENV_PREFIXES = (
     "MARGINMATE_",
     "EMAIL_",
     "DEFAULT_FROM_EMAIL",
+    # The AI reading's key: the reading went on 04/10/2026 and nothing reads
+    # it any more, but an older .env - or « Identifiants », until its
+    # « Effacer » - may still hold it, and a portal naming it would have it
+    # typed into its page.
+    "ANTHROPIC_",
 )
 APP_ENV_REFUSED = (
     "« {name} » est une variable de l'application elle-même (la boîte mail, la caisse, le module d'un "
-    "fournisseur, l'IA) : jamais celle d'un portail"
+    "fournisseur) : jamais celle d'un portail"
 )
 
 

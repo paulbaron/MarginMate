@@ -26,7 +26,6 @@ from django.utils import timezone
 
 import common
 from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
-from invoices.parsers import LLM_PARSER_KEY
 from invoices.tests.page_posts import page_post
 from tests.factories import (
     make_invoice,
@@ -89,7 +88,7 @@ class PurchasesPageTests(TestCase):
         )
         self.assertEqual(
             [tab["count"] for tab in tabs],
-            [4, 2, InvoiceType.objects.count(), Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count()],
+            [4, 2, InvoiceType.objects.count(), Supplier.objects.count()],
         )
         self.assertEqual([tab["active"] for tab in tabs], [True, False, False, False])
 

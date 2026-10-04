@@ -4,10 +4,10 @@
 settings blank every credential so the real integrations refuse to start,
 and this additionally replaces the libraries that could reach the outside
 world with objects that raise on use - and a DNS lookup of any name but the
-machine's own. A test that accidentally
-reaches for the real mailbox, the real Metro site or the real Anthropic API
-then fails immediately with a clear message, instead of hanging on a socket
-timeout or - far worse - quietly succeeding against real data.
+machine's own. A test that accidentally reaches for the real mailbox or the
+real Metro site then fails immediately with a clear message, instead of
+hanging on a socket timeout or - far worse - quietly succeeding against real
+data.
 """
 
 from __future__ import annotations
@@ -93,8 +93,8 @@ class NoNetworkTestCase(TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        # selenium and anthropic are optional at runtime; only guard them if
-        # they're actually installed, so the suite still runs without them.
+        # selenium is optional at runtime; only guard it if it is actually
+        # installed, so the suite still runs without it.
         # pyHanko's two HTTP timestamp clients (the timesheet signatures,
         # staff/signing.py) are guarded where they send the request, so an
         # instance made however it was imported still fails loudly: a test
@@ -102,7 +102,6 @@ class NoNetworkTestCase(TestCase):
         # with DigiCert.
         for target, label in (
             ("selenium.webdriver.Chrome", "Selenium/Chrome"),
-            ("anthropic.Anthropic", "Anthropic API"),
             (
                 "pyhanko.sign.timestamps.requests_client.RequestsHTTPTimeStamper.async_request_tsa_response",
                 "timestamp server (RFC 3161)",

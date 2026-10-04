@@ -67,11 +67,10 @@ from .importing import (
     InvoiceLinesInUseError,
     corrected_line,
     import_parsed_invoice,
-    parse_and_import,
     replace_invoice_lines,
 )
 from .models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
-from .parsers import LLM_PARSER_KEY, get_parser
+from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .receipt_batches import READING_REFUSALS
 from .tasks import SLIPS_PREFIX, gather_invoices_task, test_email_pattern_task
@@ -148,8 +147,7 @@ def upload_invoice(request):
     shown first in the list, highlighted and opened on its lines. Any other
     supplier's - a new one's included - is read like a ticket and opens on
     the correction page, beside its PDF."""
-    from .ocr import check_page_count
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document, route_to_returnables
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
@@ -169,36 +167,25 @@ def upload_invoice(request):
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
-        if supplier.parser_key == LLM_PARSER_KEY:
-            # Achats' guard first, as import_document runs it: a driver's slip
-            # read by the AI (« every purchased product line ») filed the
-            # empties taken back as purchases. RoutedToReturnablesError is a
-            # DuplicateInvoiceError: said below, no Invoice. The page count
-            # first, as there too: nothing reads a page of a PDF past
-            # ocr.MAX_PAGES (DocumentTooBig, a READING_REFUSAL).
-            check_page_count(tmp_path)
-            route_to_returnables(tmp_path, uploaded.name)
-            invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
-        else:
-            # A scan is OCR, seconds of CPU: one document at a time. The file
-            # decides the reader here too - a supplier's own when it has one
-            # and the document is digital, the ticket reader otherwise.
-            if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
-                raise _OcrBusy(OCR_BUSY)
-            try:
-                with (
-                    supplier_changes.cause(f"import de {uploaded.name}, {supplier.name} choisi", by_person=True),
-                    supplier_changes.collect() as changes,
-                ):
-                    invoice = import_document(
-                        tmp_path,
-                        display_filename=uploaded.name,
-                        supplier=supplier,
-                        chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
-                    )
-                _say_supplier_changes(request, changes)
-            finally:
-                OCR_LOCK.release()
+        # A scan is OCR, seconds of CPU: one document at a time. The file
+        # decides the reader here too - a supplier's own when it has one and
+        # the document is digital, the ticket reader otherwise.
+        if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+            raise _OcrBusy(OCR_BUSY)
+        try:
+            with (
+                supplier_changes.cause(f"import de {uploaded.name}, {supplier.name} choisi", by_person=True),
+                supplier_changes.collect() as changes,
+            ):
+                invoice = import_document(
+                    tmp_path,
+                    display_filename=uploaded.name,
+                    supplier=supplier,
+                    chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
+                )
+            _say_supplier_changes(request, changes)
+        finally:
+            OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
@@ -1213,9 +1200,7 @@ def _correction_page(request, invoice):
         )
 
         shop = getattr(parser_for(invoice.supplier), "shop", None)
-        can_set_header = (
-            ticket_parser_for(invoice.supplier.code) is None and invoice.supplier.parser_key != LLM_PARSER_KEY
-        )
+        can_set_header = ticket_parser_for(invoice.supplier.code) is None
         shop_context |= {
             "suggested_header": header_guess(invoice.ocr_text),
             # Only what the save would take: the customer's own street is
@@ -1226,8 +1211,8 @@ def _correction_page(request, invoice):
             if can_set_header
             else [],
             "names_shop": names_shop(invoice.supplier),
-            # A till configured here is known by its own layout, and nothing
-            # is ever filed under the AI pseudo-supplier: no header to give.
+            # A till configured here is known by its own layout: no header
+            # to give.
             "can_set_header": can_set_header,
             # The shop's price list matters where its till prints no names, or
             # where one has been started: elsewhere it is folded away.
@@ -1512,8 +1497,6 @@ def _checks_context(invoice) -> dict:
 
 def _can_reread(invoice) -> bool:
     """Whether the page offers to read the document's file again."""
-    from .receipts import parser_for
-
     if not invoice.source_file:
         return False
     if invoice.is_einvoice:
@@ -1521,9 +1504,9 @@ def _can_reread(invoice) -> bool:
         # be missing, and no photograph to be read differently.
         return True
     if invoice.is_receipt:
-        return parser_for(invoice.supplier) is not None
-    parser = get_parser(invoice.supplier.parser_key)
-    return parser is not None and invoice.supplier.parser_key != LLM_PARSER_KEY
+        # Every supplier's tickets have a reader (receipts.parser_for).
+        return True
+    return get_parser(invoice.supplier.parser_key) is not None
 
 
 def _reread_from_page(request, invoice) -> None:

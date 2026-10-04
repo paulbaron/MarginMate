@@ -307,34 +307,6 @@ class NoReaderMakesEveryPageTests(SimpleTestCase):
             self.assertIsNone(einvoice.document_xml(path))
         self.assertEqual(pages.made, 0)
 
-    def test_the_ai_reader_refuses_before_reading_a_page(self):
-        """`llm_fallback._extract_text` read every page of the document it
-        sends to the API, with no cap (the « Analyse IA » upload)."""
-        from invoices.parsers import llm_fallback
-
-        path = os.path.join(self.folder, "long.pdf")
-        with open(path, "wb") as handle:
-            handle.write(pdf_of_pages(3))
-        with (
-            mock.patch.object(ocr, "MAX_PAGES", 2),
-            mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text,
-        ):
-            with self.assertRaises(ocr.DocumentTooBig) as refused:
-                llm_fallback._extract_text(path)
-        text.assert_not_called()
-        self.assertEqual(str(refused.exception), TOO_LONG)
-
-    def test_the_ai_reader_reads_a_document_within_the_cap_page_by_page(self):
-        from invoices.parsers import llm_fallback
-
-        path = os.path.join(self.folder, "deux-pages.pdf")
-        with open(path, "wb") as handle:
-            handle.write(pdf_of_pages(2))
-        with mock.patch.object(ocr, "MAX_PAGES", 2), PageReadings(("extract_text",)) as readings:
-            text = llm_fallback._extract_text(path)
-        self.assertEqual(text.count("ARTICLE EXEMPLE"), 2)
-        self.assertEqual(readings.events[:4], [("extract_text", 1), ("close", 1), ("extract_text", 2), ("close", 2)])
-
 
 class RefusedWhereTheDocumentArrivesTests(TestCase):
     """Each way a PDF comes in says the refusal in French, and files
@@ -373,29 +345,6 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
                 {"supplier": metro.pk, "source_file": SimpleUploadedFile("facture.pdf", self.content)},
                 follow=True,
             )
-        self.assertContains(response, escape(f"Échec de l'import. {TOO_LONG}"))
-        self.assertFalse(Invoice.objects.exists())
-
-    def test_the_ai_upload_refuses_before_the_api_is_called(self):
-        """« Analyse IA »: the API was billed for every page, the invoice
-        filed, and only then did the text kept beside it refuse the file -
-        reported as a failed upload after all."""
-        from django.test import override_settings
-
-        from invoices.parsers import LLM_PARSER_KEY
-
-        ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-        with (
-            override_settings(ANTHROPIC_API_KEY="cle-de-test"),
-            mock.patch.object(ocr, "MAX_PAGES", 2),
-            mock.patch("anthropic.Anthropic", never("l'API")) as api,
-        ):
-            response = self.client.post(
-                reverse("invoices:invoice_upload"),
-                {"supplier": ai.pk, "source_file": SimpleUploadedFile("facture.pdf", self.content)},
-                follow=True,
-            )
-        api.assert_not_called()
         self.assertContains(response, escape(f"Échec de l'import. {TOO_LONG}"))
         self.assertFalse(Invoice.objects.exists())
 

@@ -96,6 +96,15 @@ class TypeFormTests(TestCase):
         for name in ("METRO_EMAIL", "METRO_PASSWORD"):
             self.assertContains(response, f"« {name} » est une variable de l&#x27;application elle-même")
 
+    def test_a_portal_naming_the_removed_ai_reading_s_key_is_refused(self):
+        """The AI reading went on 04/10/2026, but its key may still sit in
+        an older .env or in « Identifiants »: a portal naming it would have
+        it typed into its page."""
+        response = self.post(**{"site-password_env": "ANTHROPIC_API_KEY"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(WebsiteInvoiceSource.objects.exists())
+        self.assertContains(response, "« ANTHROPIC_API_KEY » est une variable de l&#x27;application elle-même")
+
     def test_a_saved_portal_cannot_be_given_the_apps_variables(self):
         invoice_type = website_type(self.supplier)
         url = reverse("invoices:invoice_type_update", args=[invoice_type.pk])

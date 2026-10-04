@@ -201,8 +201,7 @@ class InvoiceParser:
     """One InvoiceParser subclass per supplier PDF layout.
 
     Subclasses implement `parse_pages`; `parse` handles the pdfplumber I/O
-    for all of them. (The LLM fallback parser overrides `parse` directly,
-    since it works from whole-document text rather than a layout.)
+    for all of them.
     """
 
     supplier_code: str = ""

@@ -24,7 +24,6 @@ from django.utils import timezone
 
 from invoices import workspace
 from invoices.models import InvoiceType, ScrapeJob, Supplier, SupplierChange
-from invoices.parsers import LLM_PARSER_KEY
 from tests.factories import (
     make_invoice,
     make_invoice_line,
@@ -78,8 +77,8 @@ class SuppliersTabTests(TestCase):
         )
         self.assertEqual([tab["active"] for tab in tabs], [False, False, False, True])
         self.assertEqual(tabs[3]["url"], SUPPLIERS)
-        # Both tables together: every supplier but the AI pseudo-supplier.
-        self.assertEqual(tabs[3]["count"], Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count())
+        # Both tables together: every supplier.
+        self.assertEqual(tabs[3]["count"], Supplier.objects.count())
         # The import card stays above it, as on every tab.
         self.assertContains(response, f'action="{reverse("invoices:receipt_upload")}"')
 
@@ -136,7 +135,7 @@ class SuppliersTabTests(TestCase):
         change to see are an amber « N à voir » beside it, saying so. One
         number meant both - 29 grey, then 1 amber - with no word or title,
         and the owner could not tell why there was « 1 » (19/09)."""
-        everyone = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count()
+        everyone = Supplier.objects.count()
         page = self.client.get(reverse("invoices:invoice_list"))
         tab = page.context["tabs"][3]
         self.assertEqual((tab["attention"], tab["to_see"], tab["count"]), (False, 0, everyone))
@@ -298,8 +297,6 @@ class SupplierPagesTests(TestCase):
         back = f'<a href="{SUPPLIERS}">← Factures · Enseignes et fournisseurs</a>'
         self.assertContains(self.client.get(self.supplier_page), back, html=True)
         self.assertContains(self.client.get(reverse("invoices:supplier_create")), back, html=True)
-        ai = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
-        self.assertRedirects(ai, SUPPLIERS)
         deleted = self.client.post(reverse("invoices:supplier_delete", args=[self.shop.pk]), {"confirme": "1"})
         self.assertRedirects(deleted, SUPPLIERS)
 

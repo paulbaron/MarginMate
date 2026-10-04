@@ -24,8 +24,6 @@ from tests.factories import make_invoice, make_product, make_stock_type, make_su
 
 
 class FakeParser:
-    # Read back by receipts._reread_invoice_file, which refuses to re-read a
-    # document the LLM fallback produced.
     supplier_code = "GROSSISTE"
 
     def __init__(self, parsed):
@@ -72,20 +70,6 @@ class ImportWarningTests(TestCase):
         with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {"GROSSISTE": reader}):
             invoice = parse_and_import(self.path, self.supplier)
         self.assertIn("Le lecteur Grossiste Exemple (Halles) n'a trouvé aucune ligne", invoice.error_message)
-
-    def test_the_ai_reader_is_named_as_the_import_s_select_names_it(self):
-        """« Le lecteur LLM » was the registry's key; the PDF import's select
-        calls that group « Analyse IA »."""
-        from invoices.models import InvoiceType
-        from invoices.parsers import LLM_PARSER_KEY
-
-        self.supplier.parser_key = LLM_PARSER_KEY
-        self.supplier.save()
-        with mock.patch.dict("invoices.parsers.registry.PARSER_REGISTRY", {LLM_PARSER_KEY: FakeParser(parsed())}):
-            invoice = parse_and_import(self.path, self.supplier)
-        self.assertIn("Le lecteur Analyse IA n'a trouvé aucune ligne", invoice.error_message)
-        self.assertNotIn("LLM", invoice.error_message)
-        self.assertEqual(InvoiceType(parser_key=LLM_PARSER_KEY).reader_name, "Analyse IA")
 
     def test_a_parser_warning_is_kept_and_holds_the_invoice_for_review(self):
         """Even when every product is known and the invoice would otherwise

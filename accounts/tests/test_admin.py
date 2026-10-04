@@ -63,6 +63,24 @@ class MultiModeAdminTests(TwoTenantsTestCase):
         self.assertNotContains(page, 'name="uses_server_integrations"')
         self.assertContains(page, 'name="is_active"')
 
+    def test_the_server_s_accounts_are_named_without_the_removed_ai_reading(self):
+        """accounts/0004: the box's help named « l'analyse IA », removed on
+        04/10/2026 (invoices/0037) - the words only, no column changes."""
+        import importlib
+
+        from django.db import migrations
+
+        get_user_model().objects.filter(pk=self.user_a.pk).update(is_staff=True, is_superuser=True)
+        confirm_password(self.client, self.user_a)
+        page = self.client.get(reverse("admin:accounts_tenant_change", args=[self.bar_b.pk]))
+        # Drawn as it is written: the admin marks a field's help safe.
+        self.assertContains(page, "Metro, la boîte aux lettres, L'Addition et les portails du fichier .env.")
+        self.assertNotContains(page, "analyse IA")
+        migration = importlib.import_module("accounts.migrations.0004_alter_tenant_uses_server_integrations")
+        (operation,) = migration.Migration.operations
+        self.assertIsInstance(operation, migrations.AlterField)
+        self.assertEqual(operation.field.help_text, Tenant._meta.get_field("uses_server_integrations").help_text)
+
     def test_the_admin_link_is_a_superuser_s_only(self):
         from tests.test_navigation import LABELS, label_of, nav_links
 

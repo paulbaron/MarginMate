@@ -2,7 +2,8 @@
 
 The seed migrations write the same suppliers into every database - the test
 one, the `_template` every new espace is copied from, and each espace:
-Metro, UBA and the AI pseudo-supplier (invoices/0002), UBA's mailbox source
+Metro and UBA (invoices/0002, which also seeded the AI reading's « Autre
+(analyse IA) », removed by 0037 where nothing named it), UBA's mailbox source
 « UBA - Factures » (0007), the four shops whose tills are configured in the
 code (0012: Franprix, Monoprix, Sabbh Oriental, Wing Seng) and UBA's slip
 format « UBA — bon du livreur » (returnables/0002).
@@ -11,16 +12,17 @@ Three of them are the bar the app was first written for: UBA, a Paris
 wholesaler (with its mailbox source and its slip format), and two local
 shops, Sabbh Oriental and Wing Seng. A new espace that is not the owner's
 starts without them (`forget_original_bar_suppliers`, one of
-accounts.provisioning.HOSTED_ESPACE_STEPS); Metro (not fetching), the AI
-reader, Franprix, Monoprix and the returnable types stay. Their readers and
+accounts.provisioning.HOSTED_ESPACE_STEPS); Metro (not fetching),
+Franprix, Monoprix and the returnable types stay. Their readers and
 tills stay in the code: a till answers only where its supplier exists
 (receipts.configured_tills), a shop created from a ticket never takes one of
 those codes (receipts.create_shop), and a supplier brought back under one -
 a « Données » archive of the original bar - is read as before.
 
 The template, the seed migrations and « Données »'s `SEEDED_SUPPLIERS` /
-`SEEDED_SOURCE` are left as they are: a new espace holds a subset of the
-seeds, so it is still a new database there. The owner's espace was adopted,
+`SEEDED_SOURCE` are left as they are (but for OTHER, which 0037 takes out
+of every database): a new espace holds a subset of the seeds, so it is
+still a new database there. The owner's espace was adopted,
 never provisioned: nothing here reaches it.
 """
 

@@ -89,9 +89,6 @@ class LearningTests(TestCase):
         learn_identifiers(self.shop, TICKET)
         self.assertNotIn("tel:0199999999", self.shop.ticket_identifiers)
 
-    def test_nothing_is_learned_for_the_ai_pseudo_supplier(self):
-        self.assertEqual(learn_identifiers(Supplier.objects.get(code="OTHER"), TICKET), [])
-
 
 class RecognitionTests(TestCase):
     def setUp(self):

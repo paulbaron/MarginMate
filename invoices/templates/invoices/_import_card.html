@@ -60,10 +60,7 @@ parts trigger `documents-changed` when they end).
         {% endif %}
         <details class="explainer pdf-import-by-hand" data-persist="pdf-by-hand">
             <summary>Choisir le fournisseur d'une facture PDF soi-même</summary>
-            <p class="muted">
-                Pour un document qui ne dit pas de qui il vient{% if not ai_refused %}, ou pour le confier à l'analyse IA{% endif %}.
-                {% if ai_refused %}{{ ai_refused }}{% endif %}
-            </p>
+            <p class="muted">Pour un document qui ne dit pas de qui il vient.</p>
             <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
                 {% csrf_token %}
                 {% with supplier_field=pdf_form.supplier file_field=pdf_form.source_file %}

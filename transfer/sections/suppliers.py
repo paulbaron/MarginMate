@@ -18,6 +18,16 @@ Two things are never an import's or a clear's to touch:
 
 An import writes the archive's state; it is not an act in a supplier's
 history: no `SupplierChange` is recorded (§6.6).
+
+An archive written before 04/10/2026 carries the AI reading's pseudo-supplier
+(`RETIRED_AI_CODE`, `RETIRED_AI_READER`), which invoices/0037 removed with the
+reading: it is never created again as such, and its reader key is never
+written (`_retired_ai`). Where 0037 kept it here - something named it - the
+record is that supplier's, read as an ordinary one's. Where it is gone, it
+comes back as an ordinary supplier only when this run imports something
+filed under it (`_filed_under_by_this_run`), else it is left out, said. No
+new shop takes its code (`invoices.receipts.RETIRED_CODES`), so OTHER here is
+always that supplier.
 """
 
 from __future__ import annotations
@@ -84,9 +94,14 @@ LABELS = {
 #: articles, which is what the application calls a StockType.
 PRICES = "prix connus"
 
-#: What happens to the AI pseudo-supplier, on a row of its own: it is no
-#: supplier on the page (`_counted`), so never one of the « fournisseurs ».
-AI_ROW = "fiche de l'analyse IA"
+#: The AI reading's pseudo-supplier as invoices/0002 seeded it - its code
+#: and reader key -, still in an archive written before 04/10/2026.
+RETIRED_AI_CODE, RETIRED_AI_READER = "OTHER", "LLM"
+AI_LEFT_OUT = "« {name} » : l'analyse IA a été retirée de l'application — fournisseur non repris"
+AI_ORDINARY = (
+    "« {name} » : l'analyse IA a été retirée de l'application — repris comme un fournisseur ordinaire, "
+    "sans lecteur (des données de l'import y sont rangées)"
+)
 
 KEPT_BOUND = "lecteur propre / caisse réglée dans l'application"
 CHARGES_KEPT = (
@@ -123,48 +138,69 @@ def block(ctx, file_code: str) -> None:
 
 
 def code_bound(supplier) -> bool:
-    """A reader or a till of its own keyed on its code, or the AI
-    pseudo-supplier - the rule `supplier_views.delete_refused` uses, plus
-    the latter, which has no page to be deleted from."""
-    from invoices.parsers import LLM_PARSER_KEY, ticket_parser_for
+    """A reader or a till of its own keyed on its code - the rule
+    `supplier_views.delete_refused` uses."""
+    from invoices.parsers import ticket_parser_for
     from invoices.receipts import has_own_reader
 
-    return (
-        ticket_parser_for(supplier.code) is not None
-        or has_own_reader(supplier)
-        or supplier.parser_key == LLM_PARSER_KEY
-    )
+    return ticket_parser_for(supplier.code) is not None or has_own_reader(supplier)
 
 
-def _counted(supplier) -> bool:
-    """Whether the counts shown on the page count it - count(), the
-    archive's counts and the report's « fournisseurs » alike (`_tally`): not
-    the AI pseudo-supplier, which nobody sees as a supplier - exported all
-    the same, since the documents it read are filed under it."""
-    from invoices.parsers import LLM_PARSER_KEY
-
-    return supplier.parser_key != LLM_PARSER_KEY
+def _retired_ai(record: dict) -> bool:
+    """Whether `record` is the AI reading's pseudo-supplier of an archive
+    written before 04/10/2026."""
+    return record.get("code") == RETIRED_AI_CODE and record.get("parser_key") == RETIRED_AI_READER
 
 
-def _tally(report, supplier, how: str) -> None:
-    """Count what happens to a supplier (`how`: created, updated, deleted or
-    unchanged) as count() counts suppliers. Among them, the report said « 30
-    inchangés » of the 29 the page and the archive announced. Left
-    « inchangé », the AI pseudo-supplier is counted nowhere; changed, on
-    `AI_ROW` - never hidden, since the safety archive is chosen from what
-    the report counts (safety.sections_at_risk)."""
-    if _counted(supplier):
-        getattr(report, how)("fournisseurs")
-    elif how != "unchanged":
-        getattr(report, how)(AI_ROW)
+def _filed_under_by_this_run(ctx, record: dict) -> bool:
+    """Whether this run imports something filed under the archive's
+    supplier `record`: its own known prices, or a record of another section
+    of the run - one naming it among its `supplier_names`, the table every
+    section filing a record under a supplier writes. A section left out of
+    the run brings nothing.
+
+    « Banque » is read by its payee names alone: its `supplier_names` also
+    names the suppliers of the invoices its payments settle, and those
+    invoices come only with « Factures » - which, imported in the same run,
+    names them itself. Read whole, a payment with « Factures » left out
+    brought back a supplier with nothing under it."""
+    from transfer.sections.bank import KEY as BANK
+
+    items = record.get("item_prices")
+    if isinstance(items, list) and items:
+        return True
+    code = record["code"]
+    for key in ctx.strategies:
+        if key == KEY:
+            continue
+        payload = ctx.reader.section(key).payload()
+        if key == BANK:
+            aliases = payload.get("aliases")
+            # An archive is read, never trusted: a code that is no text is
+            # left to the bank's own refusal, never hashed here.
+            named = (
+                {
+                    alias["supplier"]
+                    for alias in aliases
+                    if isinstance(alias, dict) and isinstance(alias.get("supplier"), str)
+                }
+                if isinstance(aliases, list)
+                else set()
+            )
+        else:
+            names = payload.get("supplier_names")
+            named = names if isinstance(names, dict) else {}
+        if code in named:
+            return True
+    return False
 
 
 def known_parser(key: str) -> bool:
     """A parser this application has: a key it does not know would file
     the supplier's documents empty, and say nothing."""
-    from invoices.parsers import LLM_PARSER_KEY, PARSER_REGISTRY
+    from invoices.parsers import PARSER_REGISTRY
 
-    return key == "" or key == LLM_PARSER_KEY or key in PARSER_REGISTRY
+    return key == "" or key in PARSER_REGISTRY
 
 
 def _check_lists(record: dict) -> None:
@@ -249,7 +285,7 @@ class SuppliersSection(Section):
         from invoices.models import ShopItemPrice, Supplier
 
         return {
-            "fournisseurs": sum(1 for supplier in Supplier.objects.only("parser_key") if _counted(supplier)),
+            "fournisseurs": Supplier.objects.count(),
             PRICES: ShopItemPrice.objects.count(),
         }
 
@@ -288,7 +324,7 @@ class SuppliersSection(Section):
             {"supplier_names": {supplier.code: supplier.name for supplier in suppliers}, "suppliers": records},
             # Counted as count() counts them: the import tab sets the two
             # side by side, and on identical data they must read the same.
-            {"fournisseurs": sum(1 for supplier in suppliers if _counted(supplier)), PRICES: prices},
+            {"fournisseurs": len(suppliers), PRICES: prices},
         )
 
     # -- import ------------------------------------------------------------------------
@@ -335,6 +371,18 @@ class SuppliersSection(Section):
                 if code not in by_code:
                     block(ctx, code)
                 continue
+            if _retired_ai(record):
+                # Kept here by 0037 (something named it), it is that
+                # supplier, ordinary: matched by its code like any other -
+                # left out, « Remplacer » would have pruned it, and the rows
+                # naming it with it.
+                record = {**record, "parser_key": ""}
+                if code not in by_code:
+                    if not _filed_under_by_this_run(ctx, record):
+                        report.note(AI_LEFT_OUT.format(name=name))
+                        block(ctx, code)
+                        continue
+                    report.note(AI_ORDINARY.format(name=name))
             supplier = by_code.get(code)
             if supplier is not None:
                 claimed[supplier.pk] = code
@@ -410,7 +458,7 @@ class SuppliersSection(Section):
                 setattr(supplier, name, value)
         supplier.save()
         ctx.suppliers.add(supplier)
-        _tally(report, supplier, "created")
+        report.created("fournisseurs")
         for _key, price_values, _item in _file_prices(record, supplier.name, report):
             _create_price(supplier, price_values, report)
         return supplier
@@ -463,9 +511,9 @@ class SuppliersSection(Section):
                 f"Fournisseur « {supplier.name} » : différent dans l'archive ({said(conflicts)}) — gardé tel quel"
             )
         if filled:
-            _tally(report, supplier, "updated")
+            report.updated("fournisseurs")
         elif not conflicts and not unknown_parser:
-            _tally(report, supplier, "unchanged")
+            report.unchanged("fournisseurs")
 
     def _replace(self, ctx, report, record, supplier) -> None:
         """The supplier becomes the archive's - but for its code and a
@@ -537,9 +585,9 @@ class SuppliersSection(Section):
 
         prices_changed = self._replace_prices(report, record, supplier)
         if changed or prices_changed:
-            _tally(report, supplier, "updated")
+            report.updated("fournisseurs")
         else:
-            _tally(report, supplier, "unchanged")
+            report.unchanged("fournisseurs")
 
     def _replace_prices(self, report, record, supplier) -> bool:
         """Exactly the archive's prices, by key. Only when the archive says
@@ -586,7 +634,6 @@ class SuppliersSection(Section):
     # -- clear --------------------------------------------------------------------------
     def clear(self, ctx, report) -> None:
         from invoices.models import ShopItemPrice, Supplier, SupplierChange
-        from invoices.parsers import LLM_PARSER_KEY
 
         # The history of a configuration that no longer exists, and its
         # undo data points at rows being cleared.
@@ -600,8 +647,7 @@ class SuppliersSection(Section):
             if not code_bound(supplier):
                 _delete_supplier(ctx, report, supplier)
                 continue
-            if supplier.parser_key != LLM_PARSER_KEY:
-                kept.append(supplier.name)
+            kept.append(supplier.name)
             # What it learned goes; what a reader or a till is keyed on -
             # its name, its parser, whether it is fetched - and Metro's
             # firewall state stay as they are.
@@ -621,7 +667,7 @@ class SuppliersSection(Section):
             if prices:
                 report.deleted(PRICES, prices)
             if fields or prices:
-                _tally(report, supplier, "updated")
+                report.updated("fournisseurs")
         if kept:
             report.note(
                 f"{', '.join(kept)} reste{'nt' if len(kept) > 1 else ''} : lecteur propre ou caisse réglée dans "
@@ -702,7 +748,7 @@ def _delete_supplier(ctx, report, supplier) -> bool:
         reason = _holders(supplier) or "un de ses produits sert encore (inventaire, recette)"
         report.keep(f"Fournisseur « {supplier.name} » : {reason}")
         return False
-    _tally(report, supplier, "deleted")
+    report.deleted("fournisseurs")
     if prices:
         report.deleted(PRICES, prices)
     if aliases:

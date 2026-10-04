@@ -65,18 +65,17 @@ def staged_file(test, name):
 
 
 class WhoseTicketsAreReadTests(TestCase):
-    def test_every_supplier_but_the_ai_one_has_its_tickets_read(self):
+    def test_every_supplier_has_its_tickets_read(self):
         for code in ("FRANPRIX", "METRO", "UBA"):
             with self.subTest(code=code):
                 self.assertIsNotNone(parser_for(Supplier.objects.get(code=code)))
-        self.assertIsNone(parser_for(Supplier.objects.get(code="OTHER")))
         reader = parser_for(make_supplier(code="EPICERIE", name="Épicerie du coin"))
         self.assertEqual(reader.parse_text(UNKNOWN_SHOP).supplier_code, "EPICERIE")
 
     def test_a_shop_is_a_till_configured_or_a_supplier_without_invoices(self):
         self.assertTrue(is_ticket_shop(Supplier.objects.get(code="SABBH")))
         self.assertTrue(is_ticket_shop(make_supplier(code="EPICERIE", parser_key="")))
-        for code in ("METRO", "UBA", "OTHER"):
+        for code in ("METRO", "UBA"):
             with self.subTest(code=code):
                 self.assertFalse(is_ticket_shop(Supplier.objects.get(code=code)))
 
@@ -102,10 +101,6 @@ class HeaderTests(TestCase):
     def test_a_header_is_whole_words(self):
         make_supplier(code="COIN", name="Coin", ticket_header="COIN")
         self.assertIsNone(detect_parser("RECOINS\nPAIN 1,00\n"))
-
-    def test_the_ai_pseudo_supplier_is_never_found(self):
-        Supplier.objects.filter(code="OTHER").update(ticket_header="EPICERIE DU COIN")
-        self.assertIsNone(detect_parser(UNKNOWN_SHOP))
 
     def test_comparing_ignores_accents_case_and_punctuation(self):
         self.assertEqual(plain_text("Épicerie  d'Été, 12-bis"), "EPICERIE D ETE 12 BIS")
@@ -142,9 +137,21 @@ class CreateShopTests(TestCase):
         a shop of its own named so must not become that till - its settings,
         its header patterns - nor any other reader's supplier."""
         Supplier.objects.filter(code__in=["SABBH", "WINGSENG"]).delete()
-        for name, code in (("Sabbh", "SABBH_2"), ("Wingseng", "WINGSENG_2"), ("Cecina", "CECINA_2"), ("LLM", "LLM_2")):
+        for name, code in (("Sabbh", "SABBH_2"), ("Wingseng", "WINGSENG_2"), ("Cecina", "CECINA_2")):
             with self.subTest(name=name):
                 self.assertEqual(create_shop(name).code, code)
+
+    def test_never_the_code_of_the_removed_ai_reading_s_supplier(self):
+        """invoices/0037 took OTHER away; an archive written before
+        04/10/2026 still carries « Autre (analyse IA) » under it, and
+        « Données » pairs a supplier by its code - a shop of that code would
+        take that supplier and its documents."""
+        self.assertFalse(Supplier.objects.filter(code="OTHER").exists())
+        for name in ("Other", "other", "OTHER"):
+            with self.subTest(name=name):
+                shop = create_shop(name)
+                self.assertEqual(shop.code, "OTHER_2")
+                shop.delete()
 
     def test_what_is_refused(self):
         make_invoice(supplier=Supplier.objects.get(code="SABBH"), ocr_text="Sabbh Oriental\nRUE DU TEMPLE\n")
@@ -276,7 +283,6 @@ class ShopFormTests(TestCase):
             {"supplier": ""},
             {"supplier": "abc"},
             {"supplier": "new"},
-            {"supplier": str(Supplier.objects.get(code="OTHER").pk)},
         ):
             with self.subTest(data=data):
                 self.assertFalse(ReceiptShopForm(data).is_valid())

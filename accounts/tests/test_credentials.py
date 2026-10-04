@@ -557,6 +557,21 @@ class PageTests(ConfirmedCase):
         self.post(OLD_PORTAL_PASSWORD__clear="on")
         self.assertEqual(vault.load().values, {})
 
+    def test_a_key_typed_for_the_removed_ai_reading_is_offered_for_deletion(self):
+        """The AI reading and its account went on 04/10/2026: a key typed
+        before stays in the store until « Effacer », and no card asks for
+        one any more."""
+        vault.save({"ANTHROPIC_API_KEY": SECRET})
+        page = self.page()
+        self.assertNotIn("Analyse IA", page)
+        self.assertIn("Identifiants qui ne servent plus", page)
+        # An account's key, not a source's: the sentence says both.
+        self.assertIn("Enregistrés pour un compte ou une source qui n'existe plus", page)
+        self.assertIn('name="ANTHROPIC_API_KEY__clear"', page)
+        self.assertNotIn(SECRET, page)
+        self.post(ANTHROPIC_API_KEY__clear="on")
+        self.assertEqual(vault.load().values, {})
+
     def test_the_status_says_where_a_value_comes_from_never_the_value(self):
         self.env_file("LADDITION_EMAIL=du-fichier@exemple.invalid\n")
         page = self.page()

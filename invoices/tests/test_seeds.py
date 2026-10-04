@@ -16,16 +16,14 @@ from tests.factories import make_invoice
 class ForgetOriginalBarSuppliersTests(TestCase):
     def test_the_original_bar_s_suppliers_go_with_their_source_and_slip_format(self):
         seeds.forget_original_bar_suppliers()
-        self.assertEqual(
-            set(Supplier.objects.values_list("code", flat=True)), {"METRO", "OTHER", "FRANPRIX", "MONOPRIX"}
-        )
+        self.assertEqual(set(Supplier.objects.values_list("code", flat=True)), {"METRO", "FRANPRIX", "MONOPRIX"})
         self.assertFalse(InvoiceType.objects.exists())
         self.assertFalse(EmailInvoiceSource.objects.exists())
         self.assertFalse(SlipFormat.objects.exists())
         self.assertEqual(ReturnableType.objects.count(), 3)
         # Twice is once.
         seeds.forget_original_bar_suppliers()
-        self.assertEqual(Supplier.objects.count(), 4)
+        self.assertEqual(Supplier.objects.count(), 3)
 
     def test_a_source_or_a_format_of_another_supplier_stays(self):
         franprix = Supplier.objects.get(code="FRANPRIX")
