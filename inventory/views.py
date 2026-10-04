@@ -2060,10 +2060,12 @@ def _stock_take_form_view(request, stock_take):
             with transaction.atomic():
                 stock_take = form.save()
                 lines = formset.save(commit=False)
-                for line in lines:
-                    _save_stock_take_line(line)
+                # Deleted first: a row taken out and the same product typed
+                # again in one save met the line still there (one per product).
                 for obj in formset.deleted_objects:
                     obj.delete()
+                for line in lines:
+                    _save_stock_take_line(line)
             messages.success(request, "Inventaire enregistré.")
             return redirect("inventory:stock_take_detail", pk=stock_take.pk)
     else:
