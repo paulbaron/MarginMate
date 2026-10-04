@@ -186,6 +186,17 @@ def receipt_parsers() -> dict[str, ReceiptParser]:
     return {key: parser for key, parser in PARSER_REGISTRY.items() if isinstance(parser, ReceiptParser)}
 
 
+def configured_tills() -> list[ReceiptParser]:
+    """The tills configured in the code (generic_receipt.SHOPS) whose
+    supplier this espace holds, in the registry's order - one query. A till
+    whose row is absent answers nothing: a new espace starts without the
+    original bar's local shops (invoices.seeds), and another bar's
+    « Épicerie Sabah » is not Sabbh Oriental's."""
+    tills = receipt_parsers()
+    present = set(Supplier.objects.filter(code__in=list(tills)).values_list("code", flat=True))
+    return [till for key, till in tills.items() if key in present]
+
+
 def parser_for(supplier: Supplier) -> ReceiptParser | None:
     """The reader for `supplier`'s tickets: its till's own settings when it
     has some, and the same reader without them for any other supplier - a
@@ -286,7 +297,8 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
 
     A header a person gave a shop first - "EPICERIE SABAH" before the
     "SABAH" a configured till answers to, since a header printed inside
-    another one gives way to it - then the configured tills, then the SIREN,
+    another one gives way to it - then the configured tills this espace
+    holds the supplier of (`configured_tills`), then the SIREN,
     phone or web site learned from the shop's documents
     (`identified_supplier`). Returns None rather than a best guess: an
     unrecognised receipt that is reported as such costs the operator one
@@ -325,7 +337,7 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
         parser = next(
             (
                 till
-                for till in receipt_parsers().values()
+                for till in configured_tills()
                 if any(re.search(pattern, text, re.IGNORECASE) for pattern in getattr(till, "header_patterns", ()))
             ),
             None,
@@ -2778,9 +2790,15 @@ def import_receipt(
     read = read_receipt(pdf_path, date_hint=date_hint, supplier=supplier)
     named_by_hand = supplier is not None
     if supplier is None:
-        if read.parser is None or read.parsed is None:
+        # A reader names a supplier by its code; one this espace does not
+        # hold (configured_tills already keeps those out) is no shop of its.
+        supplier = (
+            Supplier.objects.filter(code=read.parser.supplier_code).first()
+            if read.parser is not None and read.parsed is not None
+            else None
+        )
+        if supplier is None:
             raise UnrecognisedShopError(read.conflict or "Enseigne non reconnue sur ce ticket.", text=read.text)
-        supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
         if read.identified_by:
             parsed.checks.append(

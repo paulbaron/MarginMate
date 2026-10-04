@@ -1036,6 +1036,12 @@ enforces that the override lives in the base and nowhere else.
 parsers were replaced by one that reads a line for what its numbers do; a
 shop is data (`TicketShop`: header patterns, the placeholder name its till
 prints, whether its items carry a VAT code), registered once per supplier.
+**A configured till answers only in an espace holding its supplier row**
+(`receipts.configured_tills`, one query, on `recognise_shop`'s fallback only):
+a new espace starts without the original bar's local shops (`invoices.seeds`),
+and before, another bar's « Épicerie Sabah » went to Sabbh Oriental's till -
+or crashed the import once that row was gone. `import_receipt` files under a
+row of the espace or raises `UnrecognisedShopError`, never `DoesNotExist`.
 Measured against the 368 tickets a person had checked (`eval` against their
 stored lines, on a scratch copy of the database), it disagreed on 5 where the
 shop parsers disagreed on 21 - each of the 5 a person's shortcut (a quantity
