@@ -975,9 +975,10 @@ def _read_the_invoices(report: MarginReport, window: DateRange) -> None:
     groups: dict[str, SpendGroup] = {}
     parts: dict[str, SpendPart] = {}
     for invoice in with_lines(window.limit(Invoice.objects.all(), "invoice_date")):
+        lines = _lines_of(invoice)
         # Each total read once: `total_ttc` walks the lines.
-        total_ttc = invoice.total_ttc
-        whole = Money(cents(invoice.total_ht), cents(total_ttc))
+        total_ttc = invoice.total_ttc_of(lines)
+        whole = Money(cents(invoice.total_ht_of(lines)), cents(total_ttc))
         target = "spend_charges" if invoice.supplier.expenses_only else "spend_goods"
         setattr(report, target, getattr(report, target) + whole)
         # How many documents the figure is made of: a month nobody has
@@ -985,7 +986,7 @@ def _read_the_invoices(report: MarginReport, window: DateRange) -> None:
         # nothing, and reads as a 100 % real margin.
         report.invoice_count += 1
 
-        for place, amount in _where_it_went(invoice, whole, total_ttc).items():
+        for place, amount in _where_it_went(invoice, whole, total_ttc, lines).items():
             group = groups.get(place.group_key)
             if group is None:
                 group = groups[place.group_key] = SpendGroup(key=place.group_key, name=place.group_name)
@@ -1014,7 +1015,7 @@ def _read_the_invoices(report: MarginReport, window: DateRange) -> None:
         report.undated_spend += invoice_money(invoice)
 
 
-def lines_prefetch(lookup: str = "lines") -> Prefetch:
+def lines_prefetch(lookup: str = "lines", to_attr: str | None = None) -> Prefetch:
     """The one way to load the lines `where_it_went` reads - public, and
     taking the lookup, because « Dépenses » reaches them through a bank
     line's payments (`invoice__lines`) rather than off an invoice queryset.
@@ -1028,7 +1029,7 @@ def lines_prefetch(lookup: str = "lines") -> Prefetch:
     the columns those read (`_LINE_COLUMNS`), on either page.
     """
     lines = InvoiceLine.objects.select_related("product__stock_type").only(*_LINE_COLUMNS)
-    return Prefetch(lookup, queryset=lines)
+    return Prefetch(lookup, queryset=lines, to_attr=to_attr)
 
 
 #: What `_where_it_went`, `Invoice.total_ht` and `Invoice.total_ttc` read of
@@ -1062,16 +1063,37 @@ _LINE_COLUMNS = (
 )
 
 
+#: Where `with_lines` files an invoice's lines.
+_LINES_ATTR = "margin_lines"
+
+
 def with_lines(queryset):
     """An Invoice queryset loaded the way `where_it_went` needs it - the
     columns it reads only (`_INVOICE_COLUMNS`, `_LINE_COLUMNS`): anything
     else asked of these invoices is a query per row. « Dépenses » reaches the
-    same lines through a bank line (`lines_prefetch`)."""
-    return queryset.select_related("supplier").only(*_INVOICE_COLUMNS).prefetch_related(lines_prefetch())
+    same lines through a bank line (`lines_prefetch`).
+
+    The lines are a list on each invoice (`margin_lines`, read through
+    `_lines_of`), not its manager's cache, which Django fills by cloning the
+    lines' queryset once per invoice: `invoice.lines`, `total_ht` and
+    `total_ttc` on these invoices are two queries each."""
+    return (
+        queryset.select_related("supplier")
+        .only(*_INVOICE_COLUMNS)
+        .prefetch_related(lines_prefetch(to_attr=_LINES_ATTR))
+    )
+
+
+def _lines_of(invoice: Invoice) -> list:
+    """The invoice's lines as `with_lines` filed them, else as its manager
+    has them (« Dépenses » prefetches them there)."""
+    lines = getattr(invoice, _LINES_ATTR, None)
+    return lines if lines is not None else list(invoice.lines.all())
 
 
 def invoice_money(invoice: Invoice) -> Money:
-    return Money(cents(invoice.total_ht), cents(invoice.total_ttc))
+    lines = _lines_of(invoice)
+    return Money(cents(invoice.total_ht_of(lines)), cents(invoice.total_ttc_of(lines)))
 
 
 class Place(NamedTuple):
@@ -1120,8 +1142,9 @@ def where_it_went(invoice: Invoice) -> dict[Place, Money]:
     this is two queries per invoice.
     """
     # `total_ttc` walks the lines, so it is read once and handed down.
-    total_ttc = invoice.total_ttc
-    return _where_it_went(invoice, Money(cents(invoice.total_ht), cents(total_ttc)), total_ttc)
+    lines = _lines_of(invoice)
+    total_ttc = invoice.total_ttc_of(lines)
+    return _where_it_went(invoice, Money(cents(invoice.total_ht_of(lines)), cents(total_ttc)), total_ttc, lines)
 
 
 def _charges_over_the_goods(lines, lines_ttc) -> tuple[list[Decimal], list[Decimal], list[bool]]:
@@ -1164,7 +1187,7 @@ def _charges_over_the_goods(lines, lines_ttc) -> tuple[list[Decimal], list[Decim
     return out_ht, out_ttc, charged
 
 
-def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[Place, Money]:
+def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal, lines: list) -> dict[Place, Money]:
     """`whole` - the invoice's own two totals, to the cent, exactly as
     `spend` adds them - split over its places so that they add back up to
     it, to the cent, HT and TTC.
@@ -1198,7 +1221,6 @@ def _where_it_went(invoice: Invoice, whole: Money, total_ttc: Decimal) -> dict[P
     """
     if invoice.supplier.expenses_only:
         return {_charge_place(invoice.supplier): whole}
-    lines = list(invoice.lines.all())
     if not lines:
         return {_TO_CLASSIFY: whole}
 
