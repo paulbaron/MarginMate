@@ -19,7 +19,8 @@ its padding zeros stopped counting (generic_receipt.DAILY_COUNT_DIGITS) -
 takes its date the same way (« 000172-20251119 »): bare, a second photo of
 that ticket would no longer be recognised, since it now reads dated. Only
 when the text prints that very number after « Ticket »: a short number read
-any other way is the document's own.
+any other way is the document's own. So does Franprix's store, till and
+count of the day (« R1 007418-02 317 », « 007418-02-317-20250323 »).
 """
 
 import re
@@ -35,6 +36,8 @@ from invoices.receipts import has_own_reader
 
 MADE_UP_RE = re.compile(r"\d{8}-\d+\.\d{2}")
 DIGIT_RUN_RE = re.compile(r"\d{18,26}")
+# generic_receipt.STORE_TILL_RE's number, filed bare.
+STORE_TILL_COUNT_RE = re.compile(r"\d{5,6}-\d{2}-\d{2,4}")
 
 
 def stands_in(number: str) -> bool:
@@ -44,7 +47,9 @@ def stands_in(number: str) -> bool:
 
 def bare_count(number: str) -> bool:
     """A number short enough to be a till's count of the day, undated."""
-    return number.isdigit() and len(number.lstrip("0")) <= DAILY_COUNT_DIGITS
+    return (number.isdigit() and len(number.lstrip("0")) <= DAILY_COUNT_DIGITS) or bool(
+        STORE_TILL_COUNT_RE.fullmatch(number)
+    )
 
 
 class Command(BaseCommand):

@@ -47,11 +47,16 @@ def import_parsed_invoice(
     source_file_path: str | None = None,
     display_filename: str | None = None,
 ) -> Invoice:
-    if (
-        parsed.invoice_number
-        and Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists()
-    ):
-        raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
+    known = (
+        Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).first()
+        if parsed.invoice_number
+        else None
+    )
+    if known is not None:
+        # With the day of the one already in: a count of the day filed bare
+        # names another day's ticket, and the date shows it is not this one.
+        day = f" du {known.invoice_date:%d/%m/%Y}" if known.invoice_date else ""
+        raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}{day}.")
     if supplier.expenses_only:
         parsed.printed_total_ttc = charge_reading(parsed)[0]
     # A supplier of charges has no products: its document is filed as the

@@ -226,6 +226,9 @@ TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
 # Counted without the zeros a till pads it with: Wing Seng's « 000172 » is
 # such a count, and bare it was refused as another day's ticket.
 DAILY_COUNT_DIGITS = 4
+# "R1 007418-02 317": the store, the till and the till's count of the day,
+# which comes round too - bare, a ticket of 19/09/2026 would be refused as the
+# 23/03/2025 one. Dated, or no number at all when the date is unread.
 STORE_TILL_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
 BARCODE_RE = re.compile(r"(?<!\d)(\d{18,26})(?!\d)")
 # An IBAN is a long digit run too once its spaces are taken out, and it is
@@ -2179,7 +2182,7 @@ def _ticket_number(text: str, invoice_date: date | None) -> str:
                 return number
     match = STORE_TILL_RE.search(text.replace(" ", ""))
     if match:
-        return "-".join(match.groups())
+        return f"{'-'.join(match.groups())}-{invoice_date:%Y%m%d}" if invoice_date is not None else ""
     match = BARCODE_RE.search(text.replace(" ", ""))
     return match.group(1) if match else ""
 
