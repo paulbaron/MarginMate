@@ -29,10 +29,12 @@ never the database. The rules of the page (security review of 01/10/2026):
 - Values no account uses any more (a source deleted, renamed) are listed by
   name to be removed: kept, they stayed in the store for ever.
 
-Only where the server's integrations are allowed
-(`accounts.tenancy.integrations_allowed`): anywhere else every connector
-refuses before reading a credential, and the page says so instead of
-offering fields nothing would read.
+In every espace (04/10/2026; before, the owner's only): each bar's
+connectors sign in with what it typed here. The .env's values - shown as
+« Fichier .env », offered to a portal, read as a fallback - are the
+server's, and exist on the owner's page only
+(`accounts.tenancy.server_accounts_allowed`): another bar's page never reads
+the file, and its connectors never fall back on it (`vault.server_setting`).
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 
 from . import sudo, vault
-from .tenancy import integrations_allowed, is_owner
+from .tenancy import integrations_allowed, is_owner, server_accounts_allowed
 
 REFUSED = "La page Identifiants : à configurer — disponible prochainement dans les réglages de votre espace."
 NOT_OWNER = "Seul le propriétaire de l'espace peut voir et modifier les identifiants des comptes."
@@ -166,10 +168,20 @@ FIXED_ACCOUNTS = [
     Account(
         "laddition",
         "L'Addition (caisse)",
-        "Le compte L'Addition Reporting d'où sont importées les ventes.",
+        "Le compte L'Addition Reporting d'où sont importées les ventes. Une autre caisse : importez son export "
+        "(CSV ou Excel) dans Recettes → Ventes, sans identifiant.",
         [
             Credential("LADDITION_EMAIL", "Identifiant (e-mail)", input_type="email"),
             Credential("LADDITION_PASSWORD", "Mot de passe", secret=True),
+        ],
+    ),
+    Account(
+        "ai",
+        "Analyse IA (Anthropic)",
+        "La clé d'API qui lit les factures d'un fournisseur sans lecteur dédié (« Autre (analyse IA) »). Les "
+        "lectures sont facturées sur ce compte Anthropic (console.anthropic.com → API Keys).",
+        [
+            Credential("ANTHROPIC_API_KEY", "Clé d'API", secret=True),
         ],
     ),
 ]
@@ -246,7 +258,9 @@ def _env_values() -> set[str]:
     """The names the .env file holds a value for - read for the status only,
     the values themselves never leave this function."""
     path = _env_file()
-    if not path.is_file():
+    # Another bar's page reads nothing of the server's file: none of its
+    # connectors would use it (`vault.server_setting`).
+    if not server_accounts_allowed() or not path.is_file():
         return set()
     from dotenv import dotenv_values
 
@@ -284,7 +298,7 @@ def state_digest(state: vault.VaultState) -> str:
 
 def mailbox_host(stored: dict[str, str]) -> str:
     """The IMAP server the mailbox's values go to, as the connector reads it."""
-    return (stored.get(MAILBOX_HOST) or getattr(settings, MAILBOX_HOST, "") or DEFAULT_IMAP_HOST).lower()
+    return (stored.get(MAILBOX_HOST) or vault.server_setting(MAILBOX_HOST) or DEFAULT_IMAP_HOST).lower()
 
 
 @dataclass
@@ -425,7 +439,7 @@ class CredentialsForm(forms.Form):
             typed = cleaned.get(MAILBOX_PASSWORD) or ""
             clearing = cleaned.get(MAILBOX_PASSWORD + CLEAR_SUFFIX)
             # What the connector would send: the page's, else the settings'.
-            has_password = bool(stored.get(MAILBOX_PASSWORD) or getattr(settings, MAILBOX_PASSWORD, ""))
+            has_password = bool(stored.get(MAILBOX_PASSWORD) or vault.server_setting(MAILBOX_PASSWORD))
             if changed and has_password and not typed and not clearing:
                 self.add_error(MAILBOX_PASSWORD, HOST_NEEDS_PASSWORD)
         # The store changed while the page was open (another tab saved, or
@@ -586,6 +600,7 @@ def _page(request, form, report, status=200):
         "has_portals": bool(report.accounts) or bool(report.to_fix),
         "still_in_env": [line for section in sections for row in section["rows"] for line in row["still_in_env"]],
         "development": settings.DEBUG,
+        "server_accounts": server_accounts_allowed(),
     }
     return render(request, "accounts/credentials.html", context, status=status)
 

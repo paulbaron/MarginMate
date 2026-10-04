@@ -1,15 +1,18 @@
-"""The server's own accounts, and the one tenant that may use them.
+"""The connectors, and whose accounts they sign in with.
 
-Metro, the invoice mailbox, the customer portals' credentials (the .env
-variables a portal names) and the AI reading (ANTHROPIC_API_KEY) are the
-OWNER's accounts, configured on the server. With one database per bar,
-only the tenant flagged
-`Tenant.uses_server_integrations` may use them
-(`accounts.tenancy.integrations_allowed`): every other tenant sees them as
-« à configurer » - a later step gives each tenant accounts of its own - and
-EVERY entry point refuses, each on its own, because the data is no guard (a
-« Données » import or the admin can switch a mailbox source or Metro back
-on in any tenant):
+Metro, the invoice mailbox, the customer portals and the AI reading
+(ANTHROPIC_API_KEY) run in EVERY tenant (`accounts.tenancy.
+integrations_allowed`: any bound tenant), each with the accounts typed on
+ITS « Identifiants » page (accounts/vault.py). The server's own accounts -
+the .env's values - stand in for a value not typed in the platform owner's
+tenant only (`Tenant.uses_server_integrations`,
+`accounts.tenancy.server_accounts_allowed`); every reader of a credential
+asks that question before it reads a setting or the .env file
+(`vault.server_setting`, `scrapers.generic_email.mailbox_credentials`,
+`scrapers.website.credentials`). Since 04/10/2026; before, every tenant but
+the owner's saw these features as « à configurer ».
+
+Every entry point still refuses an UNBOUND thread, each on its own:
 
 * the views, before a job is made or a thread started (the gather, the
   mailbox's and a portal's « Tester », a source saved, the AI chosen on the
@@ -21,9 +24,9 @@ on in any tenant):
   find_matching_emails, scrapers.website.credentials, parsers.llm_fallback):
   a refusal names no variable and reaches no account.
 
-The sentences name the feature, never a variable, a file or a host: in
-another bar's tenant, « FREEBOX_PASSWORD est absente du fichier .env » would
-tell which variables the server holds.
+A message seen in a hosted bar names the feature and the « Identifiants »
+page, never a server variable or the .env file: « FREEBOX_PASSWORD est
+absente du fichier .env » would tell which variables the server holds.
 """
 
 TO_CONFIGURE = "à configurer — disponible prochainement dans les réglages de votre espace"
@@ -45,3 +48,9 @@ PORTALS = refused("Les espaces clients des fournisseurs")
 #: The « Sources » tab and a source's form: both channels are the server's.
 SOURCES = refused("Les sources de factures (boîte mail, espaces clients)")
 AI_READING = refused("L'analyse IA")
+#: The AI reading chosen where no key is typed (and, in the owner's tenant,
+#: none in the server's settings either).
+AI_KEY_MISSING = (
+    "L'analyse IA demande une clé d'API Anthropic : renseignez-la sur la page Identifiants (réservée au "
+    "propriétaire de l'espace)."
+)

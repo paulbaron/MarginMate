@@ -103,6 +103,18 @@ def integrations_allowed() -> bool:
     return bool(tenant is not None and tenant.uses_server_integrations)
 
 
+def server_accounts_allowed() -> bool:
+    """Whether the SERVER's own accounts and settings are this thread's
+    tenant's: the .env's values as a fallback for a credential not typed on
+    « Identifiants » (`vault.server_setting`, `scrapers.website.credentials`),
+    a server setting's or command's name on a page, the server's desktop (a
+    visible browser). The platform owner's tenant only
+    (`Tenant.uses_server_integrations`, at most one: accounts.E005); never
+    unbound. Every other espace signs in with what it typed itself."""
+    tenant = current_tenant()
+    return bool(tenant is not None and tenant.uses_server_integrations)
+
+
 def is_owner(request) -> bool:
     """Whether the request's login is an OWNER of the espace it is bound to
     (`Membership.Role.OWNER`): the one who may see the accounts' logins,

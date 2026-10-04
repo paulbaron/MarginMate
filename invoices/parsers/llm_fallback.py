@@ -12,8 +12,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from django.conf import settings
-
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
 from .registry import register
 
@@ -68,29 +66,34 @@ def _to_decimal(value) -> Decimal:
         return Decimal("0")
 
 
+#: The credential the AI reading signs its requests with (« Identifiants »).
+AI_KEY_NAME = "ANTHROPIC_API_KEY"
+
+
 @register
 class LLMFallbackParser(InvoiceParser):
     supplier_code = "LLM"
 
     def parse(self, pdf_path: str, date_hint: date | None = None) -> ParsedInvoice:
-        # The key and its bill are the owner's: from a tenant that may not
-        # use the server's accounts, refused before the document is read or
-        # anything is sent (invoices/integrations.py) - whichever path got
-        # here (the PDF import, a source's reader, a gathered attachment).
+        # The key and its bill are the tenant's own: the one typed on its
+        # « Identifiants » page, else - in the owner's tenant only - the
+        # server's (accounts.vault.setting). Refused before the document is
+        # read or anything is sent, whichever path got here (the PDF import,
+        # a source's reader, a gathered attachment).
+        from accounts import vault
         from accounts.tenancy import integrations_allowed
         from invoices import integrations
 
         if not integrations_allowed():
             raise RuntimeError(integrations.AI_READING)
-        if not settings.ANTHROPIC_API_KEY:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY is not configured - set it in .env to use the AI-assisted invoice parser."
-            )
+        api_key = vault.setting(AI_KEY_NAME)
+        if not api_key:
+            raise RuntimeError(integrations.AI_KEY_MISSING)
 
         import anthropic
 
         text = _extract_text(pdf_path)
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,

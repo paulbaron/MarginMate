@@ -55,22 +55,23 @@ def mailbox_credentials() -> tuple[str, str, str]:
     server recorded with it (accounts/vault.py bindings), whatever the page's
     host field says now; one from the .env goes to the .env's server, never
     to a host typed on the page: changing the server on the page must not
-    send the .env's password elsewhere."""
-    from django.conf import settings
-
+    send the .env's password elsewhere. The .env's are read in the owner's
+    tenant only (`accounts.tenancy.server_accounts_allowed`)."""
     from accounts import vault
 
     state = vault.load()
     stored = state.values
-    address = stored.get("INVOICE_EMAIL_ADDRESS") or getattr(settings, "INVOICE_EMAIL_ADDRESS", "")
+    address = stored.get("INVOICE_EMAIL_ADDRESS") or vault.server_setting("INVOICE_EMAIL_ADDRESS")
     if stored.get("INVOICE_EMAIL_APP_PASSWORD"):
         app_password = stored["INVOICE_EMAIL_APP_PASSWORD"]
         host = state.bindings.get("INVOICE_EMAIL_APP_PASSWORD", "")
         if not host:
             raise RuntimeError(MAILBOX_UNBOUND)
     else:
-        app_password = getattr(settings, "INVOICE_EMAIL_APP_PASSWORD", "")
-        host = getattr(settings, "INVOICE_IMAP_HOST", "") or DEFAULT_IMAP_HOST
+        # The server's mailbox, in the owner's tenant only: another bar's
+        # gather reads its own page's values or nothing (vault.server_setting).
+        app_password = vault.server_setting("INVOICE_EMAIL_APP_PASSWORD")
+        host = vault.server_setting("INVOICE_IMAP_HOST") or DEFAULT_IMAP_HOST
     if not address or not app_password:
         raise RuntimeError(MAILBOX_MISSING)
     return address, app_password, host

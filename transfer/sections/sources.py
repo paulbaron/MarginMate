@@ -7,7 +7,7 @@ the login itself: those names are safe in an archive, and the values have
 to be copied by hand to the other computer, which the report says - in the
 owner's tenant only. A hosted bar edits no .env on the server and its
 portals are « à configurer » (invoices/integrations.py): its notes say
-that instead (`accounts.tenancy.integrations_allowed`).
+that instead (`accounts.tenancy.server_accounts_allowed`).
 
 **A portal from an archive is never trusted.** The next gather reads the
 variables it names and types them into the page it names, so an archive
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 
-from accounts.tenancy import integrations_allowed
+from accounts.tenancy import server_accounts_allowed
 from invoices import integrations
 
 # The variables the application reads for itself are one list, beside the
@@ -298,7 +298,7 @@ class SourcesSection(Section):
                     f"Source « {existing.name} » ({supplier.name}) : différente dans l'archive "
                     f"({said(different, LABELS)}) — gardée telle quelle"
                 )
-        if portals and not ctx.own_backup and integrations_allowed():
+        if portals and not ctx.own_backup and server_accounts_allowed():
             # Its own backup was written here, so the .env it reads is this
             # computer's: the advice belongs to an archive from elsewhere.
             # Never in a hosted bar, which edits no .env on the server: each
@@ -378,10 +378,11 @@ class SourcesSection(Section):
 
     @staticmethod
     def _inactive_note(name: str, supplier, how: str, sign_in: dict) -> str:
-        if not integrations_allowed():
-            # A hosted bar: the portals are the server's accounts, whose .env
-            # it cannot edit and whose source page only says « à configurer »
-            # (invoices/integrations.py) - so is the note.
+        if not server_accounts_allowed():
+            # A hosted bar: the portals are run for the owner's tenant only
+            # (the server's browser on its home network, invoices/
+            # integrations.py), and a hosted bar's source page says « à
+            # configurer » - so is the note.
             return f"Source « {name} » ({supplier.name}) : {how}. {integrations.PORTALS}"
         return (
             f"Source « {name} » ({supplier.name}) : {how} — elle se connecte à {sign_in['login_url']} avec "

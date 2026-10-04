@@ -6,8 +6,10 @@ db.sqlite3.bak*
 huey.sqlite3
 huey.sqlite3-*
 # The copies `manage.py test --parallel` makes of the in-memory test
-# database (default_1.sqlite3...), left behind when a run is interrupted.
+# databases (default_1.sqlite3, accounts_1.sqlite3...), left behind when a
+# run is interrupted.
 default_*.sqlite3
+accounts_*.sqlite3
 .env
 /media/
 # collectstatic's output (manage.py serve runs it at every start).

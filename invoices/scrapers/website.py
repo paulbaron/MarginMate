@@ -219,11 +219,17 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
                 f"({state.bindings.get(name) or 'aucun'}) : ressaisissez-le sur la page Identifiants."
             )
     values = {}
-    if env_file is not None and os.path.exists(env_file):
+    # The .env and the environment are the server's: the owner's tenant may
+    # fall back on them, never another bar, whose portals sign in with what
+    # it typed on its own « Identifiants » page or not at all.
+    from accounts.tenancy import server_accounts_allowed
+
+    server = server_accounts_allowed()
+    if server and env_file is not None and os.path.exists(env_file):
         from dotenv import dotenv_values
 
         values = {key: value for key, value in dotenv_values(env_file).items() if value}
-    environ = os.environ if environ is None else environ
+    environ = (os.environ if environ is None else environ) if server else {}
     from_env: list[str] = []
 
     def read(name):
@@ -249,7 +255,8 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
         raise WebsiteError(
             f"{recipe.name} : {' et '.join(words for words, _ in missing)} "
             f"{'manque' if one else 'manquent'} - {'renseignez-le' if one else 'renseignez-les'} sur la page "
-            f"Identifiants (ou {' et '.join(name for _, name in missing)} dans le fichier .env)."
+            f"Identifiants"
+            + (f" (ou {' et '.join(name for _, name in missing)} dans le fichier .env)." if server else ".")
         )
     unconfirmed = [name for name in from_env if state.env_bindings.get(name) != host]
     if unconfirmed:
