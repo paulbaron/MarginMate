@@ -62,6 +62,24 @@ def _guarded_getaddrinfo(host, *args, **kwargs):
     )
 
 
+class ForbiddenNetworkCall(BaseException):
+    """What the run-wide push stub raises. Not an Exception on purpose: the
+    delivery path turns any Exception into a dispatch « erreur interne »
+    (notifications.sending.deliver_one), so an AssertionError there let a
+    test that forgot to mock pass quietly. unittest records this as the
+    test's error."""
+
+
+class _ForbiddenPush(_Forbidden):
+    """The push transport's stand-in for the whole run (tests/runner.py
+    install): fails the test through every `except Exception`."""
+
+    def __call__(self, *args, **kwargs):
+        raise ForbiddenNetworkCall(
+            f"Test tried to open a real {self._what} connection. Mock it explicitly in the test instead."
+        )
+
+
 class NoNetworkTestCase(TestCase):
     """TestCase that makes any real outbound connection fail loudly.
 

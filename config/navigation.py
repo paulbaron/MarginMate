@@ -43,6 +43,11 @@ SECTION_BY_APP = {
     # « Identifiants » (accounts/credentials.py), the one page of the accounts
     # app with the navigation: a setting of the espace, beside « Données ».
     "accounts": "data",
+    # « Notifications » (notifications/), reached from Données' header like
+    # « Identifiants »: a setting of the espace, no link of its own. An
+    # employee reaches his devices from the topbar's account (base.html),
+    # and lights nothing there (`navigation`).
+    "notifications": "data",
 }
 
 #: Routes lighting another link than their app's: « Accès des employés »
@@ -89,14 +94,15 @@ def navigation(request):
         # Multi mode, no tenant bound (the login, 404 and CSRF pages): no
         # section to light, no database to count in.
         return {}
+    access = access_of(request)
     section = section_of(getattr(request, "resolver_match", None))
+    if section == "data" and not access.owner:
+        # An employee's « Notifications » (his own devices): « Données » is
+        # no link of his, there is none to light nor to name.
+        section = ""
     # The till products to link: counted for whoever has the link
     # (accounts/access.py).
-    pending = (
-        PosProduct.objects.filter(recipe__isnull=True, ignored=False).count()
-        if access_of(request).allows("recipes")
-        else 0
-    )
+    pending = PosProduct.objects.filter(recipe__isnull=True, ignored=False).count() if access.allows("recipes") else 0
     return {
         "nav_section": section,
         "nav_section_label": SECTION_LABELS.get(section, ""),

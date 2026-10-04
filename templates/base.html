@@ -7,6 +7,17 @@
     <title>{% block title %}MarginMate{% endblock %}</title>
     <link rel="stylesheet" href="{% asset 'css/marginmate.css' %}">
     {% comment %}
+    The installed app (notifications/views.py manifest, the icons of
+    static/icons/): an iPhone receives notifications only from a site added
+    to its Home Screen and opened from there, standalone.
+    {% endcomment %}
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#1a1a21">
+    <link rel="icon" href="{% static 'icons/favicon-32.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+    <meta name="apple-mobile-web-app-title" content="MarginMate">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    {% comment %}
     topbar.js is the one script of the page loaded without defer, on purpose.
     Under 860 px it folds the topbar's links into « Menu » by putting a class
     on <html>, and the stylesheet folds nothing without that class: a page
@@ -42,6 +53,13 @@
     <script src="{% asset 'js/ui.js' %}" defer></script>
     <script src="{% asset 'js/datatable.js' %}" defer></script>
     <script src="{% asset 'js/charts.js' %}" defer></script>
+    {% comment %}
+    A logged-in espace's page: keeps this browser's notifications alive
+    (static/js/push_sync.js - asks nothing, creates nothing, syncs at most
+    every 12 hours). Not on the login page, where no espace is bound.
+    {% endcomment %}{% if request.tenant %}
+    <script src="{% asset 'js/push_sync.js' %}" defer data-sync-url="{% url 'notifications:sync' %}" data-key-url="{% url 'notifications:key' %}"></script>
+    {% endif %}
 </head>
 {% comment %}
 data-tenant: the tenant this page belongs to, as an opaque scope
@@ -116,6 +134,8 @@ those keys under the scope (accounts.middleware.LEGACY_STORAGE_SESSION_KEY).
                 <div class="topbar-account">
                     {% comment %}An employee's name before the bar's: on a shared phone, who is logged in.{% endcomment %}
                     {% if can.owner %}<span class="topbar-tenant" title="{{ request.tenant.name }}">{{ request.tenant.name }}</span>{% else %}{% with who=user.first_name|default:user.email %}<span class="topbar-tenant" title="{{ who }} · {{ request.tenant.name }}">{{ who }} · {{ request.tenant.name }}</span>{% endwith %}{% endif %}
+                    {% comment %}An employee's own devices (notifications:home, every login's - accounts/access.py): the owner reaches them from Données, which is no page of his.{% endcomment %}
+                    {% if not can.owner %}<a class="topbar-notifications" href="{% url 'notifications:home' %}">Notifications</a>{% endif %}
                     <form method="post" action="{% url 'accounts:logout' %}" class="topbar-logout">
                         {% csrf_token %}
                         <button type="submit" class="link-button">Se déconnecter</button>

@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Prévoir les courses - MarginMate{% endblock %}
+{% block container_class %} container-wide{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            {% if can.products %}<p class="breadcrumb"><a href="{% url 'inventory:stock_list' %}">← Produits &amp; charges</a></p>{% endif %}
+            <h1>Prévoir les courses</h1>
+            <p class="page-subtitle">Ce que vous rachetez d'habitude dans une enseigne, sans inventaire.</p>
+        </div>
+        {% if store %}
+        <div class="actions">
+            <a class="btn btn-secondary" href="{% url 'inventory:shopping_rhythm' %}?{{ store_param }}={{ store.store_id }}">Rythme d'achat</a>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if not store %}
+        <div class="empty-state">
+            <p>Aucun achat chez une enseigne : la liste part de vos factures d'achat.</p>
+            {% if can.invoices or can.invoices_add %}<a class="btn" href="{% url 'invoices:invoice_add' %}">Ajouter des factures</a>{% endif %}
+        </div>
+    {% else %}
+
+    <form method="get" class="filter-row shopping-form">
+        <label class="inline-label">Enseigne
+            <select name="{{ store_param }}">
+                {% for value, words in regular_stores %}<option value="{{ value }}"{% if value == store.store_id %} selected{% endif %}>{{ words }}</option>{% endfor %}
+                {% if rare_stores %}
+                <optgroup label="Autres enseignes">
+                    {% for value, words in rare_stores %}<option value="{{ value }}"{% if value == store.store_id %} selected{% endif %}>{{ words }}</option>{% endfor %}
+                </optgroup>
+                {% endif %}
+            </select>
+        </label>
+        <label class="inline-label">Ces achats doivent tenir jusqu'au passage suivant, dans
+            <input type="number" name="{{ horizon_param }}" value="{% if horizon %}{{ horizon }}{% endif %}" min="{{ horizon_range.0 }}" max="{{ horizon_range.1 }}" step="1" inputmode="numeric" placeholder="{{ usual_gap }}">
+            jours
+        </label>
+        <button class="btn btn-secondary" type="submit" data-busy-label="Calcul…">Afficher</button>
+    </form>
+    {% if store_not_found %}
+        <div class="message message-warning">Enseigne introuvable : voici la plus fréquentée.</div>
+    {% endif %}
+    {% if horizon_refused %}
+        <div class="message message-warning">{{ horizon_error }}</div>
+    {% endif %}
+
+    <div class="stat-row">
+        <div class="stat">
+            <div class="stat-label">Panier habituel ici</div>
+            <div class="stat-value">≈ {{ basket }}</div>
+            <div class="stat-note">article{{ basket|pluralize }} par passage</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Proposés</div>
+            <div class="stat-value">{{ to_buy|length }}</div>
+            <div class="stat-note">{% if maybe %}et {{ maybe|length }} peut-être{% else %}à {{ setting.threshold_percent }} % ou plus{% endif %}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Dernier passage</div>
+            <div class="stat-value">{{ last_visit_ago }}</div>
+            <div class="stat-note">le {{ plan.last_visit|date:"d/m/Y" }} · {{ plan.visits }} passage{{ plan.visits|pluralize }}</div>
+        </div>
+        {% if plan.till_note %}
+        <div class="stat">
+            <div class="stat-label">Ventes de la caisse à jour au</div>
+            <div class="stat-value">{{ plan.till_note.covered_until|date:"d/m/Y" }}</div>
+        </div>
+        {% endif %}
+    </div>
+    {% if plan.till_note.stale %}
+        <div class="message message-warning">Ventes de la caisse à jour au {{ plan.till_note.covered_until|date:"d/m/Y" }} : la suite est estimée à votre rythme de vente.</div>
+    {% endif %}
+
+    <h2 id="a-acheter">À acheter</h2>
+    {% if list_messages %}
+        <ul class="messages">
+            {% for message in list_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    <p class="muted">Si vous y allez aujourd'hui : de quoi tenir {{ horizon_days }} jour{{ horizon_days|pluralize }}, jusqu'au passage suivant{% if not plan.horizon_typed %}{% if gap_measured %} (votre rythme ici){% else %} (par défaut){% endif %}{% endif %}.{% if plan.few_visits %} Peu de passages ici : liste indicative.{% endif %}</p>
+    {% if not plan.candidates %}
+        <div class="empty-state">
+            <p>{% if all_excluded_here %}Tous les articles achetés ici sont exclus.{% else %}Premier passage ici : rien à prévoir.{% endif %}</p>
+        </div>
+    {% elif to_buy %}
+        {% include "inventory/_shopping_lines.html" with rows=to_buy label="à acheter" quantity=True chance=True words=True action="here" landing="liste" %}
+    {% else %}
+        <div class="empty-state">
+            <p>Rien de sûr à racheter ici aujourd'hui.{% if maybe and plan.top_here %} Regardez « Peut-être » et vos achats habituels ci-dessous.{% elif maybe %} Regardez « Peut-être » ci-dessous.{% elif plan.top_here %} Regardez vos achats habituels ci-dessous.{% endif %}</p>
+        </div>
+    {% endif %}
+
+    {% if maybe %}
+    <details class="explainer" id="maybe"{% if not to_buy %} open{% endif %}>
+        <summary>Peut-être ({{ maybe|length }})</summary>
+        {% include "inventory/_shopping_lines.html" with rows=maybe label="peut-être" quantity=True chance=True words=True action="here" landing="exclusions" %}
+    </details>
+    {% endif %}
+
+    {% if new %}
+    <details class="explainer">
+        <summary>Nouveaux ici ({{ new|length }})</summary>
+        {% include "inventory/_shopping_lines.html" with rows=new label="nouveaux ici" quantity=True chance=True words=False action="here" landing="exclusions" %}
+    </details>
+    {% endif %}
+
+    {% if quiet %}
+    <details class="explainer">
+        <summary>Plus acheté ? ({{ quiet|length }})</summary>
+        {% include "inventory/_shopping_lines.html" with rows=quiet label="plus acheté" quantity=False chance=False words=False action="everywhere" landing="exclusions" %}
+    </details>
+    {% endif %}
+
+    {% if elsewhere %}
+    <details class="explainer">
+        <summary>Acheté ailleurs maintenant ({{ plan.elsewhere_count }})</summary>
+        {% include "inventory/_shopping_lines.html" with rows=elsewhere label="acheté ailleurs" quantity=False chance=False words=False action="" landing="" %}
+        {% if elsewhere_more %}<p class="muted">Et {{ elsewhere_more }} autre{{ elsewhere_more|pluralize }}.</p>{% endif %}
+    </details>
+    {% endif %}
+
+    {% if due_elsewhere %}
+    <details class="explainer">
+        <summary>À acheter ailleurs ({{ due_elsewhere|length }})</summary>
+        <div class="table-wrap">
+        <table data-table data-table-label="à acheter ailleurs" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Article</th>
+                    <th>Où</th>
+                    <th>Pourquoi</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in due_elsewhere %}
+                <tr>
+                    <td>{{ row.due.name }}{% for word, kind in row.badges %} <span class="status-pill {{ kind }}">{{ word }}</span>{% endfor %}</td>
+                    <td data-label="Où"><a href="{% url 'inventory:shopping_list' %}?{{ store_param }}={{ row.due.store_id }}">{{ row.due.store_name }}</a></td>
+                    <td class="phone-card-wide" data-label="Pourquoi">{{ row.due.sentence }}</td>
+                    <td class="row-actions">
+                        <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer « {{ row.due.name }} » dans aucune enseigne ?">
+                            {% csrf_token %}
+                            <input type="hidden" name="{{ article_param }}" value="{{ row.due.article_id }}">
+                            <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                            {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                            <input type="hidden" name="{{ landing_param }}" value="exclusions">
+                            <button class="btn btn-small btn-secondary" type="submit">Ne plus proposer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if plan.top_here %}
+    <details class="explainer" id="most-bought"{% if not to_buy or plan.few_visits %} open{% endif %}>
+        <summary>Les plus achetés ici</summary>
+        <div class="table-wrap">
+        <table data-table data-table-label="les plus achetés ici" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Article</th>
+                    <th class="num">Achats (12 mois)</th>
+                    <th class="num">Total HT</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for top in plan.top_here %}
+                <tr>
+                    <td>{{ top.name }}</td>
+                    <td class="num" data-label="Achats (12 mois)">{{ top.purchases_12m }}</td>
+                    <td class="num" data-label="Total HT" data-sort="{{ top.total_ht }}">{{ top.total_ht|money }} €</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+    {% endif %}
+
+    <details class="explainer">
+        <summary>Comment c'est calculé</summary>
+        <ul>
+            <li>Pour chaque article déjà acheté ici, MarginMate estime la chance que vous le preniez si vous y passez aujourd'hui.</li>
+            <li>Base : la part de vos passages ici où vous l'avez pris, depuis que vous l'achetez ; un passage d'il y a {{ setting.memory_months }} mois compte moitié.</li>
+            <li>Elle monte si votre dernier achat sera épuisé d'ici le passage suivant (d'après la caisse pour les articles des recettes, sinon d'après votre rythme), et baisse s'il en reste.</li>
+            <li>Un article acheté moins de {{ rules.few_purchases }} fois n'est pas encore une habitude.</li>
+            <li>La liste garde les articles à {{ setting.threshold_percent }} % ou plus. Un article proposé {{ rules.nag_lifted }} passages de suite sans être pris passe en « Peut-être » ({{ rules.nag_habit }} passages s'il fait partie de vos habitudes).</li>
+            <li>Un article dont vos {{ rules.elsewhere_last }} derniers achats étaient ailleurs n'est pas proposé ici.</li>
+            <li>La quantité est celle du milieu de vos {{ rules.quantity_last }} derniers achats ici.</li>
+            <li>Un article jamais acheté ici ne peut pas être prévu.</li>
+        </ul>
+    </details>
+
+    <details class="explainer" id="reglages"{% if settings_messages %} open{% endif %}>
+        <summary>Réglages · à partir de {{ setting.threshold_percent }} %, mémoire {{ setting.memory_months }} mois{% if not setting.use_till %}, sans la caisse{% endif %}</summary>
+        {% if settings_messages %}
+        <ul class="messages">
+            {% for message in settings_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        <form method="post" action="{% url 'inventory:shopping_settings' %}" class="inline-form shopping-form">
+            {% csrf_token %}
+            <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+            {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+            <label class="inline-label">Proposer un article à partir de
+                <input type="number" name="{{ threshold_param }}" value="{{ setting.threshold_percent }}" min="{{ threshold_range.0 }}" max="{{ threshold_range.1 }}" step="1" inputmode="numeric" required>
+                % de chances
+            </label>
+            <label class="inline-label">Mémoire des habitudes : un passage d'il y a
+                <input type="number" name="{{ memory_param }}" value="{{ setting.memory_months }}" min="{{ memory_range.0 }}" max="{{ memory_range.1 }}" step="1" inputmode="numeric" required>
+                mois compte moitié
+            </label>
+            <label class="inline-label"><input type="checkbox" name="{{ till_param }}" value="1"{% if setting.use_till %} checked{% endif %}> Tenir compte des ventes de la caisse</label>
+            <button class="btn" type="submit" data-busy-label="Enregistrement…">Enregistrer</button>
+        </form>
+        <form method="post" action="{% url 'inventory:shopping_settings' %}" class="inline-form shopping-defaults">
+            {% csrf_token %}
+            <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+            {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+            <input type="hidden" name="{{ defaults_param }}" value="1">
+            <button class="btn btn-secondary" type="submit" data-busy-label="Remise par défaut…">Valeurs par défaut</button>
+        </form>
+    </details>
+
+    <details class="explainer" id="exclusions"{% if exclusion_messages %} open{% endif %}>
+        <summary>Exclusions ({{ exclusions|length }}){% if deposits %} · {{ deposits|length }} consigne{{ deposits|length|pluralize }} ?{% endif %}</summary>
+        {% if exclusion_messages %}
+        <ul class="messages">
+            {% for message in exclusion_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if exclusions %}
+        <ul class="exclusion-list">
+            {% for exclusion in exclusions %}
+            <li>{% if exclusion.category is not None %}Catégorie {% if exclusion.category %}« {{ exclusion.category }} »{% else %}non renseignée{% endif %} · {% if exclusion.covers == 1 %}1 article{% else %}{{ exclusion.covers }} articles{% endif %}{% else %}{{ exclusion.name }}{% if exclusion.store or exclusion.also %} <span class="muted small">{% if exclusion.store %}pas chez {{ exclusion.store }}{% if exclusion.also %} · {% endif %}{% endif %}{{ exclusion.also }}</span>{% endif %}{% endif %}
+                <form method="post" action="{% url 'inventory:shopping_include' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ exclusion_param }}" value="{{ exclusion.pk }}">
+                    <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                    {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                    <button class="btn btn-small btn-secondary" type="submit">Réinclure</button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">Rien d'exclu : tout article déjà acheté peut être proposé.</p>
+        {% endif %}
+        {% if categories_to_exclude %}
+        <form method="post" action="{% url 'inventory:shopping_exclude' %}" class="inline-form" data-confirm="Ne plus proposer aucun article de cette catégorie ?">
+            {% csrf_token %}
+            <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+            {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+            <label class="inline-label">Ne jamais proposer la catégorie
+                <select name="{{ category_param }}">
+                    {% for category, count in categories_to_exclude %}
+                    <option value="{{ category }}">{% if category %}{{ category }}{% else %}non renseignée{% endif %} ({{ count }})</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="btn btn-secondary" type="submit">Exclure</button>
+        </form>
+        {% endif %}
+        {% if deposits %}
+        <p>Ces articles sont surtout rendus (consignes ?) : {% for row in deposits %}{{ row.line.name }}{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+        <div class="form-actions">
+            {% for category in deposit_categories %}
+            <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer aucun article de la catégorie « {{ category }} » ?">
+                {% csrf_token %}
+                <input type="hidden" name="{{ category_param }}" value="{{ category }}">
+                <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                <button class="btn btn-secondary" type="submit">Exclure la catégorie « {{ category }} »</button>
+            </form>
+            {% endfor %}
+            {% for row in deposits_without_category %}
+            <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer « {{ row.line.name }} » dans aucune enseigne ?">
+                {% csrf_token %}
+                <input type="hidden" name="{{ article_param }}" value="{{ row.line.article_id }}">
+                <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                <button class="btn btn-secondary" type="submit">Ne plus proposer « {{ row.line.name }} »</button>
+            </form>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </details>
+    {% endif %}
+{% endblock %}

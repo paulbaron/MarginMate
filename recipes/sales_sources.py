@@ -1,0 +1,99 @@
+"""Where the sales come from: the sites an automatic sales import may fetch
+from (recipes/auto_sales.py), in the order its form offers them.
+
+Today one entry, « laddition » (« L'Addition (caisse) »): available where
+the server's L'Addition account may be used (`integration.till_allowed`, the
+owner's espace), it runs the EXISTING `tasks.import_laddition_sales_task`
+through a SalesImportJob - the same import the Ventes tab starts.
+
+**Adding another site** is an entry here and nothing else in the
+scheduling: a key (slug-safe, stored in `AutoSalesImport.source` - never
+renamed), its label, `available` (whether this espace may use it) and the
+sentence said where it may not, its job's label, and `task`, the dotted path
+of its own import task - a function `(job_id, start, end)` run in a bound
+thread, which downloads that site's sales of [start, end] and records the
+same day-level sales the till's do (`recipes.sales.record_sales`,
+`PosProductDailyQuantity`), sets the SalesImportJob's status, and ends with
+`auto_sales.finish(job, fields=…, …)` as the till's task does: its final
+status saved in one transaction with its coverage, then its alert. The rule's form, its page, its slots, its period (the source's own
+coverage code `ventes-<key>`) and the one-import-at-a-time start are
+shared.
+
+A rule naming a key this registry no longer has is « source inconnue »:
+skipped with that result, never a 500.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from django.utils.module_loading import import_string
+
+
+@dataclass(frozen=True)
+class SalesSource:
+    key: str
+    label: str
+    #: Whether the bound espace may use this site.
+    available: Callable[[], bool]
+    #: Said where it may not (a sentence).
+    unavailable_reason: Callable[[], str]
+    #: What its job is called in the log and the running-jobs list.
+    job_label: str
+    #: The dotted path of its import task, `(job_id, start, end)`.
+    task: str
+
+
+def _till_allowed() -> bool:
+    from .integration import till_allowed
+
+    return till_allowed()
+
+
+def _till_refusal() -> str:
+    from .integration import refusal
+
+    return refusal()
+
+
+LADDITION = "laddition"
+
+SOURCES: dict[str, SalesSource] = {
+    LADDITION: SalesSource(
+        key=LADDITION,
+        label="L'Addition (caisse)",
+        available=_till_allowed,
+        unavailable_reason=_till_refusal,
+        job_label="import des ventes de la caisse",
+        task="recipes.tasks.import_laddition_sales_task",
+    ),
+}
+
+
+def source(key) -> SalesSource | None:
+    """The entry of `key`, None for a key this registry does not have."""
+    return SOURCES.get(key) if isinstance(key, str) else None
+
+
+def choices() -> list[tuple[str, str]]:
+    """The rule form's « Source » select, in the registry's order."""
+    return [(entry.key, entry.label) for entry in SOURCES.values()]
+
+
+def start(entry: SalesSource, start_day=None, end_day=None, *, trigger: str, auto_rule_id=None, notes=(), plan=None):
+    """Start `entry`'s import of [start_day, end_day] - or of what `plan`
+    decides under the lock - through the one start of a sales import
+    (importing.start_sales_import): its job, None when another sales import
+    is running, or the plan's sentence when it found nothing to import."""
+    from .importing import start_sales_import
+
+    return start_sales_import(
+        start_day,
+        end_day,
+        trigger=trigger,
+        auto_rule_id=auto_rule_id,
+        task=import_string(entry.task),
+        notes=notes,
+        plan=plan,
+    )

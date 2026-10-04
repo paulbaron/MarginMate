@@ -1,9 +1,11 @@
 {% extends "accounts/page.html" %}
+{% load assets %}
 {% comment %}
 The login page (accounts.pages.LoginPage). Context: `form` (LoginForm), `next` (already checked: a
 URL of this site, or blank), `refused` (too many failures). The link to the signup is always there.
 {% endcomment %}
 {% block title %}Connexion - MarginMate{% endblock %}
+{% block scripts %}<script src="{% asset 'js/login_next.js' %}" defer></script>{% endblock %}
 {% block content %}
     <section class="public-card account-card">
         <h1>Connexion</h1>

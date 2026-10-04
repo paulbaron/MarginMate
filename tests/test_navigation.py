@@ -21,7 +21,7 @@ from django.urls import resolve, reverse
 from django.utils.html import escape
 
 from config import navigation
-from inventory.models import GapExclusion, GapFillEntry, StockType
+from inventory.models import GapExclusion, GapFillEntry, ShoppingExclusion, StockType
 from recipes.models import PosProduct
 from staff.models import Employee
 from tests.factories import (
@@ -33,7 +33,7 @@ from tests.factories import (
     make_supplier,
 )
 from tests.runner import employee_of_the_test_tenant
-from tests.test_views_smoke import make_gaps_to_fill
+from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history
 
 LABELS = [
     "Produits &amp; charges",
@@ -121,11 +121,21 @@ class NavigationTests(TestCase):
         self.assertContains(self.client.get(gap_filler, {"depuis": take.pk}), 'id="a-encaisser"')
         # And one count with no list: the latest, so the page with none.
         make_stock_take()
+        # « Prévoir les courses », reached from the products page's header:
+        # a store's list, another's, and the rhythm of every article.
+        shopping = make_shopping_history()
+        shopping_list = reverse("inventory:shopping_list")
+        shopping_rhythm = reverse("inventory:shopping_rhythm")
         pages = {
             "Produits &amp; charges": [
                 reverse("inventory:stock_list"),
                 reverse("inventory:stock_type_update", args=[stock_type.pk]),
                 reverse("inventory:stock_type_create"),
+                shopping_list,
+                f"{shopping_list}?fournisseur={shopping.grocer.pk}&dans=30",
+                f"{shopping_list}?fournisseur=abc&dans=abc",
+                shopping_rhythm,
+                f"{shopping_rhythm}?fournisseur={shopping.wholesaler.pk}",
             ],
             "Factures": [
                 reverse("invoices:invoice_list"),
@@ -137,6 +147,8 @@ class NavigationTests(TestCase):
                 reverse("invoices:invoice_detail", args=[invoice.pk]),
                 reverse("invoices:invoice_edit_lines", args=[invoice.pk]),
                 reverse("invoices:invoice_create_manual"),
+                # « Récupération automatique », reached from Factures' card.
+                reverse("invoices:auto_gathers"),
                 # « Ajouter des factures »: the import's form on a page of its own.
                 reverse("invoices:invoice_add"),
             ],
@@ -147,6 +159,8 @@ class NavigationTests(TestCase):
                 reverse("recipes:pos_product_list"),
                 reverse("recipes:sales_list"),
                 reverse("recipes:sale_document_create"),
+                # « Import automatique des ventes », reached from the Ventes tab.
+                reverse("recipes:auto_sales"),
             ],
             "Inventaires": [
                 reverse("inventory:stock_take_list"),
@@ -178,7 +192,16 @@ class NavigationTests(TestCase):
                 reverse("returnables:format_edit", args=[seeded_format().pk]),
                 reverse("returnables:type_list"),
             ],
-            "Données": [reverse("transfer:data_home"), reverse("transfer:data_import"), reverse("transfer:data_clear")],
+            "Données": [
+                reverse("transfer:data_home"),
+                reverse("transfer:data_import"),
+                reverse("transfer:data_clear"),
+                # « Notifications », reached from Données' header like
+                # « Identifiants »: no link of its own.
+                reverse("notifications:home"),
+                reverse("notifications:reminders"),
+                reverse("notifications:events"),
+            ],
         }
         for label, urls in pages.items():
             for url in urls:
@@ -244,6 +267,45 @@ class NavigationTests(TestCase):
                 self.assertEqual(active_labels(response), ["Inventaires"])
                 self.assertEqual(section_shown(response), "Inventaires")
         self.assertEqual(navigation.section_of(resolve(recent)), "stock_takes")
+
+    def test_the_shopping_forms_land_on_produits_et_charges(self):
+        """« Prévoir les courses »' forms - « Réglages », « Pas ici », « Ne
+        plus proposer », « Ne jamais proposer la catégorie », « Réinclure »,
+        refused or not - and « Rythme d'achat »'s own: every page they land
+        on is « Produits & charges », the folded bar saying so, and so is
+        each of their routes. None is an « Inventaires » page."""
+        made = make_shopping_history()
+        store = made.wholesaler.pk
+        settings = reverse("inventory:shopping_settings")
+        exclude = reverse("inventory:shopping_exclude")
+        include = reverse("inventory:shopping_include")
+        landed = [
+            self.client.post(settings, {"fournisseur": store, "seuil": "30", "memoire": "6"}, follow=True),
+            self.client.post(settings, {"fournisseur": store, "seuil": "abc"}, follow=True),
+            self.client.post(settings, {"fournisseur": store, "defaut": "1"}, follow=True),
+            self.client.post(
+                exclude, {"fournisseur": store, "article": made.syrup.pk, "chez": store, "retour": "liste"}, follow=True
+            ),
+            self.client.post(exclude, {"fournisseur": store, "categorie": "Consignes exemple"}, follow=True),
+            self.client.post(exclude, {"fournisseur": store, "article": "abc"}, follow=True),
+            self.client.post(exclude, {"fournisseur": store, "article": made.rum.pk, "retour": "rythme"}, follow=True),
+            self.client.post(
+                include,
+                {"fournisseur": store, "exclusion": ShoppingExclusion.objects.get(category="Consignes exemple").pk},
+                follow=True,
+            ),
+            self.client.post(include, {"fournisseur": store, "exclusion": "999999"}, follow=True),
+            self.client.get(exclude, follow=True),
+        ]
+        for number, response in enumerate(landed):
+            with self.subTest(page=number):
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(active_labels(response), ["Produits &amp; charges"])
+                self.assertEqual(section_shown(response), "Produits &amp; charges")
+        for name in ("shopping_list", "shopping_rhythm", "shopping_settings", "shopping_exclude", "shopping_include"):
+            with self.subTest(route=name):
+                self.assertNotIn(name, navigation.STOCK_TAKE_VIEWS)
+                self.assertEqual(navigation.section_of(resolve(reverse(f"inventory:{name}"))), "products")
 
     def test_every_section_has_its_words(self):
         """A section navigation can light with no words in SECTION_LABELS

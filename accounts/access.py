@@ -11,7 +11,10 @@ the owner's alone (`OWNER_ONLY_PAGES`): « Données », « Identifiants »,
 bar's daily work - the sources of invoices (a mailbox search shows every
 sender and subject), the slips' formats (they decide which PDF Achats files
 as a slip), the timesheets' signatures (an employee would sign as his
-employer), deleting a stock take. The admin keeps its own gate (superusers,
+employer), deleting a stock take, the reminders, alerts and automatic
+gathers and sales imports (they write to every phone, search the mailbox
+and sign in to the till on their own). Each login's own notification
+devices are every login's. The admin keeps its own gate (superusers,
 accounts/admin_site.py).
 
 **Deny by default.** Every route of the project is named here, through its
@@ -145,6 +148,7 @@ OWNER_ONLY_PAGES = (
     "les formats et types de consignes",
     "les signatures des fiches de temps",
     "la suppression d'un inventaire",
+    "les rappels, alertes, récupérations et imports automatiques",
 )
 
 #: No area opens it: the owner's alone.
@@ -163,6 +167,10 @@ APP_AREAS = {
     "returnables": frozenset({"returnables"}),
     "transfer": OWNER_ONLY,
     "accounts": OWNER_ONLY,
+    # The reminders, the alerts and the night's hour (notifications/): the
+    # owner's - they write to every phone of the espace. Each login's own
+    # devices are every login's (VIEW_AREAS).
+    "notifications": OWNER_ONLY,
 }
 
 _ADDING = frozenset({"invoices", "invoices_add"})
@@ -189,6 +197,17 @@ VIEW_AREAS = {
     # sender and subject it matches) or types his portals' passwords.
     "invoices:invoice_type_create": OWNER_ONLY,
     "invoices:invoice_type_update": OWNER_ONLY,
+    # « Récupération automatique » searches the owner's mailbox on its own,
+    # at the hours its rules say (invoices/auto_gather.py); its runs list
+    # what each source found.
+    "invoices:auto_gathers": OWNER_ONLY,
+    "invoices:auto_gather_edit": OWNER_ONLY,
+    "invoices:auto_gather_delete": OWNER_ONLY,
+    # « Import automatique des ventes » signs in to the till's account,
+    # the owner's (recipes/auto_sales.py).
+    "recipes:auto_sales": OWNER_ONLY,
+    "recipes:auto_sales_edit": OWNER_ONLY,
+    "recipes:auto_sales_delete": OWNER_ONLY,
     # « Inventaires »: counting. Pricing a line is what an inventory shows
     # to one who sees what articles cost (Access.sees_costs); deleting a
     # count is the owner's (it froze the stock's value at its date).
@@ -248,6 +267,17 @@ VIEW_AREAS = {
     # again (the admin's own gate sends a superuser there).
     "accounts:no_access": EVERYONE,
     "accounts:confirm_password": EVERYONE,
+    # « Notifications »: each login's own devices (notifications/devices.py
+    # - the membership is always the request's). static/js/push_sync.js
+    # calls the key and the sync from every logged-in page, an employee's
+    # too: refused, his phone would stop receiving his reminders. On the
+    # page, a member sees « Cet appareil » and « Mes appareils » only.
+    "notifications:home": EVERYONE,
+    "notifications:key": EVERYONE,
+    "notifications:subscribe": EVERYONE,
+    "notifications:sync": EVERYONE,
+    "notifications:device_delete": EVERYONE,
+    "notifications:test": EVERYONE,
 }
 
 #: A stored file's areas, by the top folder its model files it under

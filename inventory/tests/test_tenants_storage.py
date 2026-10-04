@@ -46,6 +46,9 @@ STORAGE_FILES = (
     "static/js/receipt_camera.js",
     # « Consignes »: the pickup not sent yet (its counts, its note).
     "static/js/returnables.js",
+    # The notifications' sync: when it last told the server this browser's
+    # subscription (a hash of it, never the endpoint) - a draft.
+    "static/js/push_sync.js",
 )
 
 #: The one script that builds no key: it moves a session-from-before's keys,

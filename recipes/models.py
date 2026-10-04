@@ -831,9 +831,20 @@ class SalesImportJob(JobLogMixin):
         FAILED = "FAILED", "Échoué"
         CANCELLED = "CANCELLED", "Annulé"
 
+    class Trigger(models.TextChoices):
+        """Who started an import: a person (the Ventes tab's « Récupérer les
+        ventes ») or an AutoSalesImport's slot (recipes/auto_sales.py)."""
+
+        MANUAL = "manual", "à la main"
+        AUTOMATIC = "automatic", "automatique"
+
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     range_start = models.DateField(null=True, blank=True)
     range_end = models.DateField(null=True, blank=True)
+    trigger = models.CharField(max_length=10, choices=Trigger.choices, default=Trigger.MANUAL)
+    #: The AutoSalesImport an automatic import was started for - a plain id:
+    #: deleting the rule keeps its runs.
+    auto_rule_id = models.PositiveIntegerField(null=True, blank=True)
     # A thread can't be killed safely, so cancelling is cooperative: this is
     # checked between date windows and the run stops itself.
     cancel_requested = models.BooleanField(default=False)
@@ -860,6 +871,66 @@ class SalesImportJob(JobLogMixin):
         self.log = f"{self.log}{line}\n" if self.log else f"{line}\n"
         self.last_heartbeat = now
         self.save(update_fields=["log", "last_heartbeat"])
+
+    @property
+    def is_automatic(self) -> bool:
+        return self.trigger == self.Trigger.AUTOMATIC
+
+
+class AutoSalesImport(models.Model):
+    """A sales import run by itself (recipes/auto_sales.py, from the scheduler
+    of `manage.py serve`): its source (a key of recipes/sales_sources.py,
+    « laddition » today), its days (calendar days, Python's weekday,
+    "0,1,2,3,4,5,6") and its times ("07:00 12:00", normalised by
+    notifications.schedule.parse_times, 1 to MAX_TIMES).
+
+    Separate from the automatic gathers of invoices and bons
+    (invoices.AutoGather): its own rules, page and job, on the same slot
+    machinery (notifications/automation.py).
+
+    `last_slot_at`, `last_result` and `last_failed` are the scheduler's: a
+    form never writes them (only `last_slot_at` = now on a creation, a
+    re-activation or a new schedule, through its own update, so
+    « Enregistrer » never runs an import at once). `last_failed` is the
+    local day of the last failed automatic import (None once one succeeds).
+    In no « Données » section: never exported, imported or cleared."""
+
+    #: At most this many per espace.
+    MAX_PER_TENANT = 5
+    #: At most this many times a day.
+    MAX_TIMES = 6
+
+    name = models.CharField("nom", max_length=80)
+    source = models.CharField("source", max_length=40, default="laddition")
+    weekdays = models.CharField("jours", max_length=14)
+    times = models.CharField("heures", max_length=120)
+    is_active = models.BooleanField("actif", default=True)
+    last_slot_at = models.DateTimeField(null=True, blank=True)
+    last_result = models.CharField(max_length=200, blank=True)
+    last_failed = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "import automatique des ventes"
+        verbose_name_plural = "imports automatiques des ventes"
+
+    def __str__(self):
+        return self.name
+
+    def weekday_list(self) -> tuple[int, ...]:
+        """The days stored ("1,4"), sorted; ValueError on anything else."""
+        from notifications.schedule import parse_weekdays
+
+        return parse_weekdays(self.weekdays)
+
+    def time_list(self) -> tuple:
+        """The times stored ("07:00 12:00"), sorted; ValueError on anything
+        else."""
+        from notifications.schedule import parse_times
+
+        return parse_times(self.times)
 
 
 class PosProduct(models.Model):

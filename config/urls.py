@@ -14,6 +14,10 @@ urlpatterns = [
     path("donnees/", include("transfer.urls")),
     path("personnel/", include("staff.urls")),
     path("consignes/", include("returnables.urls")),
+    # The notifications, their full paths written in their urls.py: /sw.js
+    # and /manifest.webmanifest belong at the root (a service worker's scope
+    # is its folder). Before the two root includes below.
+    path("", include("notifications.urls")),
     # Logins and a tenant's stored files (accounts/urls.py).
     path("", include("accounts.urls")),
     path("", include("inventory.urls")),

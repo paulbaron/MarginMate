@@ -59,7 +59,33 @@ from tests.test_navigation import LABELS, active_labels, label_of, nav_links
 
 NO_ACCESS = reverse("accounts:no_access")
 #: The routes every login of the espace opens, whatever is ticked.
-EVERYONE_ROUTES = ["accounts:confirm_password", "accounts:media", "accounts:no_access"]
+EVERYONE_ROUTES = [
+    "accounts:confirm_password",
+    "accounts:media",
+    "accounts:no_access",
+    # Each login's own notification devices (notifications/devices.py).
+    "notifications:device_delete",
+    "notifications:home",
+    "notifications:key",
+    "notifications:subscribe",
+    "notifications:sync",
+    "notifications:test",
+]
+#: The reminders, alerts and automatic runs: the owner's, whatever is ticked.
+AUTOMATION_ROUTES = (
+    "notifications:reminders",
+    "notifications:reminder_edit",
+    "notifications:reminder_delete",
+    "notifications:night",
+    "notifications:events",
+    "notifications:event_edit",
+    "invoices:auto_gathers",
+    "invoices:auto_gather_edit",
+    "invoices:auto_gather_delete",
+    "recipes:auto_sales",
+    "recipes:auto_sales_edit",
+    "recipes:auto_sales_delete",
+)
 
 
 def member(pages=()):
@@ -331,6 +357,7 @@ class ClassificationTests(SimpleTestCase):
             "staff:signature_send",
             "staff:signature_countersign",
             "staff:signature_delete",
+            *AUTOMATION_ROUTES,
         ):
             with self.subTest(name=name):
                 self.assertFalse(everything.allows_any(areas_of_route(name, app_of(name))))
@@ -401,6 +428,7 @@ class MemberSweepTests(TestCase):
             "staff:signature_countersign",
             "staff:signature_delete_confirm",
             "staff:month_reopen",
+            *AUTOMATION_ROUTES,
         ):
             with self.subTest(owner_only=name):
                 self.assertIn(name, refused)

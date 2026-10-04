@@ -420,6 +420,8 @@ class ServeTests(TenancyTestCase):
         self.tenant = self.make_tenant("Bar Essai")
         self.static_root = Path(tempfile.mkdtemp(prefix="marginmate-tests-static-"))
         self.enterContext(override_settings(STATIC_ROOT=self.static_root))
+        #: Stands for notifications.scheduler.start in every run_serve.
+        self.scheduler = mock.Mock(name="notifications.scheduler.start")
 
     def run_serve(self, *args, server=None, collect=False):
         """`manage.py serve *args`, with Waitress faked: (stdout, stderr,
@@ -446,6 +448,9 @@ class ServeTests(TenancyTestCase):
         self.out, self.err, self.calls, self.server = out, err, calls, server
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch("waitress.create_server", fake_create_server))
+            # Never a real scheduler thread here: what it would start, and
+            # whether it was stopped (`self.scheduler`, made in setUp).
+            stack.enter_context(mock.patch("notifications.scheduler.start", self.scheduler))
             # collectstatic, unless the test wants it run for real.
             self.collected = None if collect else stack.enter_context(mock.patch.object(serve, "call_command"))
             call_command("serve", *args, stdout=out, stderr=err)
@@ -478,12 +483,52 @@ class ServeTests(TenancyTestCase):
         # collectstatic ran: WhiteNoise serves STATIC_ROOT.
         self.assertTrue((self.static_root / "css" / "marginmate.css").is_file())
         self.assertIn("Vérifications : tout est en ordre.", out)
-        self.assertIn(f"En ligne sur http://127.0.0.1:{port}/", out)
+        self.assertLess(
+            out.index("Rappels et récupérations automatiques : actifs."),
+            out.index(f"En ligne sur http://127.0.0.1:{port}/"),
+        )
         self.assertIn("Ctrl+C pour arrêter.", out)
         self.assertTrue(out.rstrip().endswith("Serveur arrêté."))
         # Another port than the tunnel's is not called the tunnel's address.
         self.assertNotIn("c'est l'adresse du tunnel Cloudflare", out)
         self.assertIn(f"le tunnel Cloudflare vise le port {serve.DEFAULT_PORT}", out)
+
+    def test_the_scheduler_runs_while_it_serves_and_stops_with_it(self):
+        """Started once the socket is the server's and before it runs, said
+        before « En ligne », stopped on the way out - Ctrl+C included."""
+        order = []
+        server = FakeServer(on_run=lambda: order.append("run"))
+        self.scheduler.side_effect = lambda: order.append("start") or self.scheduler.return_value
+        self.scheduler.return_value.stop.side_effect = lambda **kw: order.append(("stop", kw))
+        out, err, _, _ = self.run_serve("--port", str(free_port()), server=server)
+        self.assertEqual(err, "")
+        self.assertEqual(order, ["start", "run", ("stop", {"timeout": 5})])
+        self.scheduler.assert_called_once_with()
+        lines = out.splitlines()
+        said = lines.index("Rappels et récupérations automatiques : actifs.")
+        online = next(n for n, line in enumerate(lines) if line.startswith("En ligne sur"))
+        self.assertLess(said, online)
+        self.assertTrue(out.rstrip().endswith("Serveur arrêté."))
+
+        def interrupted():
+            raise KeyboardInterrupt
+
+        self.scheduler = mock.Mock(name="notifications.scheduler.start")
+        self.run_serve("--port", str(free_port()), server=FakeServer(on_run=interrupted))
+        self.scheduler.assert_called_once_with()
+        self.scheduler.return_value.stop.assert_called_once_with(timeout=5)
+
+    def test_the_scheduler_never_starts_for_the_checks_nor_a_port_refused(self):
+        self.run_serve("--verifier")
+        self.scheduler.assert_not_called()
+        other = socket.socket()
+        self.addCleanup(other.close)
+        other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        with self.assertRaises(CommandError):
+            self.run_serve("--port", str(other.getsockname()[1]))
+        self.scheduler.assert_not_called()
 
     def test_on_the_tunnel_s_port_it_says_so(self):
         port = free_port()

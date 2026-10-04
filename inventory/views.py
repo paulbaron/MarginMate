@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from collections import Counter
 from datetime import date, timedelta
@@ -27,6 +28,7 @@ from common import (
     format_money,
     group_thousands,
     is_id,
+    plain_number,
     read_amount,
     read_number,
     search_key,
@@ -62,6 +64,8 @@ from .models import (
     GapFillSetting,
     MovementKind,
     Product,
+    ShoppingExclusion,
+    ShoppingSetting,
     StockMovement,
     StockTake,
     StockTakeLine,
@@ -80,6 +84,20 @@ from .services import (
     value_counted_quantity,
     value_counted_stock_type_quantity,
 )
+from .shopping import (
+    DROPPED_LABEL,
+    ELSEWHERE_LAST,
+    FEW_PURCHASES,
+    NAG_VISITS_HABIT,
+    NAG_VISITS_LIFTED,
+    PAUSED_LABEL,
+    QTY_LAST,
+    plan_store,
+    rhythms,
+    store_choices,
+    till_note,
+)
+from .shopping_data import prepare, settings_from
 from .variance import (
     PeriodStock,
     SoldQuantity,
@@ -1673,7 +1691,7 @@ def stock_gap_filler(request):
     shows the list, the last entry to ring up first. A count that cannot be
     read falls back to the latest, never a 500: it arrives from an address."""
     takes = list(StockTake.objects.order_by("-taken_at"))
-    said = _messages_by_place(request)
+    said = _messages_by_place(request, GAP_FILLER_PLACES)
     context = {
         "top_messages": said[""],
         "gap_messages": said[GAPS_MESSAGES],
@@ -1826,18 +1844,20 @@ EXCLUSION_PARAM = "exclusion"
 #: top of the page - so the message is said there, as Marges does.
 GAPS_MESSAGES = "ecarts"
 EXCLUSION_MESSAGES = "exclusions"
+GAP_FILLER_PLACES = (GAPS_MESSAGES, EXCLUSION_MESSAGES)
 
 
-def _messages_by_place(request) -> dict[str, list]:
-    """{place: messages} - "" the top of the page, GAPS_MESSAGES above the
-    gaps, EXCLUSION_MESSAGES in « Exclus des écarts ». Read once, which also
-    marks them said."""
-    places: dict[str, list] = {"": [], GAPS_MESSAGES: [], EXCLUSION_MESSAGES: []}
+def _messages_by_place(request, places: tuple[str, ...]) -> dict[str, list]:
+    """{place: messages} - "" the top of the page, then each of `places`
+    (the extra tag a view gave the message) where the page says it: above
+    the gaps, in « Exclus des écarts », above « À acheter »… A message
+    tagged with none of them goes to the top. Read once, which also marks
+    them said."""
+    said: dict[str, list] = {"": [], **{place: [] for place in places}}
     for message in get_messages(request):
         tags = (message.extra_tags or "").split()
-        place = next((tag for tag in (GAPS_MESSAGES, EXCLUSION_MESSAGES) if tag in tags), "")
-        places[place].append(message)
-    return places
+        said[next((place for place in places if place in tags), "")].append(message)
+    return said
 
 
 def _back_to_the_gaps(request, anchor: str = ""):
@@ -2162,3 +2182,516 @@ def stock_take_delete(request, pk):
     stock_take.delete()
     messages.success(request, "Inventaire supprimé.")
     return redirect("inventory:stock_take_list")
+
+
+# ---------------------------------------------------------------------------
+# « Prévoir les courses »: inventory/shopping.py plans, inventory/shopping_data.py reads
+# ---------------------------------------------------------------------------
+
+#: The store the list is drawn for (`fournisseur`, a supplier's id - the
+#: invoice list's own parameter) and how long a purchase made there today
+#: must last, until the visit after it (`dans`; none: the store's usual
+#: gap). In the address, and carried by every form of the page, so that its
+#: answer comes back to the same list.
+STORE_PARAM = "fournisseur"
+HORIZON_PARAM = "dans"
+#: « … jusqu'au passage suivant, dans … jours »: what may be typed, both
+#: ends included.
+HORIZON_RANGE = (1, 90)
+#: From this many visits a store's usual gap is its own (shopping._usual_gap
+#: measures the median of its gaps from two of them); under it the gap is
+#: shopping.DEFAULT_GAP_DAYS. The menu says « tous les N jours » and the list
+#: « (votre rythme ici) » from it only - « (par défaut) » under it.
+GAP_MIN_VISITS = 3
+#: « Pas ici »: the store an article is no longer proposed at. A field of
+#: its own: `fournisseur` only says which list to go back to, and « Ne plus
+#: proposer » (everywhere) carries it too.
+EXCLUDED_STORE_PARAM = "chez"
+#: Where an exclusion form's answer lands (`retour`): above « À acheter »
+#: (a line of the list), in « Exclusions » (a fold; the default), or back on
+#: « Rythme d'achat ».
+LANDING_PARAM = "retour"
+LIST_MESSAGES = "liste"
+SETTINGS_MESSAGES = "reglages"
+RHYTHM_LANDING = "rythme"
+#: Where the list says a form's message (its extra tag), and the anchor its
+#: redirect opens the page at: screens under the top, a message said at the
+#: top went unseen (the gap filler's lesson).
+SHOPPING_ANCHORS = {LIST_MESSAGES: "a-acheter", SETTINGS_MESSAGES: "reglages", EXCLUSION_MESSAGES: "exclusions"}
+SHOPPING_PLACES = tuple(SHOPPING_ANCHORS)
+#: « Réglages » (ShoppingSetting): the fields, and the button putting the
+#: defaults back.
+THRESHOLD_PARAM = "seuil"
+MEMORY_PARAM = "memoire"
+TILL_PARAM = "caisse"
+DEFAULTS_PARAM = "defaut"
+
+HORIZON_ERROR = "Passage suivant : un nombre de jours de {} à {}.".format(*HORIZON_RANGE)
+THRESHOLD_ERROR = "Seuil : un nombre entier de {} à {}.".format(*ShoppingSetting.THRESHOLD_RANGE)
+MEMORY_ERROR = "Mémoire : un nombre de mois de {} à {}.".format(*ShoppingSetting.MEMORY_RANGE)
+#: An article's unit as the page writes it after a quantity: « 3 L », « 12 u. ».
+UNIT_SYMBOLS = {UnitChoices.LITRE: "L", UnitChoices.KILOGRAM: "kg", UnitChoices.UNIT: "u."}
+#: A line's labels, coloured: silent far past its rhythm (amber, to check);
+#: « historique court » muted.
+BADGE_CLASSES = {DROPPED_LABEL: "status-pending", PAUSED_LABEL: "status-pending"}
+QUIET_BADGE_CLASS = "status-ignored"
+
+
+def read_bounded_number(typed: str | None, low: int, high: int) -> int | None:
+    """The whole number typed if it is ASCII digits from `low` to `high`,
+    else None. « ٣ » is a digit to Python; and more digits than `high` has
+    are out of range whatever they say - never handed to int(), which
+    refuses a few thousand of them."""
+    typed = (typed or "").strip()
+    if not re.fullmatch(r"[0-9]+", typed):
+        return None
+    digits = typed.lstrip("0") or "0"
+    if len(digits) > len(str(high)):
+        return None
+    number = int(digits)
+    return number if low <= number <= high else None
+
+
+def _whole(value: float) -> int:
+    """A count of days or articles as the page says it: rounded half up."""
+    return math.floor(value + 0.5)
+
+
+def _days_ago(day: date, today: date) -> str:
+    days = (today - day).days
+    if days <= 0:
+        return "aujourd'hui"
+    if days == 1:
+        return "hier"
+    return f"il y a {days} jours"
+
+
+def _shopping_url(
+    store_id: int | None = None, horizon: int | None = None, anchor: str = "", name: str = "inventory:shopping_list"
+) -> str:
+    query = {}
+    if store_id is not None:
+        query[STORE_PARAM] = store_id
+    if horizon is not None:
+        query[HORIZON_PARAM] = horizon
+    url = f"{reverse(name)}?{urlencode(query)}" if query else reverse(name)
+    return f"{url}#{anchor}" if anchor else url
+
+
+def _offered_store(asked: str):
+    """The supplier `asked` names, if the page offers it: bought at, neither
+    a supplier of charges nor the AI pseudo-supplier (shopping_data's
+    `offered_stores`, for one id). None otherwise."""
+    from invoices.models import Supplier
+    from invoices.parsers import LLM_PARSER_KEY
+
+    if not is_id(asked):
+        return None
+    store = Supplier.objects.filter(pk=int(asked), expenses_only=False).exclude(parser_key=LLM_PARSER_KEY).first()
+    if store is None:
+        return None
+    bought = StockMovement.objects.filter(
+        kind=MovementKind.PURCHASE, quantity__gt=0, invoice_line__invoice__supplier=store
+    ).exists()
+    return store if bought else None
+
+
+def _shopping_landing(request) -> str:
+    """Where an exclusion form's answer lands (`retour`)."""
+    asked = request.POST.get(LANDING_PARAM, "")
+    return asked if asked in (LIST_MESSAGES, RHYTHM_LANDING) else EXCLUSION_MESSAGES
+
+
+def _said_at(landing: str) -> str:
+    """The extra tag of a message said where `landing` lands: none on
+    « Rythme d'achat », which says every message at its top."""
+    return "" if landing == RHYTHM_LANDING else landing
+
+
+def _back_to_the_list(request, landing: str):
+    """The list the form came from - its store, its days - opened where its
+    message is said; or « Rythme d'achat », with its store."""
+    store = _offered_store(request.POST.get(STORE_PARAM, ""))
+    store_id = store.pk if store is not None else None
+    if landing == RHYTHM_LANDING:
+        return redirect(_shopping_url(store_id, name="inventory:shopping_rhythm"))
+    horizon = read_bounded_number(request.POST.get(HORIZON_PARAM), *HORIZON_RANGE)
+    return redirect(_shopping_url(store_id, horizon, SHOPPING_ANCHORS.get(landing, "")))
+
+
+def _shopping_params() -> dict:
+    """The fields' names, for the templates."""
+    return {
+        "store_param": STORE_PARAM,
+        "horizon_param": HORIZON_PARAM,
+        "excluded_store_param": EXCLUDED_STORE_PARAM,
+        "landing_param": LANDING_PARAM,
+        "article_param": EXCLUDED_ARTICLE_PARAM,
+        "category_param": EXCLUDED_CATEGORY_PARAM,
+        "exclusion_param": EXCLUSION_PARAM,
+        "threshold_param": THRESHOLD_PARAM,
+        "memory_param": MEMORY_PARAM,
+        "till_param": TILL_PARAM,
+        "defaults_param": DEFAULTS_PARAM,
+    }
+
+
+def _chosen_store(asked: str, choices):
+    return next((choice for choice in choices if is_id(asked) and choice.store_id == int(asked)), None)
+
+
+def _store_options(choices, prepared, today: date) -> tuple[list, list]:
+    """The « Enseigne » menu: (the stores visited lately, « Autres
+    enseignes »), each (id, « Grossiste exemple — tous les 7 jours, dernier
+    passage il y a 3 jours »). A rhythm only from GAP_MIN_VISITS visits:
+    under that, the usual gap is the default, not the store's."""
+    regular, rare = [], []
+    for choice in choices:
+        words = [choice.name]
+        if len(prepared.visits.get(choice.store_id, ())) >= GAP_MIN_VISITS:
+            gap = _whole(choice.usual_gap)
+            words.append("tous les jours" if gap <= 1 else f"tous les {gap} jours")
+        said = f"{words[0]} — " + ", ".join([*words[1:], f"dernier passage {_days_ago(choice.last_visit, today)}"])
+        (rare if choice.rare else regular).append((choice.store_id, said))
+    return regular, rare
+
+
+def _chance_percent(chance: float) -> int:
+    """The chance as a whole percent, rounded down: a line at the threshold
+    never reads under it, one under it never reads at it."""
+    return math.floor(chance * 100 + 1e-9)
+
+
+def _quantity_words(line, horizon: int | None) -> tuple[str, str]:
+    """(what to buy, the article units under it): « 12 × BIERE (2 colis de
+    6) » and « 3 L »; « 2 × (12 × BIERE) — pour 30 jours » for a typed
+    horizon longer than the usual gap; the article units alone when the
+    usual product is unknown or bought by measure."""
+    unit = UNIT_SYMBOLS.get(line.unit, "")
+    article = f"{plain_number(line.total_qty)} {unit}".rstrip()
+    longer = f" — pour {horizon} jours" if line.multiplier > 1 and horizon else ""
+    if line.product_units is None:
+        return article + longer, ""
+    count = f"{plain_number(line.product_units)} × {line.product_name}"
+    if line.packs is not None:
+        count += f" ({line.packs[0]} colis de {plain_number(line.packs[1])})"
+    if line.multiplier > 1:
+        count = f"{line.multiplier} × ({count})"
+    return count + longer, article
+
+
+def _line_rows(lines, horizon: int | None) -> list[dict]:
+    """A section's lines as its table draws them."""
+    rows = []
+    for line in lines:
+        quantity, article_quantity = _quantity_words(line, horizon)
+        rows.append(
+            {
+                "line": line,
+                "quantity": quantity,
+                "article_quantity": article_quantity,
+                "percent": _chance_percent(line.chance),
+                "chance_sort": f"{line.chance:.4f}",
+                "badges": _badge_words(line.badges),
+            }
+        )
+    return rows
+
+
+def _badge_words(badges) -> list[tuple[str, str]]:
+    """A line's labels with their colours: (word, status-pill class)."""
+    return [(word, BADGE_CLASSES.get(word, QUIET_BADGE_CLASS)) for word in badges]
+
+
+def _due_rows(due_elsewhere) -> list[dict]:
+    """« À acheter ailleurs »'s lines, their labels coloured as the list's
+    (« en pause » when a recipe still sells a silent article)."""
+    return [{"due": due, "badges": _badge_words(due.badges)} for due in due_elsewhere]
+
+
+def _shopping_exclusions(prepared) -> list[dict]:
+    """« Exclusions »: each row with its words, the categories first, then
+    the articles by name. An article also left out everywhere or through
+    its category says so: taken back alone, it stays out."""
+    found = list(ShoppingExclusion.objects.select_related("stock_type", "supplier").order_by())
+    categories = {exclusion.category for exclusion in found if exclusion.stock_type_id is None}
+    everywhere = {
+        exclusion.stock_type_id for exclusion in found if exclusion.stock_type_id and not exclusion.supplier_id
+    }
+    covers = Counter(article.category or "" for article in prepared.articles.values())
+    keyed: list[tuple[tuple[bool, str, str, int], dict]] = []
+    for exclusion in found:
+        if exclusion.stock_type_id is None:
+            category = exclusion.category or ""
+            row = {"pk": exclusion.pk, "category": category, "covers": covers[category]}
+            keyed.append(((False, category.casefold(), "", exclusion.pk), row))
+            continue
+        article = exclusion.stock_type
+        store = exclusion.supplier.name if exclusion.supplier_id else ""
+        also = ""
+        if exclusion.supplier_id and article.pk in everywhere:
+            also = "exclu partout aussi"
+        elif article.category in categories:
+            also = "catégorie exclue aussi"
+        row = {"pk": exclusion.pk, "category": None, "name": article.name, "store": store, "also": also}
+        keyed.append(((True, article.name.casefold(), store.casefold(), exclusion.pk), row))
+    keyed.sort(key=lambda item: item[0])
+    return [row for _key, row in keyed]
+
+
+def _categories_to_exclude(prepared) -> list[tuple[str, int]]:
+    """The categories of the articles bought, with how many, but those
+    already left out: what « Ne jamais proposer la catégorie » offers."""
+    bought = Counter(
+        prepared.articles[article_id].category or "" for article_id in prepared.buys if article_id in prepared.articles
+    )
+    return sorted(
+        ((category, count) for category, count in bought.items() if category not in prepared.excluded.categories),
+        key=lambda item: item[0].casefold(),
+    )
+
+
+def shopping_list(request):
+    """« Prévoir les courses »: what the owner usually takes at one store on
+    the next visit, from the purchase history - each article already bought
+    there with its chance, the list from the threshold on, the rest folded
+    (inventory/shopping.py). A page drawn writes nothing. A store or a
+    number of days the address cannot give is said and set aside - the
+    most visited store, the store's usual gap -, never a 500."""
+    said = _messages_by_place(request, SHOPPING_PLACES)
+    setting = ShoppingSetting.current()
+    settings = settings_from(setting)
+    today = timezone.localdate()
+    prepared = prepare(today, settings, timezone.now())
+    choices = store_choices(prepared)
+    context = {
+        **_shopping_params(),
+        "top_messages": said[""],
+        "list_messages": said[LIST_MESSAGES],
+        "settings_messages": said[SETTINGS_MESSAGES],
+        "exclusion_messages": said[EXCLUSION_MESSAGES],
+        "setting": setting,
+        "threshold_range": ShoppingSetting.THRESHOLD_RANGE,
+        "memory_range": ShoppingSetting.MEMORY_RANGE,
+        "horizon_range": HORIZON_RANGE,
+    }
+    if not choices:
+        # No list and no fold to say them in: every message at the top.
+        context["top_messages"] = [message for place in said.values() for message in place]
+        return render(request, "inventory/shopping_list.html", context)
+
+    asked = request.GET.get(STORE_PARAM, "")
+    choice = _chosen_store(asked, choices)
+    store = choice or choices[0]
+    typed = request.GET.get(HORIZON_PARAM, "")
+    horizon = read_bounded_number(typed, *HORIZON_RANGE)
+    plan = plan_store(prepared, store.store_id, settings, horizon)
+    regular, rare = _store_options(choices, prepared, today)
+    deposits = _line_rows(plan.deposits, horizon)
+    context.update(
+        {
+            "store": store,
+            "store_not_found": bool(asked) and choice is None,
+            "regular_stores": regular,
+            "rare_stores": rare,
+            "horizon": horizon,
+            "horizon_refused": bool(typed.strip()) and horizon is None,
+            "horizon_error": HORIZON_ERROR,
+            "horizon_days": _whole(plan.horizon),
+            "usual_gap": _whole(plan.usual_gap),
+            # Under GAP_MIN_VISITS the days are the default, never « votre rythme ».
+            "gap_measured": plan.visits >= GAP_MIN_VISITS,
+            "plan": plan,
+            "basket": _whole(plan.expected_basket),
+            "last_visit_ago": _days_ago(plan.last_visit, today) if plan.last_visit else "",
+            # A store whose every article is left out: nothing to plan,
+            # though it is no first visit.
+            "all_excluded_here": not plan.candidates and bool(prepared.articles_at.get(store.store_id)),
+            "to_buy": _line_rows(plan.to_buy, horizon),
+            "maybe": _line_rows(plan.maybe, horizon),
+            "new": _line_rows(plan.new, horizon),
+            "quiet": _line_rows(plan.quiet, horizon),
+            "elsewhere": _line_rows(plan.elsewhere, horizon),
+            "elsewhere_more": plan.elsewhere_count - len(plan.elsewhere),
+            "due_elsewhere": _due_rows(plan.due_elsewhere),
+            "deposits": deposits,
+            "deposit_categories": [category for category in plan.deposit_hint_categories if category],
+            "deposits_without_category": [row for row in deposits if not row["line"].category],
+            "exclusions": _shopping_exclusions(prepared),
+            "categories_to_exclude": _categories_to_exclude(prepared),
+            # « Comment c'est calculé » says the rules with the module's own figures.
+            "rules": {
+                "few_purchases": FEW_PURCHASES,
+                "nag_lifted": NAG_VISITS_LIFTED,
+                "nag_habit": NAG_VISITS_HABIT,
+                "elsewhere_last": ELSEWHERE_LAST,
+                "quantity_last": QTY_LAST,
+            },
+        }
+    )
+    return render(request, "inventory/shopping_list.html", context)
+
+
+def _rhythm_rows(rows) -> list[dict]:
+    """« Rythme d'achat »'s rows, as its table draws them."""
+    drawn = []
+    for row in rows:
+        unit = UNIT_SYMBOLS.get(row.unit, "")
+        rhythm = ""
+        if row.median_gap is not None:
+            gap = _whole(row.median_gap)
+            rhythm = "environ tous les jours" if gap <= 1 else f"environ tous les {gap} jours"
+        habit = ""
+        if row.habit_here is not None:
+            hits, seen = row.habit_here
+            habit = f"{hits} fois sur {seen} passage{'s' if seen > 1 else ''}"
+        drawn.append(
+            {
+                "row": row,
+                "rhythm": rhythm,
+                "where": " · ".join(f"{share.name} {_whole(share.share * 100)} %" for share in row.stores),
+                "habit": habit,
+                "usual": f"{plain_number(row.usual_qty)} {unit}".rstrip(),
+                "till": ""
+                if row.till_per_week is None
+                else f"{plain_number(round(row.till_per_week, 2))} {unit}".rstrip(),
+            }
+        )
+    return drawn
+
+
+def shopping_rhythm(request):
+    """« Rythme d'achat »: every article bought, how regularly and where -
+    or only those bought at one store (`fournisseur`), with the habit
+    there. The store page's own prepared data and labels (`shopping.rhythms`):
+    « plus acheté ? », « en pause » and the next purchase agree with the
+    list. « Caisse / semaine » counts the days the till import covers, so a
+    lagging import is said, as on the list. A store the address cannot give
+    is said, and every store shown."""
+    said = _messages_by_place(request, ())
+    settings = settings_from(ShoppingSetting.current())
+    prepared = prepare(timezone.localdate(), settings, timezone.now())
+    choices = store_choices(prepared)
+    asked = request.GET.get(STORE_PARAM, "")
+    store = _chosen_store(asked, choices)
+    rows = _rhythm_rows(rhythms(prepared, settings, store.store_id if store is not None else None))
+    return render(
+        request,
+        "inventory/shopping_rhythm.html",
+        {
+            **_shopping_params(),
+            "top_messages": said[""],
+            "choices": choices,
+            "store": store,
+            "store_not_found": bool(asked) and store is None,
+            "rows": rows,
+            "till_note": till_note(prepared, settings),
+            "rhythm_landing": RHYTHM_LANDING,
+        },
+    )
+
+
+def shopping_settings(request):
+    """« Réglages » of « Prévoir les courses » (ShoppingSetting): the
+    threshold (`seuil`), the habits' memory (`memoire`) and the till
+    (`caisse`), or the defaults back (`defaut`). Read as ASCII digits within
+    the model's ranges; anything else is refused in French and nothing is
+    written. Back to the list, in the fold."""
+    if request.method != "POST":
+        return redirect("inventory:shopping_list")
+    if request.POST.get(DEFAULTS_PARAM):
+        ShoppingSetting.objects.filter(pk=ShoppingSetting.SINGLETON_PK).delete()
+        messages.success(request, "Réglages remis par défaut.", extra_tags=SETTINGS_MESSAGES)
+        return _back_to_the_list(request, SETTINGS_MESSAGES)
+    threshold = read_bounded_number(request.POST.get(THRESHOLD_PARAM), *ShoppingSetting.THRESHOLD_RANGE)
+    memory = read_bounded_number(request.POST.get(MEMORY_PARAM), *ShoppingSetting.MEMORY_RANGE)
+    if threshold is None or memory is None:
+        for error, refused in ((THRESHOLD_ERROR, threshold is None), (MEMORY_ERROR, memory is None)):
+            if refused:
+                messages.error(request, error, extra_tags=SETTINGS_MESSAGES)
+        return _back_to_the_list(request, SETTINGS_MESSAGES)
+    ShoppingSetting.objects.update_or_create(
+        pk=ShoppingSetting.SINGLETON_PK,
+        defaults={
+            "threshold_percent": threshold,
+            "memory_months": memory,
+            "use_till": bool(request.POST.get(TILL_PARAM)),
+        },
+    )
+    messages.success(request, "Réglages enregistrés.", extra_tags=SETTINGS_MESSAGES)
+    return _back_to_the_list(request, SETTINGS_MESSAGES)
+
+
+def shopping_exclude(request):
+    """Never propose an article again (`article`) - everywhere, or at one
+    store only (`chez`, « Pas ici ») - or a whole category (`categorie`, one
+    some article carries). See ShoppingExclusion. Left out everywhere, an
+    article's « Pas ici » rows go: they say nothing more. Anything that
+    cannot be read is one message, and nothing is written."""
+    if request.method != "POST":
+        return redirect("inventory:shopping_list")
+    landing = _shopping_landing(request)
+    tag = _said_at(landing)
+    article = request.POST.get(EXCLUDED_ARTICLE_PARAM, "")
+    category = request.POST.get(EXCLUDED_CATEGORY_PARAM)
+    if article:
+        stock_type = StockType.objects.filter(pk=int(article)).first() if is_id(article) else None
+        # « Pas ici » posts its store, blank or not: never read as everywhere.
+        asked_store = request.POST.get(EXCLUDED_STORE_PARAM)
+        store = _offered_store(asked_store) if asked_store is not None else None
+        if stock_type is None:
+            messages.error(request, "Article introuvable : rien n'a été exclu.", extra_tags=tag)
+        elif asked_store is not None and store is None:
+            messages.error(request, "Enseigne introuvable : rien n'a été exclu.", extra_tags=tag)
+        elif store is not None:
+            ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=store)
+            messages.success(request, f"« {stock_type.name} » ne sera plus proposé chez {store.name}.", extra_tags=tag)
+        else:
+            with transaction.atomic():
+                ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=None)
+                ShoppingExclusion.objects.filter(stock_type=stock_type, supplier__isnull=False).delete()
+            messages.success(request, f"« {stock_type.name} » ne sera plus proposé.", extra_tags=tag)
+        return _back_to_the_list(request, landing)
+    if category is not None and StockType.objects.filter(category=category).exists():
+        ShoppingExclusion.objects.get_or_create(category=category)
+        messages.success(request, f"Catégorie {_category_words(category)} : plus proposée.", extra_tags=tag)
+    else:
+        messages.error(request, "Catégorie introuvable : rien n'a été exclu.", extra_tags=tag)
+    return _back_to_the_list(request, landing)
+
+
+def shopping_include(request):
+    """Take an exclusion back (`exclusion`, its id). An article that stays
+    out all the same - left out everywhere beside its « Pas ici », or
+    through its category - is said to."""
+    if request.method != "POST":
+        return redirect("inventory:shopping_list")
+    landing = _shopping_landing(request)
+    tag = _said_at(landing)
+    asked = request.POST.get(EXCLUSION_PARAM, "")
+    exclusion = (
+        ShoppingExclusion.objects.select_related("stock_type", "supplier").filter(pk=int(asked)).first()
+        if is_id(asked)
+        else None
+    )
+    if exclusion is None:
+        messages.warning(request, "Cette exclusion n'existe plus : rien n'a changé.", extra_tags=tag)
+        return _back_to_the_list(request, landing)
+    article = exclusion.stock_type
+    stays = ""
+    if article is not None:
+        if exclusion.supplier_id and ShoppingExclusion.objects.filter(stock_type=article, supplier=None).exists():
+            stays = "il l'est aussi partout"
+        elif ShoppingExclusion.objects.filter(category=article.category).exists():
+            stays = f"sa catégorie {_category_words(article.category)} l'est aussi"
+    if article is None:
+        said = f"Réinclus : catégorie {_category_words(exclusion.category)}."
+    elif stays:
+        said = f"« {article.name} » reste exclu : {stays}."
+    elif exclusion.supplier_id:
+        said = f"Réinclus chez {exclusion.supplier.name} : « {article.name} »."
+    else:
+        said = f"Réinclus : « {article.name} »."
+    exclusion.delete()
+    (messages.warning if stays else messages.success)(request, said, extra_tags=tag)
+    return _back_to_the_list(request, landing)

@@ -49,6 +49,7 @@ from .pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from .pos.till_file import TillFileError
 from .pos.xlsx_reader import XlsxError
 from .sales import TILL_SOURCE, SalesImportResult, recipe_lookup, record_sales
+from .sales_sources import LADDITION
 
 logger = logging.getLogger(__name__)
 
@@ -385,22 +386,39 @@ def store_reading(export, log, *, payments_beside_sales: bool = False) -> Stored
     return stored
 
 
-def fail(job: SalesImportJob, exc: BaseException, what: str) -> None:
+def fail(job: SalesImportJob, exc: BaseException, what: str) -> str:
     """The job's failure line: the till's own French refusal as it is, else
     one fixed sentence - the exception always in the server's log, its
-    traceback in the job's log in the server-accounts espace only."""
+    traceback in the job's log in the server-accounts espace only.
+
+    Returns what an automatic import's alert says of it (auto_sales.finish):
+    the exception's own words in the server-accounts espace, as they always
+    were, the job's sentence anywhere else - an alert names no library's
+    English, no server path."""
     logger.warning("%s : échec", what, exc_info=(type(exc), exc, exc.__traceback__))
     job.status = SalesImportJob.Status.FAILED
-    job.append_log("Échec : " + error_for_page(exc, said=TILL_REFUSALS))
+    said = error_for_page(exc, said=TILL_REFUSALS)
+    job.append_log("Échec : " + said)
     if server_accounts_allowed():
         job.append_log("".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=3)))
+        return str(exc).strip() or exc.__class__.__name__
+    return said
 
 
 def import_laddition_sales_task(job_id: int, start: date, end: date, download_dir: str | None = None) -> None:
     """The thread's body, started as ``target=bound(import_laddition_sales_task)``
-    (views.trigger_sales_import): it runs bound to the tenant that asked, so
-    the job, the sales and the download folder are that tenant's, and its
-    connections are closed when it ends."""
+    (importing.start_sales_import, from the Ventes tab or an automatic
+    import): it runs bound to the tenant that asked, so the job, the sales
+    and the download folder are that tenant's, and its connections are
+    closed when it ends.
+
+    Its final status is saved by `auto_sales.finish`, which says how it
+    went: a successful import moves the till's coverage (where the next
+    automatic import starts) in the same transaction as its status, an
+    automatic one that succeeded or failed sends its alert - never a
+    cancelled one, nor one refused above."""
+    from . import auto_sales
+
     job = SalesImportJob.objects.get(pk=job_id)
     if not till_allowed():
         # The page refuses first; this is the thread's own guard, before
@@ -415,8 +433,13 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
     # The tenant's own folder: the download takes the first new .xlsx that
     # lands in it.
     download_dir = download_dir or str(downloads_dir())
+    own = None
+    error = ""
 
     try:
+        # The till's own start, worked out BEFORE the import, whose sales move
+        # it (auto_sales.own_start; the gathers' rule).
+        own = auto_sales.own_start(timezone.localdate())
         job.append_log(f"Récupération des ventes du {start} au {end}.")
         _raise_if_cancelled(job)
 
@@ -449,10 +472,19 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         job.status = SalesImportJob.Status.CANCELLED
         job.append_log("Annulé.")
     except Exception as exc:  # noqa: BLE001 - the job record IS the error report
-        fail(job, exc, "Import des ventes de L'Addition")
+        error = fail(job, exc, "Import des ventes de L'Addition")
     finally:
         job.finished_at = timezone.now()
-        job.save(update_fields=["status", "finished_at", "items_sold", "recorded", "unmatched"])
+        # The status and, for a SUCCESS, the coverage it records commit
+        # together: a tick between the two saw the import over and its days
+        # not covered, and signed in again for them.
+        auto_sales.finish(
+            job,
+            fields=["status", "finished_at", "items_sold", "recorded", "unmatched"],
+            source_key=LADDITION,
+            own=own,
+            error=error,
+        )
 
 
 # -- a file of the till, uploaded on « Ventes » --------------------------------------------

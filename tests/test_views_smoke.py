@@ -13,6 +13,7 @@ no rows means no loop body, so a broken row template never renders.
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -22,8 +23,17 @@ from accounts import members
 from accounts.access import DEFAULT_AREAS
 from accounts.models import Membership, Tenant
 from bank.models import BankTransaction, OperationRule, StatementFormat, TreasuryAdjustment, TreasuryCheckpoint
-from inventory.models import GapExclusion, GapFillEntry, GapFillSetting, StockMovement, StockType, UnitChoices
-from invoices.models import Invoice, ReceiptBatch, ShopItemPrice
+from inventory.models import (
+    GapExclusion,
+    GapFillEntry,
+    GapFillSetting,
+    ShoppingExclusion,
+    ShoppingSetting,
+    StockMovement,
+    StockType,
+    UnitChoices,
+)
+from invoices.models import AutoGather, Invoice, ReceiptBatch, ScrapeJob, ShopItemPrice
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from staff.tests.signing_support import SigningTestMixin
 from tests.factories import (
@@ -99,6 +109,75 @@ def make_gaps_to_fill():
     cloth = make_stock_type(name="Nappe exemple", unit=UnitChoices.UNIT)
     make_movement(stock_type=cloth, quantity="10", unit_cost_ht="2", occurred_on=today - timedelta(days=5))
     return take
+
+
+#: What « Prévoir les courses » shows the beer's usual purchase as.
+SHOPPING_BEER_PRODUCT = "BIERE EXEMPLE 33CL X24"
+
+
+def make_shopping_history() -> SimpleNamespace:
+    """« Prévoir les courses » with every section it draws, dated from today
+    (the page's own day). A wholesaler visited every week for half a year:
+    a beer taken at every visit and a syrup at one in two (« À acheter »),
+    olives first bought last week (« Peut-être »), crisps bought once seven
+    weeks ago (« Nouveaux ici »), a rum last bought eleven months ago
+    (« Plus acheté ? »), a coffee bought there once and three times since at
+    the grocer's (« Acheté ailleurs maintenant »), and a keg mostly given
+    back (« consignes ? », in « Exclusions »). A grocer visited three times,
+    whose lemons are due (« À acheter ailleurs » at the wholesaler's), and a
+    market visited once (« Autres enseignes »). Invented data, prices above
+    30 €. Returns the stores and the articles by name."""
+    today = timezone.localdate()
+    wholesaler = make_supplier(name="Grossiste exemple")
+    grocer = make_supplier(name="Épicerie exemple")
+    market = make_supplier(name="Marché exemple")
+    products = {}
+
+    def buy(store, article, days_ago, quantity, total_ht, raw_name="", units=None, colisage=1):
+        product = products.get((store.pk, article.pk))
+        if product is None:
+            product = products[(store.pk, article.pk)] = make_product(
+                supplier=store, raw_name=raw_name or f"{article.name.upper()} PRODUIT", stock_type=article
+            )
+        invoice = make_invoice(supplier=store, invoice_date=today - timedelta(days=days_ago))
+        line = make_invoice_line(
+            invoice=invoice,
+            product=product,
+            quantity=units if units is not None else int(quantity),
+            total_ht=total_ht,
+            colisage=colisage,
+        )
+        make_movement(stock_type=article, quantity=quantity, unit_cost_ht="40", invoice_line=line)
+
+    made = SimpleNamespace(wholesaler=wholesaler, grocer=grocer, market=market)
+    made.beer = make_stock_type(name="Bière exemple", unit=UnitChoices.UNIT, category="Bières exemple")
+    made.syrup = make_stock_type(name="Sirop exemple", unit=UnitChoices.LITRE)
+    made.olives = make_stock_type(name="Olives exemple", unit=UnitChoices.KILOGRAM)
+    made.crisps = make_stock_type(name="Chips exemple", unit=UnitChoices.UNIT)
+    made.rum = make_stock_type(name="Rhum exemple", unit=UnitChoices.LITRE)
+    made.coffee = make_stock_type(name="Café exemple", unit=UnitChoices.KILOGRAM)
+    made.lemon = make_stock_type(name="Citron exemple", unit=UnitChoices.KILOGRAM)
+    made.keg = make_stock_type(name="Fût exemple", unit=UnitChoices.UNIT, category="Consignes exemple")
+    made.strawberries = make_stock_type(name="Fraises exemple", unit=UnitChoices.KILOGRAM)
+    for week in range(1, 27):
+        buy(wholesaler, made.beer, 7 * week, "24", "45.00", SHOPPING_BEER_PRODUCT, units=24, colisage=24)
+    for week in range(1, 27, 2):
+        buy(wholesaler, made.syrup, 7 * week, "2", "38.00")
+    buy(wholesaler, made.olives, 7, "1", "35.00")
+    buy(wholesaler, made.crisps, 49, "1", "36.00")
+    for days_ago in (340, 333, 326):
+        buy(wholesaler, made.rum, days_ago, "1", "42.00")
+    buy(wholesaler, made.coffee, 70, "1", "39.00")
+    for days_ago in (28, 21, 14):
+        buy(grocer, made.coffee, days_ago, "1", "39.00")
+        buy(grocer, made.lemon, days_ago, "1", "31.00")
+    for days_ago in (63, 35, 7):
+        buy(wholesaler, made.keg, days_ago, "1", "90.00")
+    # The empty keg given back twice: a credit, never a purchase nor a visit.
+    for days_ago in (56, 28):
+        buy(wholesaler, made.keg, days_ago, "-1", "-90.00", units=-1)
+    buy(market, made.strawberries, 30, "2", "33.00")
+    return made
 
 
 def assertNoUnrenderedTemplateSyntax(test, response, label=""):
@@ -466,6 +545,86 @@ class PageSmokeTests(TestCase):
         self.assertNotContains(response, '<li class="message')
         self.assertContains(response, 'data-table-label="écarts"')
 
+    def test_shopping_list(self):
+        """« Prévoir les courses »: the most visited store's list with every
+        section it draws, the grocer's, the market's (a rare store), a
+        typed horizon; the rhythm view, all stores and one. The products
+        page leads there."""
+        made = make_shopping_history()
+        url = reverse("inventory:shopping_list")
+        page = self.assertPageOK("inventory:shopping_list")
+        for label in (
+            "à acheter",
+            "peut-être",
+            "nouveaux ici",
+            "plus acheté",
+            "acheté ailleurs",
+            "à acheter ailleurs",
+            "les plus achetés ici",
+        ):
+            self.assertContains(page, f'data-table-label="{label}"')
+        self.assertContains(page, SHOPPING_BEER_PRODUCT)
+        self.assertContains(page, '<optgroup label="Autres enseignes">')
+        for store, query in ((made.grocer, {}), (made.market, {}), (made.wholesaler, {"dans": "60"})):
+            with self.subTest(store=store.name, query=query):
+                response = self.client.get(url, {"fournisseur": store.pk, **query})
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{url} {store.name} {query}")
+                self.assertContains(response, 'id="a-acheter"')
+        rhythm = reverse("inventory:shopping_rhythm")
+        for query in ({}, {"fournisseur": made.wholesaler.pk}):
+            with self.subTest(rhythm=query):
+                response = self.client.get(rhythm, query)
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"{rhythm} {query}")
+                self.assertContains(response, "Bière exemple")
+        self.assertContains(self.assertPageOK("inventory:stock_list"), url)
+
+    def test_shopping_forms(self):
+        """Each form of « Prévoir les courses » POSTed: one redirect to the
+        list of the store it came from, opened where its message is said -
+        and the list drawn whole there. A GET to any of the routes goes to
+        the list and writes nothing."""
+        made = make_shopping_history()
+        page = f"{reverse('inventory:shopping_list')}?fournisseur={made.wholesaler.pk}"
+        for name in ("inventory:shopping_settings", "inventory:shopping_exclude", "inventory:shopping_include"):
+            self.assertRedirectsOnGet(name)
+        for name, data, landing in (
+            ("inventory:shopping_settings", {"seuil": "60", "memoire": "8", "caisse": "1"}, "#reglages"),
+            ("inventory:shopping_settings", {"defaut": "1"}, "#reglages"),
+            (
+                "inventory:shopping_exclude",
+                {"article": made.syrup.pk, "chez": made.wholesaler.pk, "retour": "liste"},
+                "#a-acheter",
+            ),
+            ("inventory:shopping_exclude", {"article": made.rum.pk}, "#exclusions"),
+            ("inventory:shopping_exclude", {"categorie": "Consignes exemple"}, "#exclusions"),
+            ("inventory:shopping_exclude", {"article": made.crisps.pk, "retour": "rythme"}, ""),
+        ):
+            with self.subTest(name=name, data=data):
+                response = self.client.post(reverse(name), {"fournisseur": made.wholesaler.pk, **data})
+                self.assertEqual(response.status_code, 302)
+                if data.get("retour") == "rythme":
+                    self.assertEqual(
+                        response["Location"],
+                        f"{reverse('inventory:shopping_rhythm')}?fournisseur={made.wholesaler.pk}",
+                    )
+                else:
+                    self.assertEqual(response["Location"], f"{page}{landing}")
+                followed = self.client.get(response["Location"])
+                self.assertEqual(followed.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, followed, f"after {name} {data}")
+        self.assertEqual(ShoppingExclusion.objects.count(), 4)
+        for exclusion in ShoppingExclusion.objects.all():
+            with self.subTest(include=str(exclusion)):
+                response = self.client.post(
+                    reverse("inventory:shopping_include"),
+                    {"fournisseur": made.wholesaler.pk, "exclusion": exclusion.pk},
+                )
+                self.assertEqual((response.status_code, response["Location"]), (302, f"{page}#exclusions"))
+        self.assertFalse(ShoppingExclusion.objects.exists())
+        self.assertFalse(ShoppingSetting.objects.exists())
+
     # --- invoices --------------------------------------------------------
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
@@ -583,6 +742,35 @@ class PageSmokeTests(TestCase):
     def test_receipt_batch_assign_is_post_only(self):
         self.assertRedirectsOnGet("invoices:receipt_batch_assign", pk=self.batch.pk, index=2)
 
+    def test_auto_gathers(self):
+        """« Récupération automatique »: a rule with a last result and one
+        automatic run of its own; its two actions are POST-only."""
+        from returnables.tests.support import seeded_format
+
+        rule = AutoGather.objects.create(
+            name="Bons exemple",
+            sources=[f"bons-{seeded_format().pk}"],
+            weekdays="1,4",
+            start_time=time(6, 0),
+            end_time=time(14, 0),
+            every_minutes=30,
+            last_result="lancée à 06:00 (récupération n° 3)",
+        )
+        ScrapeJob.objects.create(
+            trigger=ScrapeJob.Trigger.AUTOMATIC,
+            auto_gather_id=rule.pk,
+            status=ScrapeJob.Status.SUCCESS,
+            invoices_found=4,
+            invoices_created=2,
+        )
+        response = self.assertPageOK("invoices:auto_gathers")
+        self.assertContains(response, "Bons exemple")
+        self.assertContains(response, f'id="auto-{rule.pk}"')
+        before = list(AutoGather.objects.values_list("pk", "name", "last_slot_at", "updated_at"))
+        self.assertRedirectsOnGet("invoices:auto_gather_edit", pk=rule.pk)
+        self.assertRedirectsOnGet("invoices:auto_gather_delete", pk=rule.pk)
+        self.assertEqual(list(AutoGather.objects.values_list("pk", "name", "last_slot_at", "updated_at")), before)
+
     def test_receipt_queue(self):
         self.assertContains(self.assertPageOK("invoices:receipt_queue"), "Sabbh Oriental")
 
@@ -606,6 +794,33 @@ class PageSmokeTests(TestCase):
 
     def test_sales_import(self):
         self.assertPageOK("recipes:sales_import")
+
+    def test_auto_sales(self):
+        """« Import automatique des ventes »: a rule with a last result and one
+        automatic import of its own; its two actions are POST-only."""
+        from recipes.models import AutoSalesImport, SalesImportJob
+
+        rule = AutoSalesImport.objects.create(
+            name="Ventes exemple",
+            weekdays="0,1,2,3,4,5,6",
+            times="07:00",
+            last_result="à jour : ventes importées jusqu'au 17/11",
+        )
+        SalesImportJob.objects.create(
+            trigger=SalesImportJob.Trigger.AUTOMATIC,
+            auto_rule_id=rule.pk,
+            status=SalesImportJob.Status.SUCCESS,
+            range_start=date(2026, 6, 1),
+            range_end=date(2026, 6, 3),
+            recorded=9,
+        )
+        response = self.assertPageOK("recipes:auto_sales")
+        self.assertContains(response, "Ventes exemple")
+        self.assertContains(response, f'id="import-{rule.pk}"')
+        before = list(AutoSalesImport.objects.values_list("pk", "name", "last_slot_at", "updated_at"))
+        self.assertRedirectsOnGet("recipes:auto_sales_edit", pk=rule.pk)
+        self.assertRedirectsOnGet("recipes:auto_sales_delete", pk=rule.pk)
+        self.assertEqual(list(AutoSalesImport.objects.values_list("pk", "name", "last_slot_at", "updated_at")), before)
 
     def test_pos_product_assign_is_post_only(self):
         from recipes.models import PosProduct
@@ -768,11 +983,43 @@ class EmptyDatabasePageSmokeTests(TestCase):
         self.assertContains(response, "empty-state")
         self.assertFalse(GapFillEntry.objects.exists())
 
+    def test_shopping_list(self):
+        """Nothing bought yet: the list starts from the purchase invoices, so
+        the page says so and offers to add some - whatever the address
+        carries - and so does the rhythm view. Its forms, with nothing to
+        exclude, answer with a redirect to it, POSTed or not - never a 500."""
+        url = reverse("inventory:shopping_list")
+        for query in ({}, {"fournisseur": "1", "dans": "7"}, {"dans": "abc"}):
+            for name in ("inventory:shopping_list", "inventory:shopping_rhythm"):
+                with self.subTest(page=name, query=query):
+                    response = self.client.get(reverse(name), query)
+                    self.assertEqual(response.status_code, 200)
+                    assertNoUnrenderedTemplateSyntax(self, response, f"{name} {query}")
+                    self.assertContains(response, "empty-state")
+                    self.assertContains(response, reverse("invoices:invoice_add"))
+        for name in ("inventory:shopping_settings", "inventory:shopping_exclude", "inventory:shopping_include"):
+            with self.subTest(action=name):
+                for response in (
+                    self.client.post(reverse(name), {"fournisseur": "1", "article": "1", "exclusion": "1"}),
+                    self.client.post(reverse(name), {"categorie": ""}),
+                    self.client.get(reverse(name)),
+                ):
+                    self.assertEqual(response.status_code, 302)
+                    self.assertTrue(response["Location"].startswith(url), response["Location"])
+        self.assertFalse(ShoppingExclusion.objects.exists())
+        self.assertFalse(ShoppingSetting.objects.exists())
+        # The message of a form said with no list to say it beside: at the top.
+        response = self.client.post(reverse("inventory:shopping_exclude"), {"article": "1"}, follow=True)
+        self.assertContains(response, "Article introuvable : rien n&#x27;a été exclu.")
+
     def test_invoice_list(self):
         self.assertPageOK("invoices:invoice_list")
 
     def test_invoice_type_list(self):
         self.assertPageOK("invoices:invoice_type_list")
+
+    def test_auto_gathers(self):
+        self.assertPageOK("invoices:auto_gathers")
 
     def test_supplier_list(self):
         self.assertPageOK("invoices:supplier_list")
@@ -824,6 +1071,9 @@ class EmptyDatabasePageSmokeTests(TestCase):
 
     def test_sales_import(self):
         self.assertPageOK("recipes:sales_import")
+
+    def test_auto_sales(self):
+        self.assertPageOK("recipes:auto_sales")
 
     def test_margins(self):
         """Every percentage on that page divides by a revenue, and on a new
@@ -1827,6 +2077,101 @@ class ReturnablesPageSmokeTests(TestCase):
         self.assertPageOK("returnables:format_create")
 
 
+class NotificationsPageSmokeTests(TestCase):
+    """« Notifications », « Rappels », « Alertes », the device endpoints and
+    the browser's files: a reminder, an alert, a dispatch of each state and a
+    device, then nothing at all. Every value invented."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from accounts.models import Membership
+        from notifications.models import Dispatch, EventRule, Reminder
+        from notifications.tests.support import make_device
+        from tests.runner import TEST_TENANT_PK, test_user
+
+        cls.reminder = Reminder.objects.create(
+            name="Vides avant livraison",
+            title="Consignes",
+            target="/consignes/#new-pickup",
+            weekdays="0,2,5",
+            times="00:00 02:00",
+            skip_if="returnables.recent_pickup",
+        )
+        EventRule.objects.create(event="returnables-comparison", outcomes=["differs"], recipient_ids=[1])
+        for number, status in enumerate(Dispatch.Status.values):
+            Dispatch.objects.create(
+                kind=Dispatch.Kind.REMINDER,
+                rule_name="Vides avant livraison",
+                dedupe_key=f"reminder:{cls.reminder.pk}:2027010{number}T2300Z",
+                title="Consignes",
+                ttl=3600,
+                status=status,
+            )
+        cls.device = make_device(Membership.objects.get(user=test_user(), tenant_id=TEST_TENANT_PK))
+
+    def assertPageOK(self, name, **kwargs):
+        url = reverse(name, kwargs=kwargs)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, f"{name} ({url}) returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def test_the_pages(self):
+        self.assertContains(self.assertPageOK("notifications:home"), "Android · Chrome")
+        self.assertContains(self.assertPageOK("notifications:reminders"), "Vides avant livraison")
+        self.assertContains(self.assertPageOK("notifications:events"), "Récupération automatique")
+
+    def test_the_json_and_the_public_files(self):
+        self.assertIn("key", self.client.get(reverse("notifications:key")).json())
+        for name in ("notifications:service_worker", "notifications:manifest"):
+            with self.subTest(name=name):
+                self.assertEqual(Client().get(reverse(name)).status_code, 200)
+
+    def test_the_post_only_actions_redirect_on_get(self):
+        from accounts.models import PushDevice
+        from notifications.models import Dispatch, EventRule, NotificationSettings, Reminder
+
+        before = (
+            Reminder.objects.count(),
+            EventRule.objects.count(),
+            Dispatch.objects.count(),
+            PushDevice.objects.count(),
+            NotificationSettings.objects.count(),
+        )
+        for name, kwargs in (
+            ("notifications:reminder_edit", {"pk": self.reminder.pk}),
+            ("notifications:reminder_delete", {"pk": self.reminder.pk}),
+            ("notifications:night", {}),
+            ("notifications:event_edit", {"event": "returnables-comparison"}),
+            ("notifications:subscribe", {}),
+            ("notifications:sync", {}),
+            ("notifications:device_delete", {"pk": self.device.pk}),
+            ("notifications:test", {}),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name, kwargs=kwargs)).status_code, 302)
+        after = (
+            Reminder.objects.count(),
+            EventRule.objects.count(),
+            Dispatch.objects.count(),
+            PushDevice.objects.count(),
+            NotificationSettings.objects.count(),
+        )
+        self.assertEqual(after, before)
+
+    def test_an_empty_espace(self):
+        from accounts.models import PushDevice
+        from notifications.models import Dispatch, EventRule, Reminder
+
+        Dispatch.objects.all().delete()
+        Reminder.objects.all().delete()
+        EventRule.objects.all().delete()
+        PushDevice.objects.all().delete()
+        self.assertContains(self.assertPageOK("notifications:home"), "Aucun envoi pour l'instant.")
+        self.assertContains(self.assertPageOK("notifications:reminders"), "Aucun rappel")
+        self.assertPageOK("notifications:events")
+
+
 class StaffSignatureSmokeTests(SigningTestMixin, NoNetworkTestCase):
     """« Personnel »'s monthly signature: the month's page with a request in
     every state, the owner's files, the employee's pages (the public ones,
@@ -1944,3 +2289,171 @@ class AccountsPagesSmokeTests(TestCase):
         self.assertRedirects(
             self.client.post(reverse("accounts:logout")), reverse("accounts:login"), fetch_redirect_response=False
         )
+
+
+class ShoppingParameterSmokeTests(TestCase):
+    """« Prévoir les courses » under every `fournisseur` and `dans` an
+    address can carry - a stale bookmark, a hand-typed number, a digit
+    Python reads and the page must not (« ² »), thirty of them - and every
+    id, category and setting its forms can POST. The pages always a 200,
+    rendered whole; the forms always one redirect to the list, with one
+    message, and nothing written when it cannot be read. Never echoed back.
+    Invented data (make_shopping_history)."""
+
+    #: fournisseur -> whether the list says the store was not found.
+    STORES = {"": False, "abc": True, "\N{SUPERSCRIPT TWO}": True, "-1": True, "999999": True, "1" * 30: True}
+    #: dans -> whether the list says the days cannot be read.
+    DAYS = {
+        "": False,
+        "7": False,
+        "1": False,
+        "90": False,
+        " 30 ": False,
+        "007": False,
+        "0": True,
+        "91": True,
+        "abc": True,
+        "\N{SUPERSCRIPT TWO}": True,
+        "-1": True,
+        "2.5": True,
+        "999999": True,
+        "1" * 30: True,
+        '"><i>dans</i>': True,
+    }
+    #: What « Pas ici » / « Ne plus proposer » may carry and find no article by.
+    ARTICLES = ("abc", "\N{SUPERSCRIPT TWO}", "-1", "1.5", " ", "999999", "1" * 30, '"><i>article</i>')
+    #: What « Ne jamais proposer la catégorie » may carry and find no article filed under.
+    CATEGORIES = ("Inconnue exemple", "c" * 300, '"><i>catégorie</i>', "\x00", " ")
+    #: What « Réinclure » may carry and find no exclusion by.
+    EXCLUSIONS = ("", "abc", "\N{SUPERSCRIPT TWO}", "-1", "999999", "1" * 30, '"><i>exclusion</i>')
+    #: What « Réglages » may carry and be refused: field -> (values, what it says).
+    SETTINGS = {
+        "seuil": (
+            ("", "abc", "\N{SUPERSCRIPT TWO}", "-1", "0", "9", "61", "25.5", "1" * 30, '"><i>seuil</i>'),
+            "Seuil : un nombre entier de 10 à 60.",
+        ),
+        "memoire": (
+            ("", "abc", "\N{SUPERSCRIPT TWO}", "-1", "0", "1", "25", "6.5", "1" * 30, '"><i>seuil</i>'),
+            "Mémoire : un nombre de mois de 2 à 24.",
+        ),
+    }
+    MARKUP = ("<i>dans</i>", "<i>article</i>", "<i>catégorie</i>", "<i>exclusion</i>", "<i>seuil</i>")
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.shop = make_shopping_history()
+        cls.url = reverse("inventory:shopping_list")
+
+    def get(self, query, url=None):
+        url = url or self.url
+        response = self.client.get(url, query)
+        self.assertEqual(response.status_code, 200, f"{query} returned {response.status_code}")
+        assertNoUnrenderedTemplateSyntax(self, response, f"{url} {query}")
+        content = response.content.decode()
+        for markup in self.MARKUP:
+            self.assertNotIn(markup, content)
+        return content
+
+    def act(self, name, data) -> str:
+        """POST to a form's route and follow the answer: one redirect, then
+        the list, rendered whole."""
+        response = self.client.post(reverse(name), data, follow=True)
+        self.assertEqual(response.status_code, 200, f"{name} {data} ended on {response.status_code}")
+        self.assertEqual([status for _url, status in response.redirect_chain], [302], data)
+        assertNoUnrenderedTemplateSyntax(self, response, f"the list after {name} {data}")
+        content = response.content.decode()
+        # Never echoed back: a POST is not markup.
+        for markup in self.MARKUP:
+            self.assertNotIn(markup, content)
+        return content
+
+    def test_every_store_and_every_number_of_days(self):
+        for asked, missing in self.STORES.items():
+            for typed, refused in self.DAYS.items():
+                with self.subTest(fournisseur=asked, dans=typed):
+                    content = self.get({"fournisseur": asked, "dans": typed})
+                    self.assertEqual("Enseigne introuvable" in content, missing)
+                    self.assertEqual("Passage suivant : un nombre de jours de 1 à 90." in content, refused)
+                    # Whatever the address, the list of the most visited store.
+                    self.assertIn('data-table-label="à acheter"', content)
+                    self.assertIn("Bière exemple", content)
+
+    def test_the_rhythm_under_every_store(self):
+        rhythm = reverse("inventory:shopping_rhythm")
+        for asked, missing in self.STORES.items():
+            with self.subTest(fournisseur=asked):
+                content = self.get({"fournisseur": asked}, rhythm)
+                self.assertEqual("Enseigne introuvable" in content, missing)
+                self.assertIn('data-table-label="rythme d\'achat"', content)
+
+    def test_every_article_category_and_exclusion_that_cannot_be_read(self):
+        """Under a store the form may carry - none, one it cannot read, the
+        known one: a message, the list, nothing left out - never a 500."""
+        exclude = "inventory:shopping_exclude"
+        include = "inventory:shopping_include"
+        for asked in ("", "abc", str(self.shop.wholesaler.pk)):
+            for article in self.ARTICLES:
+                with self.subTest(fournisseur=asked, article=article):
+                    content = self.act(exclude, {"fournisseur": asked, "article": article})
+                    self.assertIn("Article introuvable : rien n&#x27;a été exclu.", content)
+                    content = self.act(exclude, {"fournisseur": asked, "article": article, "chez": asked})
+                    self.assertIn("Article introuvable : rien n&#x27;a été exclu.", content)
+            for store in self.STORES:
+                with self.subTest(fournisseur=asked, chez=store):
+                    content = self.act(exclude, {"fournisseur": asked, "article": self.shop.beer.pk, "chez": store})
+                    self.assertIn("Enseigne introuvable : rien n&#x27;a été exclu.", content)
+            for category in self.CATEGORIES:
+                with self.subTest(fournisseur=asked, categorie=category):
+                    content = self.act(exclude, {"fournisseur": asked, "categorie": category})
+                    self.assertIn("Catégorie introuvable : rien n&#x27;a été exclu.", content)
+            for exclusion in self.EXCLUSIONS:
+                with self.subTest(fournisseur=asked, exclusion=exclusion):
+                    content = self.act(include, {"fournisseur": asked, "exclusion": exclusion})
+                    self.assertIn("Cette exclusion n&#x27;existe plus : rien n&#x27;a changé.", content)
+            self.assertFalse(ShoppingExclusion.objects.exists())
+
+    def test_every_setting_that_cannot_be_read(self):
+        for field, (values, said) in self.SETTINGS.items():
+            for typed in values:
+                with self.subTest(field=field, typed=typed):
+                    data = {"seuil": "30", "memoire": "8", "caisse": "1", "fournisseur": self.shop.wholesaler.pk}
+                    content = self.act("inventory:shopping_settings", {**data, field: typed})
+                    self.assertIn(said, content)
+                    self.assertNotIn("Réglages enregistrés.", content)
+                    self.assertFalse(ShoppingSetting.objects.exists())
+
+    def test_the_forms_answer_with_a_redirect(self):
+        """POSTed, to the list of the store they came from, where their
+        message is said; or to the bare list for a store it does not know.
+        A GET to the list, and nothing done."""
+        wholesaler = self.shop.wholesaler.pk
+        page = f"{self.url}?fournisseur={wholesaler}"
+        for asked, landing in ((str(wholesaler), page), ("999999", self.url), ("abc", self.url)):
+            with self.subTest(fournisseur=asked):
+                ShoppingExclusion.objects.all().delete()
+                for data, anchor in (
+                    ({"article": self.shop.beer.pk, "chez": wholesaler, "retour": "liste"}, "#a-acheter"),
+                    ({"article": self.shop.rum.pk}, "#exclusions"),
+                    ({"categorie": "Consignes exemple"}, "#exclusions"),
+                ):
+                    response = self.client.post(reverse("inventory:shopping_exclude"), {"fournisseur": asked, **data})
+                    self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}{anchor}"))
+                self.assertEqual(ShoppingExclusion.objects.count(), 3)
+                for exclusion in ShoppingExclusion.objects.all():
+                    for name in ("inventory:shopping_exclude", "inventory:shopping_include"):
+                        for query in ({}, {"fournisseur": wholesaler, "exclusion": exclusion.pk, "article": 1}):
+                            response = self.client.get(reverse(name), query)
+                            self.assertEqual((response.status_code, response["Location"]), (302, self.url))
+                    self.assertTrue(ShoppingExclusion.objects.filter(pk=exclusion.pk).exists())
+                    response = self.client.post(
+                        reverse("inventory:shopping_include"), {"fournisseur": asked, "exclusion": exclusion.pk}
+                    )
+                    self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}#exclusions"))
+                self.assertFalse(ShoppingExclusion.objects.exists())
+                response = self.client.post(
+                    reverse("inventory:shopping_settings"), {"fournisseur": asked, "seuil": "30", "memoire": "8"}
+                )
+                self.assertEqual((response.status_code, response["Location"]), (302, f"{landing}#reglages"))
+                response = self.client.get(reverse("inventory:shopping_settings"), {"seuil": "40", "memoire": "9"})
+                self.assertEqual((response.status_code, response["Location"]), (302, self.url))
+                self.assertEqual(ShoppingSetting.current().threshold_percent, 30)

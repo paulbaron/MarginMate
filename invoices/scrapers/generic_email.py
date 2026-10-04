@@ -183,6 +183,25 @@ BATCH_SIZE = 150  # messages per FETCH round trip - comfortably under IMAP serve
 LOG_EVERY = 500  # scanned messages between liveness log lines, so a big date range doesn't look frozen
 
 
+#: Said when the server answers the date range's SEARCH with anything but OK:
+#: a refusal is no empty range.
+SEARCH_REFUSED = "Recherche refusée par le serveur mail ({status})."
+
+
+class IncompleteSearch(RuntimeError):
+    """The server left `unread` mails of the range unread (a FETCH answered
+    NO, or timed out): the search read the rest - `matches` - and is not a
+    whole one. The gather imports what it read and records no coverage
+    (invoices/coverage.py): the range is searched again next time.
+    `downloaded`: scrape_email_invoices' files for `matches`."""
+
+    def __init__(self, unread: int, matches: list):
+        super().__init__(f"Recherche incomplète : {unread} e-mail(s) non lu(s) par le serveur mail.")
+        self.unread = unread
+        self.matches = matches
+        self.downloaded: list[tuple[str, date | None]] = []
+
+
 @dataclass
 class EmailAttachment:
     filename: str
@@ -457,6 +476,12 @@ def find_matching_emails(
     invoice types. Cancelling mid-scan simply stops early and returns
     whatever was already found - nothing already matched is discarded.
 
+    What the server does not hand over is never taken for nothing: a SEARCH
+    answered anything but OK raises (SEARCH_REFUSED), and a batch whose FETCH
+    is answered NO or times out is skipped, the rest read, and the search
+    then raises IncompleteSearch carrying what it read - a gather recorded
+    such a search as whole, and the skipped mails were never searched again.
+
     The mailbox is the bound espace's own (its « Identifiants »): refused
     unbound, before the settings are read or anything signs in
     (invoices/integrations.py) - scrape_email_invoices goes through here too.
@@ -513,7 +538,11 @@ def find_matching_emails(
         before = _format_date_for_imap(end_date + timedelta(days=1))
         search_criteria = f'SINCE "{_format_date_for_imap(start_date)}" BEFORE "{before}"'
         status, messages = imap.search(None, search_criteria)
-        if status != "OK" or not messages or not messages[0]:
+        if status != "OK":
+            # A refusal (« NO [UNAVAILABLE] ») is no empty range: taken for
+            # one, the gather recorded the range searched.
+            raise RuntimeError(SEARCH_REFUSED.format(status=status))
+        if not messages or not messages[0]:
             log("Aucun e-mail sur cette période.")
             return matches
 
@@ -524,8 +553,12 @@ def find_matching_emails(
             on_progress(0, total)
 
         # Phase 1: batch-fetch headers only, test sender_pattern/subject_pattern.
+        # A batch the server does not hand over (a FETCH answered NO, or one
+        # timing out) is counted unread and the rest read all the same: the
+        # search then says it is incomplete (IncompleteSearch), never whole.
         header_matches: list[bytes] = []
         scanned = 0
+        unread = 0
         for batch in _chunked(mail_ids, BATCH_SIZE):
             if should_cancel and should_cancel():
                 log(f"Recherche annulée après {scanned}/{total} email(s) analysé(s).")
@@ -535,9 +568,14 @@ def find_matching_emails(
             except OSError as exc:
                 log(f"{len(batch)} e-mail(s) passé(s) : erreur en lisant leurs en-têtes ({said(exc)}).")
                 scanned += len(batch)
+                unread += len(batch)
                 continue
             if status != "OK":
+                log(
+                    f"{len(batch)} e-mail(s) passé(s) : le serveur mail a répondu {status} à la lecture de leurs en-têtes."
+                )
                 scanned += len(batch)
+                unread += len(batch)
                 continue
             headers_by_id = _parse_batched_fetch(header_data)
             if not server:
@@ -581,8 +619,11 @@ def find_matching_emails(
                 status, msg_data = imap.fetch(b",".join(batch), "(BODY.PEEK[])")
             except OSError as exc:
                 log(f"{len(batch)} e-mail(s) passé(s) : erreur en les lisant ({said(exc)}).")
+                unread += len(batch)
                 continue
             if status != "OK":
+                log(f"{len(batch)} e-mail(s) passé(s) : le serveur mail a répondu {status} à leur lecture.")
+                unread += len(batch)
                 continue
             bodies_by_id = _parse_batched_fetch(msg_data)
             for mail_id in batch:
@@ -610,6 +651,8 @@ def find_matching_emails(
                 log(f"Retenu : « {subject} » de {sender} ({len(attachments)} pièce(s) jointe(s)).")
                 if on_progress:
                     on_progress(len(matches), total)
+        if unread:
+            raise IncompleteSearch(unread, matches)
     finally:
         imap.logout()
 
@@ -652,19 +695,30 @@ def scrape_email_invoices(
     """Same matching as find_matching_emails, but writes every matched
     attachment to `download_dir` and returns (filepath, email_date) pairs -
     the same shape the old per-supplier scrapers returned, so this drops
-    straight into the existing gather-and-import loop in tasks.py."""
+    straight into the existing gather-and-import loop in tasks.py.
+
+    An IncompleteSearch comes through with what WAS read written all the
+    same, on its `downloaded`: the gather imports it and records nothing."""
     os.makedirs(download_dir, exist_ok=True)
-    matches = find_matching_emails(
-        start_date,
-        end_date,
-        sender_pattern,
-        subject_pattern,
-        body_pattern,
-        attachment_pattern,
-        log,
-        on_progress,
-        should_cancel,
-    )
+    try:
+        matches = find_matching_emails(
+            start_date,
+            end_date,
+            sender_pattern,
+            subject_pattern,
+            body_pattern,
+            attachment_pattern,
+            log,
+            on_progress,
+            should_cancel,
+        )
+    except IncompleteSearch as incomplete:
+        incomplete.downloaded = _write_attachments(download_dir, incomplete.matches, log)
+        raise
+    return _write_attachments(download_dir, matches, log)
+
+
+def _write_attachments(download_dir: str, matches, log) -> list[tuple[str, date | None]]:
     downloaded: list[tuple[str, date | None]] = []
     taken: set[str] = set()
     for match in matches:

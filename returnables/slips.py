@@ -51,7 +51,7 @@ from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from returnables import patterns, reading
+from returnables import notify, patterns, reading
 from returnables.comparison import slip_label
 from returnables.models import Slip, SlipFormat, SlipLine, delete_files
 from returnables.reading import SlipError, SlipReading, clean_text
@@ -385,8 +385,11 @@ def store_uploads(files, fmt=None) -> UploadSummary:
     """Every PDF of one upload, through `store_slip` (origin « Déposé à la
     main »), one after the other - one file's failure is that file's
     refusal, never the others'. A file over 5 MB is refused before it is
-    read. `fmt` None: each document's format is recognised."""
+    read. `fmt` None: each document's format is recognised. The slips
+    created are handed to `notify.notify_slips` once, after the last file
+    (it never raises: the summary is the files' whatever the alert does)."""
     summary = UploadSummary()
+    created = []
     for uploaded in files:
         name = clean_text(getattr(uploaded, "name", "") or "", MAX_NAME_CHARS) or "document"
         size = getattr(uploaded, "size", None)
@@ -400,6 +403,9 @@ def store_uploads(files, fmt=None) -> UploadSummary:
             logger.exception("Bon « %s » : erreur inattendue à l'enregistrement", name)
             result = _refused(UNEXPECTED)
         summary.results.append((name, result))
+        if result.kind == CREATED:
+            created.append(result.slip)
+    notify.notify_slips(created)
     return summary
 
 

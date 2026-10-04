@@ -174,6 +174,13 @@ class InvoiceType(models.Model):
         return reader_label(self.parser_key) if self.parser_key else "Lecteur générique"
 
 
+#: A mailbox source's search settings: what it looks for in the mailbox.
+#: Saved changed, its gather coverage starts again (invoices/views.py
+#: _search_changed); changed during a gather, that gather's search records
+#: nothing (tasks._gather_email).
+EMAIL_SEARCH_FIELDS = frozenset({"sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"})
+
+
 class EmailInvoiceSource(models.Model):
     """How to recognize an InvoiceType's emails in the espace's invoice
     mailbox (its « Identifiants », accounts/vault.py) and which attachment to
@@ -1047,7 +1054,20 @@ class ScrapeJob(JobLogMixin):
         GATHER = "GATHER", "Récupération"
         TEST = "TEST", "Test de motif"
 
+    class Trigger(models.TextChoices):
+        """Who started a gather: a person (« Récupérer », on Achats or
+        Consignes) or an AutoGather's slot (invoices/auto_gather.py). Achats'
+        and Consignes' period, « missed » and latest-run logic read the
+        manual ones only (workspace._import_card)."""
+
+        MANUAL = "manual", "à la main"
+        AUTOMATIC = "automatic", "automatique"
+
     kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.GATHER)
+    trigger = models.CharField(max_length=10, choices=Trigger.choices, default=Trigger.MANUAL)
+    # The AutoGather whose slot started it - a plain id, so deleting the rule
+    # leaves its runs' history alone (they are pruned after 30 days).
+    auto_gather_id = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     # Set by the "Annuler" button (see views.cancel_gather) while the job is
     # still PENDING/RUNNING - the background thread can't be killed outright
@@ -1119,6 +1139,112 @@ class ScrapeJob(JobLogMixin):
         anything can stop it (tasks._name_slip_sources)."""
         codes = list((self.progress or {}).keys())
         return bool(codes) and all(str(code).startswith("bons-") for code in codes)
+
+    @property
+    def is_automatic(self) -> bool:
+        return self.trigger == self.Trigger.AUTOMATIC
+
+
+#: Said on the end time of an automatic gather ending before it starts (the
+#: model's clean, forms.AutoGatherForm).
+AUTO_GATHER_END_BEFORE_START = "L'heure de fin vient avant celle du début."
+
+
+class AutoGather(models.Model):
+    """A gather run by itself (invoices/auto_gather.py, from the scheduler of
+    `manage.py serve`): its sources - mailbox invoice types « type-<id> » and
+    slip formats « bons-<id> » only, never Metro nor a portal -, its days
+    (calendar days, Python's weekday, "1,4"), its hours from `start_time`
+    to `end_time` every `every_minutes` (once a day when they are equal).
+
+    `last_slot_at`, `last_result` and `last_failed_codes` are the
+    scheduler's: a form never writes them (only `last_slot_at` = now on a
+    creation, a re-activation or a new schedule, through its own update, so
+    « Enregistrer » never runs a gather at once). In no « Données » section:
+    never exported, imported or cleared."""
+
+    EVERY_MINUTES = (15, 30, 60, 120, 180, 240, 360, 720)
+    #: At most this many per espace.
+    MAX_PER_TENANT = 10
+
+    name = models.CharField("nom", max_length=80)
+    sources = models.JSONField("sources", default=list, blank=True)
+    weekdays = models.CharField("jours", max_length=14)
+    start_time = models.TimeField("à partir de")
+    end_time = models.TimeField("jusqu'à")
+    every_minutes = models.PositiveSmallIntegerField(
+        "toutes les",
+        choices=[(minutes, f"{minutes} min" if minutes < 60 else f"{minutes // 60} h") for minutes in EVERY_MINUTES],
+        default=60,
+    )
+    is_active = models.BooleanField("actif", default=True)
+    last_slot_at = models.DateTimeField(null=True, blank=True)
+    last_result = models.CharField(max_length=200, blank=True)
+    last_failed_codes = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            # A window the scheduler can read: range_times refuses the other
+            # way round, and the rule's page drew it as a 500.
+            models.CheckConstraint(
+                condition=Q(end_time__gte=models.F("start_time")), name="auto_gather_end_after_start"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        """The admin's form (the page's has its own): an end before the
+        start is refused on the end, in French."""
+        super().clean()
+        if self.start_time is not None and self.end_time is not None and self.end_time < self.start_time:
+            raise ValidationError({"end_time": AUTO_GATHER_END_BEFORE_START})
+
+    def weekday_list(self) -> tuple[int, ...]:
+        """The days stored ("1,4"), sorted; ValueError on anything else."""
+        days = sorted({int(part) for part in self.weekdays.split(",") if part.strip()})
+        if any(day < 0 or day > 6 for day in days):
+            raise ValueError("weekday out of range")
+        return tuple(days)
+
+    def source_list(self) -> list[str]:
+        """The codes stored, as strings (a hand-edited row may hold anything)."""
+        return [code for code in (self.sources or []) if isinstance(code, str)]
+
+
+class GatherCoverage(models.Model):
+    """How far a gathered source - a mailbox invoice type « type-<id> », a
+    slip format « bons-<id> » - has been searched WITHOUT a gap
+    (invoices/coverage.py): where an automatic gather starts it again.
+
+    `searched_until`: the last day covered with no hole before it, moved by
+    a search that COMPLETED (by hand or automatic) and started on or before
+    the day after it - never searched, on or before its own start; lowered
+    to its own start when its search settings change (coverage.restart).
+    `pending_from`: the start of a stretch an automatic run left behind its
+    90-day bound, to be caught up by hand - moved past what a search starting
+    on or before it covered, cleared (with `pending_until`) once one reaches
+    its end. `pending_until`: that stretch's last day, the day before the
+    bound that cut it - the latest cut's: every automatic run since searched
+    from that bound on. None on a row written before it was kept: the day
+    before today's bound stands in. Written by the gather and those saves
+    alone; in no « Données » section, like AutoGather."""
+
+    code = models.CharField(max_length=40, unique=True)
+    searched_until = models.DateField(null=True, blank=True)
+    pending_from = models.DateField(null=True, blank=True)
+    pending_until = models.DateField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["code"]
+
+    def __str__(self):
+        return self.code
 
 
 class ReceiptBatch(JobLogMixin):

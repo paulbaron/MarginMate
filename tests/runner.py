@@ -43,9 +43,11 @@ client - production's starting point, for real tenants in real files.
 
 What this sets for the whole run, in the main process and in every parallel
 worker (`install`): `TransactionTestCase.databases` (both test databases),
-`SimpleTestCase.client_class` (the logged-in client) and the binding's
-default. Nothing in the product knows about any of it: no hook, no setting
-read only by tests. tests/test_runner.py pins the contract.
+`SimpleTestCase.client_class` (the logged-in client), the binding's
+default, and a push transport that raises (`notifications.webpush._post`,
+replaced on the module: a test wanting an answer patches it or passes
+`post=`). Nothing in the product knows about any of it: no hook, no
+setting read only by tests. tests/test_runner.py pins the contract.
 """
 
 from __future__ import annotations
@@ -247,10 +249,20 @@ def install() -> None:
     """What every process of the run needs: the main one, and each parallel
     worker before Django is set up in it. Safe to call twice."""
     from accounts import tenancy
+    from notifications import webpush
+    from tests.support import _Forbidden, _ForbiddenPush
 
     TransactionTestCase.databases = frozenset({"default", "accounts"})
     SimpleTestCase.client_class = TenantClient
     tenancy._current = ContextVar("marginmate_current_tenant", default=TEST_TENANT)
+    # No test reaches a real push service: the one HTTP call of the push
+    # transport raises for the whole run, whatever the test case's class. A
+    # test that wants an answer passes `post=` to webpush.send or patches
+    # `notifications.webpush._post` itself. What it raises is no Exception
+    # (`ForbiddenNetworkCall`), so the delivery's own `except Exception`
+    # cannot turn a forgotten mock into a quiet « erreur interne ».
+    if not isinstance(webpush._post, _Forbidden):
+        webpush._post = _ForbiddenPush("push service (notifications.webpush._post)")
 
 
 def _worker_setup(*args) -> None:

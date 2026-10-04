@@ -5,8 +5,9 @@ of its own (`TENANTS_ROOT/<dir_name>/db.sqlite3`, accounts/paths.py) with
 its files beside it. What has to be found BEFORE a tenant is chosen lives
 here instead, in the accounts database (settings.DATABASES["accounts"],
 accounts/router.py): who may log in, which tenant a login
-belongs to, the invitation codes a signup needs, and which tenant an
-employee's public signing link belongs to (he is not logged in).
+belongs to, the invitation codes a signup needs, which tenant an
+employee's public signing link belongs to (he is not logged in), and which
+browsers receive a login's push notifications (`PushDevice`).
 
 No business model points at any of these, and none of these at a business
 model (accounts/tests/test_router.py checks it): the two sides live in
@@ -15,6 +16,7 @@ another.
 """
 
 import hashlib
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.validators import RegexValidator
@@ -198,3 +200,62 @@ class SigningLink(models.Model):
 
     def __str__(self):
         return f"{self.token_hash[:8]}… - {self.tenant}"
+
+
+class PushDevice(models.Model):
+    """A browser that receives the espace's push notifications - a phone's
+    Home Screen app, a computer's Chrome - for one login of one espace
+    (notifications/, `/notifications/`).
+
+    Central, beside the membership it belongs to: a logout (public, unbound)
+    marks it, a membership deleted takes it along, and the scheduler reads
+    every espace's devices from one place. `endpoint` is a bearer capability
+    (whoever holds it can push to the phone) and `auth` a secret: neither is
+    shown in the admin, logged whole, exported by « Données » or carried
+    into data-dev (`accounts.deployment.purge_sessions` empties the table).
+
+    Created or moved to another membership only by « Activer » (a gesture,
+    notifications.devices.register); refreshed by the page's sync, never
+    created by it. A push service answering 404/410 tombstones it
+    (`gone_at`) rather than deleting it; a logout marks it (`logged_out_at`)
+    until the same login syncs again. `server_key` is the
+    applicationServerKey the browser says it subscribed with - never
+    stamped by the server: a device subscribed under another SECRET_KEY is
+    « à réactiver », never sent to."""
+
+    membership = models.ForeignKey(
+        Membership, on_delete=models.CASCADE, related_name="push_devices", verbose_name="membre"
+    )
+    endpoint = models.URLField("adresse de notification", max_length=2048, unique=True)
+    # base64url: a point on P-256 (65 bytes) and the 16-byte auth secret,
+    # both checked by notifications.webpush.check_keys before they are stored.
+    p256dh = models.CharField(max_length=100)
+    auth = models.CharField(max_length=40)
+    server_key = models.CharField("clé du serveur", max_length=100)
+    label = models.CharField("appareil", max_length=80)
+    created_at = models.DateTimeField("inscrit le", default=timezone.now)
+    seen_at = models.DateTimeField("vu le", default=timezone.now)
+    last_success_at = models.DateTimeField("dernier envoi réussi", null=True, blank=True)
+    last_error_at = models.DateTimeField("dernière erreur le", null=True, blank=True)
+    gone_at = models.DateTimeField("désinscrit par le service le", null=True, blank=True)
+    logged_out_at = models.DateTimeField("déconnecté le", null=True, blank=True)
+    last_error = models.CharField("dernière erreur", max_length=200, blank=True)
+    #: Consecutive failures, back to 0 at the next success.
+    failures = models.PositiveIntegerField("échecs de suite", default=0)
+
+    class Meta:
+        verbose_name = "appareil"
+        verbose_name_plural = "appareils"
+        ordering = ["-seen_at", "-pk"]
+
+    def __str__(self):
+        return f"{self.label} - {self.membership_id}"
+
+    @property
+    def endpoint_host(self) -> str:
+        """The push service's host - all of the endpoint a page or the
+        admin ever shows."""
+        try:
+            return urlsplit(self.endpoint).hostname or ""
+        except ValueError:
+            return ""

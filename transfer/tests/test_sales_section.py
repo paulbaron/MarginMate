@@ -8,7 +8,7 @@ not with a copy of the rebuild.
 
 import json
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -492,3 +492,94 @@ class SalesPaymentsTests(LaneSectionsMixin, TestCase):
                 self.assertEqual(db_fingerprint(), before)
                 self.assertEqual(tally(run, "ventes", PAYMENTS), (0, 0, 0, 0))
                 self.assertEqual(run.section("ventes").notes, [])
+
+
+def till_coverage():
+    """How far the till's sales are imported without a gap (auto_sales)."""
+    from invoices.models import GatherCoverage
+
+    row = GatherCoverage.objects.filter(code="ventes-laddition").first()
+    return row.searched_until if row is not None else None
+
+
+def cover_till(until) -> None:
+    from invoices.models import GatherCoverage
+
+    GatherCoverage.objects.update_or_create(code="ventes-laddition", defaults={"searched_until": until})
+
+
+class SalesCoverageTests(LaneSectionsMixin, TestCase):
+    """Days « Ventes » deletes are no longer imported: the till's coverage
+    (`ventes-laddition`, where the next automatic import starts) goes back
+    to the day before the first of them - never forward -, or the automatic
+    imports would never fetch them again."""
+
+    #: A tick shortly after the invented days (12:00 in Paris).
+    NOW = datetime(2026, 9, 10, 10, 0, tzinfo=UTC)
+
+    def setUp(self):
+        super().setUp()
+        build_sales()  # till days 1, 2 and 3
+
+    def period(self):
+        from recipes import auto_sales
+
+        return auto_sales.period_for("laddition", self.NOW)
+
+    def older_archive(self):
+        """An archive without day 3, day 3 imported here since."""
+        PosProductDailyQuantity.objects.filter(sold_on=day(3)).delete()
+        reader = self.export(EXPORTED)
+        PosProductDailyQuantity.objects.create(
+            product=PosProduct.objects.get(name="Pinte IPA"), sold_on=day(3), quantity=25
+        )
+        return reader
+
+    def test_replace_lowers_it_to_the_day_before_the_first_day_it_deletes(self):
+        reader = self.older_archive()
+        cover_till(day(9))
+        import_archive(reader, SALES_REPLACED)
+        self.assertEqual(till_coverage(), day(2))
+        period = self.period()
+        self.assertFalse(period.up_to_date)
+        self.assertEqual(period.start, day(2) - timedelta(days=3))
+
+    def test_clear_lowers_it_before_the_first_day_it_held(self):
+        cover_till(day(9))
+        run_clear({"ventes"}, preview=False)
+        self.assertEqual(till_coverage(), day(1) - timedelta(days=1))
+        self.assertFalse(self.period().up_to_date)
+
+    def test_a_coverage_already_lower_is_never_raised(self):
+        cover_till(day(1) - timedelta(days=10))
+        run_clear({"ventes"}, preview=False)
+        self.assertEqual(till_coverage(), day(1) - timedelta(days=10))
+
+    def test_one_never_recorded_is_not_rebuilt_past_the_days_deleted(self):
+        """Missing, the coverage would be read from the successful imports'
+        history - which still reaches the days just deleted."""
+        from recipes.models import SalesImportJob
+
+        SalesImportJob.objects.create(
+            status=SalesImportJob.Status.SUCCESS,
+            range_start=day(1),
+            range_end=day(3),
+            finished_at=self.NOW,
+        )
+        run_clear({"ventes"}, preview=False)
+        self.assertEqual(till_coverage(), day(1) - timedelta(days=1))
+
+    def test_a_preview_leaves_it_alone(self):
+        reader = self.older_archive()
+        cover_till(day(9))
+        import_archive(reader, SALES_REPLACED, preview=True)
+        run_clear({"ventes"}, preview=True)
+        self.assertEqual(till_coverage(), day(9))
+
+    def test_merge_and_a_replace_deleting_nothing_leave_it_alone(self):
+        cover_till(day(9))
+        reader = self.export(EXPORTED)
+        for strategy in (MERGE, SALES_REPLACED):
+            with self.subTest(strategy=strategy):
+                import_archive(reader, strategy)
+                self.assertEqual(till_coverage(), day(9))

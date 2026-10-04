@@ -30,6 +30,7 @@ pages are rendered with French active (`_in_french`), rendering included.
 """
 
 import functools
+import logging
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -37,6 +38,8 @@ from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.views import LoginView, LogoutView
+from django.core import signing
+from django.db import DatabaseError
 from django.shortcuts import redirect, render
 from django.utils import translation
 from django.views.decorators.cache import never_cache
@@ -46,6 +49,8 @@ from django.views.decorators.http import require_http_methods
 from . import limiter, signup
 from .forms import LoginForm, SignupForm
 from .users import normalize_email
+
+logger = logging.getLogger(__name__)
 
 LOGGED_OUT = "Vous êtes déconnecté."
 
@@ -101,6 +106,19 @@ class LoginPage(LoginView):
         return response
 
 
+def _mark_this_device_logged_out(request) -> None:
+    """The browser's push device (its `marginmate_push` cookie), when it is
+    this login's, is sent nothing more until the same login syncs again
+    (notifications/devices.py). A missing table or a cookie that does not
+    unsign never stops a logout; the cookie stays."""
+    from notifications import devices
+
+    try:
+        devices.mark_logged_out(request)
+    except (DatabaseError, signing.BadSignature):
+        logger.warning("Déconnexion : l'appareil de notification n'a pas pu être marqué", exc_info=True)
+
+
 class LogoutPage(LogoutView):
     """Django's logout (a POST), public: a login with no tenant left - the
     « aucun espace » page - must still be able to leave. The « appareil
@@ -116,10 +134,18 @@ class LogoutPage(LogoutView):
     browser now forgets the tenant's DRAFTS alone: static/js/ui.js does it
     as a `form.topbar-logout` is sent (its `DRAFTS`) - base.html's, and the
     « indisponible » page's. A count never saved is still lost on an
-    explicit logout: the price of a shared device."""
+    explicit logout: the price of a shared device.
+
+    The browser's push device is marked logged out FIRST
+    (`_mark_this_device_logged_out`): it receives nothing until the same
+    login comes back."""
 
     def post(self, request, *args, **kwargs):
         was_in = request.user.is_authenticated
+        if was_in:
+            # Before the session goes: afterwards nobody is logged in to say
+            # whose device the cookie names.
+            _mark_this_device_logged_out(request)
         response = super().post(request, *args, **kwargs)
         if was_in:
             messages.info(request, LOGGED_OUT)

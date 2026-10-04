@@ -385,7 +385,7 @@ class LogoutKeepsThePreferencesTests(TwoTenantsTestCase):
         drafts = re.search(r"var DRAFTS = \[([^\]]*)\];", script)
         self.assertIsNotNone(drafts, "ui.js's logout names its drafts in `var DRAFTS = [...]`")
         self.assertEqual(
-            sorted(re.findall(r'"([^"]+)"', drafts.group(1))), ["consignes:brouillon", "stock-take-draft:"]
+            sorted(re.findall(r'"([^"]+)"', drafts.group(1))), ["consignes:brouillon", "push:", "stock-take-draft:"]
         )
         # Under this tenant's scope, and a session from before's old id.
         self.assertIn('"data-tenant"', script)

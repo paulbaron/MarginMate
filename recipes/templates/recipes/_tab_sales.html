@@ -43,6 +43,7 @@ account is not typed, one line for the owner pointing at « Identifiants ».
     <p class="muted small">
         Le compte L'Addition se règle sur la page Identifiants. Comptez quelques minutes par tranche de deux ans.
     </p>
+    {% if can.owner %}<p class="muted small"><a href="{% url 'recipes:auto_sales' %}">Import automatique : réglages</a></p>{% endif %}
 </div>
 {% elif not till_allowed %}
 <div class="card">

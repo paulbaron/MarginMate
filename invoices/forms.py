@@ -8,7 +8,15 @@ from django.utils import timezone
 
 from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands, is_id, selection_too_big
 
-from .models import EmailInvoiceSource, Invoice, InvoiceType, ShopItemPrice, Supplier, WebsiteInvoiceSource
+from .models import (
+    AUTO_GATHER_END_BEFORE_START,
+    EmailInvoiceSource,
+    Invoice,
+    InvoiceType,
+    ShopItemPrice,
+    Supplier,
+    WebsiteInvoiceSource,
+)
 from .parsers import reader_choices
 from .rendering import PLAIN_INPUTS
 
@@ -1101,3 +1109,214 @@ class ShopItemPriceForm(forms.ModelForm):
                     "Pour le changer, oubliez-le dans la liste des prix connus, puis retenez le bon."
                 )
         return cleaned
+
+
+# -- « Récupération automatique » (invoices/auto_gather.py) ----------------------------------------------------------
+
+NUL_REFUSED = "Caractère interdit (NUL) : retapez ce champ."
+AUTO_NAME_REQUIRED = "Donnez un nom à cette récupération."
+AUTO_NO_SOURCE = "Cochez au moins une source."
+AUTO_NO_DAY = "Cochez au moins un jour."
+AUTO_ONE_TIME = "Une seule heure ici (ex. 06:00)."
+AUTO_END_BEFORE_START = AUTO_GATHER_END_BEFORE_START
+AUTO_INVOICES_HOURLY = "Avec une source de factures, une fois par heure au plus souvent."
+AUTO_SLIPS_HALF_HOURLY = "Toutes les 30 minutes au plus souvent."
+AUTO_UNKNOWN_SOURCE = "Source inconnue : rechargez la page."
+AUTO_UNKNOWN_CHOICE = "Choix inconnu : rechargez la page."
+#: The shortest period of a rule holding a mailbox invoice source, and of
+#: one holding slip formats only (minutes).
+INVOICES_EVERY_MIN = 60
+SLIPS_EVERY_MIN = 30
+
+
+def _one_time(value: str):
+    """One wall time typed as « 6h », « 06:30 », « 6 » (notifications.
+    schedule.parse_times), refused in French."""
+    from notifications import schedule
+
+    try:
+        times = schedule.parse_times(value)
+    except ValueError as exc:
+        raise forms.ValidationError(str(exc)) from None
+    if len(times) != 1:
+        raise forms.ValidationError(AUTO_ONE_TIME)
+    return times[0]
+
+
+def _weekdays_or_none(rule) -> tuple[int, ...]:
+    try:
+        return rule.weekday_list()
+    except ValueError:
+        return ()
+
+
+class AutoGatherForm(forms.Form):
+    """An automatic gather's settings. Its sources and days are drawn by hand
+    (auto_gathers.html: a fieldset of boxes, the sources an automatic gather
+    may not take disabled with their reason) from `source_rows` and
+    `day_rows`. `offered` is what `workspace.gather_sources(for_auto=True)`
+    offers: a posted code it does not offer, or one it offers disabled
+    (Metro, a portal), is refused - never dropped in silence."""
+
+    name = forms.CharField(
+        label="Nom",
+        max_length=80,
+        error_messages={
+            "required": AUTO_NAME_REQUIRED,
+            "max_length": "80 caractères au plus.",
+            "null_characters_not_allowed": NUL_REFUSED,
+        },
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    sources = forms.MultipleChoiceField(
+        label="Sources",
+        required=False,
+        error_messages={"invalid_choice": AUTO_UNKNOWN_SOURCE, "invalid_list": AUTO_UNKNOWN_SOURCE},
+    )
+    weekdays = forms.MultipleChoiceField(
+        label="Jours",
+        required=False,
+        choices=[(str(day), str(day)) for day in range(7)],
+        error_messages={"invalid_choice": AUTO_UNKNOWN_CHOICE, "invalid_list": AUTO_UNKNOWN_CHOICE},
+    )
+    start_time = forms.CharField(
+        label="À partir de",
+        max_length=20,
+        error_messages={
+            "required": "Indiquez une heure.",
+            "max_length": "Une heure, ex. 06:00.",
+            "null_characters_not_allowed": NUL_REFUSED,
+        },
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    end_time = forms.CharField(
+        label="Jusqu'à",
+        max_length=20,
+        help_text="La même heure qu'« À partir de » : une fois par jour.",
+        error_messages={
+            "required": "Indiquez une heure.",
+            "max_length": "Une heure, ex. 14:00.",
+            "null_characters_not_allowed": NUL_REFUSED,
+        },
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    every_minutes = forms.TypedChoiceField(
+        label="Toutes les",
+        coerce=int,
+        error_messages={"required": AUTO_UNKNOWN_CHOICE, "invalid_choice": AUTO_UNKNOWN_CHOICE},
+    )
+    is_active = forms.BooleanField(label="Active", required=False)
+
+    def __init__(self, *args, offered=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        from .models import AutoGather
+
+        self.offered = list(offered)
+        self.fields["sources"].choices = [(source["code"], source["label"]) for source in self.offered]
+        self.fields["every_minutes"].choices = AutoGather._meta.get_field("every_minutes").choices
+
+    @staticmethod
+    def initial_for(rule) -> dict:
+        return {
+            "name": rule.name,
+            "sources": rule.source_list(),
+            "weekdays": [str(day) for day in _weekdays_or_none(rule)],
+            "start_time": f"{rule.start_time:%H:%M}",
+            "end_time": f"{rule.end_time:%H:%M}",
+            "every_minutes": rule.every_minutes,
+            "is_active": rule.is_active,
+        }
+
+    def _shown(self, name) -> set[str]:
+        value = self[name].value() or []
+        return {str(item) for item in (value if isinstance(value, (list, tuple)) else [value])}
+
+    def source_rows(self) -> list[dict]:
+        """Each offered source as a box: its code, label, whether it is ticked
+        and, for one an automatic gather may not take, why (never ticked)."""
+        ticked = self._shown("sources")
+        return [
+            {
+                "code": source["code"],
+                "label": source["label"],
+                "allowed": source.get("allowed", False),
+                "reason": source.get("reason", ""),
+                "checked": source.get("allowed", False) and source["code"] in ticked,
+                "id": f"{self['sources'].auto_id}_{index}",
+            }
+            for index, source in enumerate(self.offered)
+        ]
+
+    def day_rows(self) -> list[dict]:
+        from staff.timesheet import DAY_NAMES
+
+        ticked = self._shown("weekdays")
+        return [
+            {
+                "value": str(day),
+                "label": DAY_NAMES[day].lower(),
+                "checked": str(day) in ticked,
+                "id": f"{self['weekdays'].auto_id}_{day}",
+            }
+            for day in range(7)
+        ]
+
+    def clean_name(self):
+        name = " ".join(self.cleaned_data["name"].split())
+        if not name:
+            raise forms.ValidationError(AUTO_NAME_REQUIRED)
+        return name
+
+    def clean_sources(self):
+        by_code = {source["code"]: source for source in self.offered}
+        codes = set(self.cleaned_data["sources"])
+        refused = [by_code[code] for code in by_code if code in codes and not by_code[code].get("allowed")]
+        if refused:
+            raise forms.ValidationError(
+                [f"« {source['label']} » : {source.get('reason') or 'à la main seulement'}." for source in refused]
+            )
+        if not codes:
+            raise forms.ValidationError(AUTO_NO_SOURCE)
+        # In the order the page offers them.
+        return [source["code"] for source in self.offered if source["code"] in codes]
+
+    def clean_weekdays(self):
+        days = sorted({int(day) for day in self.cleaned_data["weekdays"]})
+        if not days:
+            raise forms.ValidationError(AUTO_NO_DAY)
+        return days
+
+    def clean_start_time(self):
+        return _one_time(self.cleaned_data["start_time"])
+
+    def clean_end_time(self):
+        return _one_time(self.cleaned_data["end_time"])
+
+    def clean(self):
+        cleaned = super().clean()
+        start, end = cleaned.get("start_time"), cleaned.get("end_time")
+        if start is not None and end is not None and end < start:
+            self.add_error("end_time", AUTO_END_BEFORE_START)
+        codes, every = cleaned.get("sources"), cleaned.get("every_minutes")
+        if codes and every is not None:
+            kinds = {source["kind"] for source in self.offered if source["code"] in codes}
+            if "email" in kinds and every < INVOICES_EVERY_MIN:
+                self.add_error("every_minutes", AUTO_INVOICES_HOURLY)
+            elif every < SLIPS_EVERY_MIN:
+                self.add_error("every_minutes", AUTO_SLIPS_HALF_HOURLY)
+        return cleaned
+
+    def values(self) -> dict:
+        """The model's fields this form owns, from a valid form."""
+        from notifications import schedule
+
+        data = self.cleaned_data
+        return {
+            "name": data["name"],
+            "sources": data["sources"],
+            "weekdays": schedule.weekdays_value(data["weekdays"]),
+            "start_time": data["start_time"],
+            "end_time": data["end_time"],
+            "every_minutes": data["every_minutes"],
+            "is_active": data["is_active"],
+        }
