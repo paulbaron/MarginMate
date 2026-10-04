@@ -345,7 +345,7 @@ class HttpsTests(ChildTestCase):
             middleware[:3],
             [
                 "django.middleware.security.SecurityMiddleware",
-                "whitenoise.middleware.WhiteNoiseMiddleware",
+                "config.static.VersionedWhiteNoiseMiddleware",
                 "config.security.ContentSecurityPolicyMiddleware",
             ],
         )

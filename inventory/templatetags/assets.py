@@ -8,6 +8,8 @@ load. It has already cost that twice here.
 Appending the file's modification time makes each edit a new URL, so the
 browser fetches it. In production it's equally correct - a deploy changes the
 mtime, so nobody is served yesterday's stylesheet against today's markup.
+There it dates the copy `serve` collected and serves, read once, and that
+address is kept a year (config/static.py).
 
 Lives in `inventory` only because a template tag has to live in some app;
 nothing about it is inventory-specific.
@@ -26,6 +28,7 @@ from django.templatetags.static import static
 from django.utils import formats
 
 from common import group_thousands, plain_number
+from config.static import collected_version
 
 register = template.Library()
 
@@ -110,7 +113,12 @@ def _static_folders_changed(*, setting, **kwargs):
 
 
 def _version(path: str) -> int | None:
-    """The modification time of the file `path` names, None if none."""
+    """The modification time of the file `path` names, None if none. On the
+    server, the copy it serves, dated once (config/static.py: that address
+    is then kept a year); the source otherwise."""
+    collected = collected_version(path)
+    if collected is not None:
+        return collected
     found = _FOUND.get(path)
     if found is not None:
         try:

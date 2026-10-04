@@ -147,8 +147,9 @@ MIDDLEWARE = [
     # /static/ straight from STATIC_ROOT (collectstatic, which `serve` runs at
     # every start), before anything asks for a login: the login page needs
     # its stylesheet. Under runserver or DEBUG it serves from the source
-    # folders (WHITENOISE_USE_FINDERS, below STATIC_ROOT).
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+    # folders (WHITENOISE_USE_FINDERS, below STATIC_ROOT). WhiteNoise's, the
+    # address `{% asset %}` prints kept a year on the server (config/static.py).
+    "config.static.VersionedWhiteNoiseMiddleware",
     # The pages' Content-Security-Policy (config/security.py); above
     # XFrameOptionsMiddleware, whose header it reads on the way out.
     "config.security.ContentSecurityPolicyMiddleware",
