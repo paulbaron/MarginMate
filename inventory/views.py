@@ -1393,9 +1393,11 @@ def edit_product_conversion(request, product_id):
 
 def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
     """The article a suggestion names: the existing one it matched, or the
-    new one it describes. One that matched an article since deleted (an
-    undo, a merge) names NOTHING - made again by name it would resurrect
-    what somebody removed, silently, under « Approuver »."""
+    new one it describes - unsaved, made by the caller once the suggestion
+    is taken (a refused one left an empty article on the Stock page). One
+    that matched an article since deleted (an undo, a merge) names NOTHING -
+    made again by name it would resurrect what somebody removed, silently,
+    under « Approuver »."""
     matched_id = suggestion.get("matched_stock_type_id")
     if matched_id:
         stock_type = StockType.objects.filter(pk=matched_id).first()
@@ -1408,11 +1410,7 @@ def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
         return None
     unit = suggestion.get("new_stock_type_unit") or UnitChoices.UNIT
     category = (suggestion.get("new_stock_type_category") or "").strip()
-    stock_type, _created = StockType.objects.get_or_create(
-        name__iexact=name,
-        defaults={"name": name, "unit": unit, "category": category},
-    )
-    return stock_type
+    return StockType.objects.filter(name__iexact=name).first() or StockType(name=name, unit=unit, category=category)
 
 
 # The one confidence « Approuver les N sûres » takes: what the leave-one-out
@@ -1484,6 +1482,12 @@ def approve_all_suggestions(request):
             product.save(update_fields=["ai_suggestion"])
             continue
 
+        if stock_type.pk is None:
+            # get_or_create, not save(): another tab may have made it since.
+            stock_type, _created = StockType.objects.get_or_create(
+                name__iexact=stock_type.name,
+                defaults={"name": stock_type.name, "unit": stock_type.unit, "category": stock_type.category},
+            )
         # product.unit always mirrors stock_type.unit - see assign_product.
         link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
         approved += 1

@@ -485,6 +485,32 @@ class ApproveSureSuggestionsTests(TestCase):
         self.assertIn("facteur de conversion hors limites", self.message(response))
         self.assertEqual(self.client.get(reverse("inventory:stock_list")).status_code, 200)
 
+    def test_a_refused_suggestion_leaves_no_new_empty_article_behind(self):
+        """The new article a suggestion describes is made once its factor is
+        taken: refused, it was left in the Stock page with nothing in it."""
+        for factor in ("0.0001", "abc"):
+            with self.subTest(factor=factor):
+                new = suggestion(self.rum, "high", stock_equivalent=factor)
+                new.update(stock_type_name="Rhum vieux", matched_stock_type_id=None, is_new_stock_type=True)
+                product = make_product(supplier=self.supplier, raw_name=f"RHUM VIEUX {factor}", ai_suggestion=new)
+                make_invoice_line(product=product, quantity=1, total_ht="183.50")
+                self.client.post(self.url, {"confiance": "haute"})
+                product.refresh_from_db()
+                self.assertIsNone(product.stock_type)
+                self.assertFalse(StockType.objects.filter(name__iexact="Rhum vieux").exists())
+
+    def test_a_taken_suggestion_still_makes_its_new_article(self):
+        new = suggestion(self.rum, "high", stock_equivalent="0.7")
+        new.update(stock_type_name="Rhum vieux", matched_stock_type_id=None, is_new_stock_type=True)
+        new.update(new_stock_type_category="Spiritueux")
+        product = make_product(supplier=self.supplier, raw_name="RHUM VIEUX 70CL", ai_suggestion=new)
+        bought(product)
+        self.client.post(self.url, {"confiance": "haute"})
+        product.refresh_from_db()
+        made = StockType.objects.get(name="Rhum vieux")
+        self.assertEqual((made.unit, made.category), (UnitChoices.LITRE, "Spiritueux"))
+        self.assertEqual((product.stock_type, product.stock_equivalent), (made, Decimal("0.7")))
+
     def test_a_suggested_factor_finer_than_its_column_is_rounded_to_it(self):
         """0.25 g of a spice is 0.00025 kg: wider than stock_equivalent's four
         decimals, which « Approuver » refuses - and the suggestion made again
