@@ -3,30 +3,60 @@ One section of « Prévoir les courses », read as cards on a phone. Given:
 `rows` (views._line_rows), `label` (the table's data-table-label),
 `quantity` and `chance` (whether those columns are drawn), `words` (the
 confidence word beside the chance), `action` ("here": « Pas ici » at this
-store; "everywhere": « Ne plus proposer » anywhere; "": none) and `landing`
-(where the action's message is said: views.SHOPPING_ANCHORS). On a phone the
-sentence (« Pourquoi ») runs across the card: squeezed beside the figures
-it took a third of it.
+store; "everywhere": « Ne plus proposer » anywhere; "": none), `landing`
+(where the action's message is said: views.SHOPPING_ANCHORS) and
+`add_landing` (where « Ajouter »'s message is said: views.FORECAST_ADD_PLACES).
+`quantity` draws two columns: « Produit » (the store's product, its packs
+under it; empty when bought by measure) and « À acheter », ONE number sorted
+by itself, the article's units or the typed days in grey under it - and
+« Liste »: « Ajouter » posting those figures to the store's shopping list
+(the quantity may be changed first), or « Dans la liste (N) » when the open
+list holds the article still to buy (`row.listed`), a link to it
+(`list_url`); one ticked there as bought (`row.taken`) is no longer in the
+list: « Pris (N) » beside its « Ajouter », which puts it back. The action
+column is drawn only for a viewer who may post it (`may_tune`). On a phone
+the sentence (« Pourquoi ») and « Liste » run across the card: squeezed
+beside the figures they took a third of it.
 {% endcomment %}
 <div class="table-wrap">
 <table data-table data-table-label="{{ label }}" class="phone-cards">
     <thead>
         <tr>
             <th>Article</th>
-            {% if quantity %}<th>Quantité</th>{% endif %}
+            {% if quantity %}<th>Produit</th><th class="num">À acheter</th>{% endif %}
             {% if chance %}<th class="num">Chance</th>{% endif %}
             <th>Pourquoi</th>
-            {% if action %}<th></th>{% endif %}
+            {% if quantity %}<th>Liste</th>{% endif %}
+            {% if action and may_tune %}<th></th>{% endif %}
         </tr>
     </thead>
     <tbody>
         {% for row in rows %}
         <tr>
             <td>{{ row.line.name }}{% for word, kind in row.badges %} <span class="status-pill {{ kind }}">{{ word }}</span>{% endfor %}</td>
-            {% if quantity %}<td data-label="Quantité">{{ row.quantity }}{% if row.article_quantity %}<br><span class="muted small">{{ row.article_quantity }}</span>{% endif %}</td>{% endif %}
+            {% if quantity %}<td data-label="Produit">{{ row.product }}{% if row.packs %}<br><span class="muted small">{{ row.packs }}</span>{% endif %}</td>
+            <td class="num" data-label="À acheter" data-sort="{{ row.to_buy_sort }}">{{ row.to_buy }}{% if row.to_buy_note %}<br><span class="muted small">{{ row.to_buy_note }}</span>{% endif %}</td>{% endif %}
             {% if chance %}<td class="num" data-label="Chance" data-sort="{{ row.chance_sort }}">{{ row.percent }} %{% if words %} · {{ row.line.confidence }}{% endif %}</td>{% endif %}
             <td class="phone-card-wide" data-label="Pourquoi">{{ row.line.sentence }}</td>
-            {% if action %}
+            {% if quantity %}
+            <td class="shopping-add-cell phone-card-wide" data-label="Liste">
+                {% if row.listed %}<a href="{{ list_url }}">Dans la liste ({{ row.listed }})</a>{% else %}
+                {% if row.taken %}<span class="muted small">Pris ({{ row.taken }})</span>{% endif %}
+                <form method="post" action="{% url 'inventory:shopping_list_add' %}" class="shopping-add-line">
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ article_param }}" value="{{ row.line.article_id }}">
+                    {% if row.add.product_id %}<input type="hidden" name="{{ product_param }}" value="{{ row.add.product_id }}">{% endif %}
+                    {% if row.add.pack_size %}<input type="hidden" name="{{ pack_param }}" value="{{ row.add.pack_size }}">{% endif %}
+                    <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                    {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                    <input type="hidden" name="{{ landing_param }}" value="{{ add_landing }}">
+                    <input type="text" name="{{ quantity_param }}" value="{{ row.add.quantity }}" inputmode="decimal" size="4" aria-label="Quantité à ajouter">{% if row.add.unit %} {{ row.add.unit }}{% endif %}
+                    <button class="btn btn-small" type="submit">Ajouter</button>
+                </form>
+                {% endif %}
+            </td>
+            {% endif %}
+            {% if action and may_tune %}
             <td class="row-actions">
                 <form method="post" action="{% url 'inventory:shopping_exclude' %}"{% if action == "everywhere" %} data-confirm="Ne plus proposer « {{ row.line.name }} » dans aucune enseigne ?"{% endif %}>
                     {% csrf_token %}

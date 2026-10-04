@@ -833,6 +833,108 @@ class QuantityTests(SimpleTestCase):
             self.assertEqual(line.multiplier, multiplier, horizon)
 
 
+class UsualPurchaseTests(SimpleTestCase):
+    """`usual_purchase`: what one purchase of an article at a store usually
+    is, today - the figures plan_store's lines carry with no typed horizon
+    (the shopping list's « quantité habituelle »), for one article alone.
+
+    One weekly store, an article in each section: cups at every visit and a
+    syrup in packs of 6 (« À acheter »), lemons by measure, a tonic bought
+    once (« Peut-être » or « Nouveaux ici »), a vodka silent for ten months
+    (« Plus acheté ? »), a keg bought at the grocer's since (« Acheté
+    ailleurs maintenant ») and a deposit mostly given back (« consignes ? »)."""
+
+    NAMES = {101: "Sirop cassis 1L exemple", 102: "Citrons vrac exemple", 103: "Fût blonde 30L exemple"}
+
+    def rows(self):
+        weekly = range(7, 85, 7)
+        return [
+            *visits(weekly),
+            *(
+                bought(SYRUP, WHOLESALER, d, q, product=101, units=q, colisage=6)
+                for d, q in ((d, "12" if d == 14 else "6") for d in weekly)
+            ),
+            *(bought(LEMONS, WHOLESALER, d, "2.5", product=102, units="2.5") for d in range(7, 85, 14)),
+            bought(TONIC, WHOLESALER, 7, "6"),
+            *(bought(VODKA, WHOLESALER, d, "1.5") for d in (300, 293, 286)),
+            bought(KEG, WHOLESALER, 70, "30", product=103, units="1"),
+            *(bought(KEG, GROCER, d, "30") for d in (50, 35, 21)),
+            *(bought(DEPOSIT_KEG, WHOLESALER, d, "2") for d in (63, 42, 21)),
+            *(bought(DEPOSIT_KEG, WHOLESALER, d, "-2") for d in (56, 35)),
+        ]
+
+    def prepared(self):
+        return prepare(self.rows(), product_names=self.NAMES)
+
+    def test_every_line_of_every_section_is_its_usual_purchase(self):
+        prepared = self.prepared()
+        plan = plan_store(prepared, WHOLESALER, DEFAULT)
+        lines = lines_of(plan)
+        # The fixture reaches the sections it is written for.
+        self.assertTrue({TO_BUY, QUIET, ELSEWHERE, DEPOSIT} <= {line.section for line in lines})
+        self.assertEqual(len({line.article_id for line in lines}), 7)
+        for line in lines:
+            with self.subTest(article=line.name, section=line.section):
+                usual = shopping.usual_purchase(prepared, WHOLESALER, line.article_id)
+                self.assertIsInstance(usual, shopping.UsualPurchase)
+                self.assertEqual(
+                    (usual.qty, usual.product_id, usual.product_name, usual.product_units, usual.packs),
+                    (line.qty, line.product_id, line.product_name, line.product_units, line.packs),
+                )
+                self.assertIsInstance(usual.qty, Decimal)
+                # One rule for the line's chance and its quantity.
+                self.assertEqual(usual.qty, score_article(prepared, WHOLESALER, line.article_id, DEFAULT).qty)
+
+    def test_the_syrup_s_pack_and_the_lemons_by_measure(self):
+        prepared = self.prepared()
+        syrup = shopping.usual_purchase(prepared, WHOLESALER, SYRUP)
+        # The last three days bought 6, 12 and 6: the median, and the
+        # product's count among them, 6 - one pack of 6.
+        self.assertEqual(syrup.qty, Decimal("6"))
+        self.assertEqual((syrup.product_id, syrup.product_name), (101, "Sirop cassis 1L exemple"))
+        self.assertEqual((syrup.product_units, syrup.packs), (Decimal("6"), (1, Decimal("6"))))
+        lemons = shopping.usual_purchase(prepared, WHOLESALER, LEMONS)
+        self.assertEqual(lemons.qty, Decimal("2.5"))
+        self.assertEqual((lemons.product_id, lemons.product_name), (102, "Citrons vrac exemple"))
+        # Bought by measure: no count of the product, no pack.
+        self.assertIsNone(lemons.product_units)
+        self.assertIsNone(lemons.packs)
+
+    def test_a_typed_horizon_multiplies_the_line_never_the_usual_purchase(self):
+        prepared = self.prepared()
+        plan = plan_store(prepared, WHOLESALER, DEFAULT, horizon_days=30)
+        [line] = [line for line in lines_of(plan) if line.article_id == SYRUP]
+        self.assertGreater(line.multiplier, 1)
+        usual = shopping.usual_purchase(prepared, WHOLESALER, SYRUP)
+        self.assertEqual(usual.qty, line.qty)
+        self.assertEqual(line.total_qty, usual.qty * line.multiplier)
+        self.assertEqual(line.total_product_units, usual.product_units * line.multiplier)
+
+    def test_none_for_an_article_never_bought_at_the_store(self):
+        prepared = self.prepared()
+        self.assertIsNone(shopping.usual_purchase(prepared, GROCER, SYRUP))
+        self.assertIsNone(shopping.usual_purchase(prepared, WHOLESALER, NAPKINS))
+        self.assertIsNone(shopping.usual_purchase(prepared, CORNER, CUPS))
+        # Returns alone are no purchase.
+        returned = prepare([bought(SYRUP, WHOLESALER, 5, "-2")])
+        self.assertIsNone(shopping.usual_purchase(returned, WHOLESALER, SYRUP))
+
+    def test_none_before_its_first_purchase(self):
+        prepared = self.prepared()
+        # The tonic, first bought 7 days ago, as of 10 days ago: not yet.
+        earlier = dataclasses.replace(prepared, today=ago(10))
+        self.assertIsNone(shopping.usual_purchase(earlier, WHOLESALER, TONIC))
+        # And a purchase made today is today's history.
+        today = prepare([bought(TONIC, WHOLESALER, 0, "6")])
+        self.assertEqual(shopping.usual_purchase(today, WHOLESALER, TONIC).qty, Decimal("6"))
+
+    def test_the_median_of_two_days_can_carry_more_places(self):
+        # Two days, 1.25 and 2.5: 1.875 - the quantity as the line has it,
+        # rounded by whoever shows or stores it.
+        rows = [*visits((20, 10)), bought(SYRUP, WHOLESALER, 20, "1.25"), bought(SYRUP, WHOLESALER, 10, "2.5")]
+        self.assertEqual(shopping.usual_purchase(prepare(rows), WHOLESALER, SYRUP).qty, Decimal("1.875"))
+
+
 class EdgeTests(SimpleTestCase):
     def test_zero_negative_and_missing_quantities_never_make_a_purchase(self):
         rows = [

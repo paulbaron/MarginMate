@@ -44,7 +44,7 @@ from tests.factories import (
     make_stock_take_line,
     make_supplier,
 )
-from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history
+from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history, make_shopping_lists
 
 
 class BaseTemplateTests(TestCase):
@@ -289,6 +289,16 @@ class SearchableSortableTableTests(TestCase):
             with self.subTest(table=label):
                 self.assertIn(f'<table data-table data-table-label="{label}" class="phone-cards">', html)
         self.assertRegex(html, r'<td class="num" data-label="Chance" data-sort="0\.\d{4}">\d+ % · ')
+        # « À acheter » sorts by its bare number, never by the grey note
+        # under it (« 2 L », « pour 60 jours »).
+        self.assertIn('<td class="num" data-label="À acheter" data-sort="24">24</td>', html)
+        self.assertIn(
+            '<td class="num" data-label="À acheter" data-sort="2">2<br><span class="muted small">2 L</span>', html
+        )
+        cells = re.findall(r'<td class="num" data-label="À acheter"[^>]*>', html)
+        self.assertGreaterEqual(len(cells), 4)
+        for cell in cells:
+            self.assertRegex(cell, r'data-sort="[0-9]+(\.[0-9]+)?"')
         self.assertIn('data-label="Total HT" data-sort="1170.00"', html)
         response = self.client.get(reverse("inventory:shopping_rhythm"), {"fournisseur": made.wholesaler.pk})
         self.assertContains(response, '<table data-table data-table-label="rythme d\'achat" class="phone-cards">')
@@ -296,6 +306,31 @@ class SearchableSortableTableTests(TestCase):
         self.assertContains(
             response, f'<td data-label="Dernier achat" data-sort="{last:%Y-%m-%d}">{last:%d/%m/%Y}</td>'
         )
+
+    def test_shopping_lists(self):
+        """« Listes de courses »: the lists open and finished, a store's list
+        and a finished one are lists like any other - a date sorts as a
+        date, « 1 / 3 » by its count, a quantity by its bare number, never
+        « 2 L » read as text."""
+        made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        html = self.assertEnhancedTable("inventory:shopping_lists").content.decode()
+        for label in ("listes en cours", "listes terminées"):
+            with self.subTest(table=label):
+                self.assertIn(f'<table data-table data-table-label="{label}" class="phone-cards">', html)
+        started = timezone.localtime(lists.open.created_at)
+        self.assertIn(f'<td data-label="Commencée le" data-sort="{started:%Y-%m-%d}">{started:%d/%m/%Y}</td>', html)
+        self.assertIn('<td data-label="Pris" data-sort="1">1 / 3</td>', html)
+        self.assertRegex(
+            html, r'<td data-label="Terminée le" data-sort="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}">\d{2}/\d{2}/\d{4}</td>'
+        )
+        page = reverse("inventory:shopping_list_page")
+        response = self.client.get(page, {"fournisseur": made.wholesaler.pk})
+        self.assertContains(response, '<table data-table data-table-label="articles" class="phone-cards">')
+        self.assertContains(response, '<td class="num" data-label="Quantité" data-sort="2">2 L</td>')
+        response = self.client.get(page, {"liste": lists.finished.pk})
+        self.assertContains(response, '<table data-table data-table-label="courses terminées" class="phone-cards">')
+        self.assertContains(response, '<td class="num" data-label="Quantité" data-sort="1">1 kg</td>')
 
     def test_stock_list_sorts_without_a_second_search_box(self):
         """It already has a server-backed fuzzy search; a second box filtering
@@ -510,6 +545,7 @@ class PageChromeTests(TestCase):
             # Nothing bought in this database: both say what they are for all the same.
             "inventory:shopping_list",
             "inventory:shopping_rhythm",
+            "inventory:shopping_lists",
             "margins:margins_home",
             "bank:income_home",
             # With no balance typed yet: its subtitle says it all the same.
@@ -2011,19 +2047,20 @@ class PhoneCardsLabelTests(TestCase):
 
     def test_the_shopping_list_its_folds_and_the_rhythm(self):
         """« Prévoir les courses »: the list and every fold drawn as a table,
-        each figure under its own header's words, the line's action last;
-        « Rythme d'achat », for every store and for one (its « Habitude ici »
-        column then). Invented data (make_shopping_history)."""
+        each figure under its own header's words, the line's action last -
+        the three sections with a quantity, under « Produit » and « À
+        acheter »; « Rythme d'achat », for every store and for one (its
+        « Habitude ici » column then). Invented data (make_shopping_history)."""
         made = make_shopping_history()
         page = reverse("inventory:shopping_list")
-        for label, rows, action in (
-            ("à acheter", 2, "Pas ici"),
-            ("peut-être", 1, "Pas ici"),
-            ("nouveaux ici", 1, "Pas ici"),
-            ("plus acheté", 1, "Ne plus proposer"),
-            ("acheté ailleurs", 1, None),
-            ("à acheter ailleurs", 1, "Ne plus proposer"),
-            ("les plus achetés ici", 7, None),
+        for label, rows, action, quantity in (
+            ("à acheter", 2, "Pas ici", True),
+            ("peut-être", 1, "Pas ici", True),
+            ("nouveaux ici", 1, "Pas ici", True),
+            ("plus acheté", 1, "Ne plus proposer", False),
+            ("acheté ailleurs", 1, None, False),
+            ("à acheter ailleurs", 1, "Ne plus proposer", False),
+            ("les plus achetés ici", 7, None, False),
         ):
             with self.subTest(table=label):
                 table = self.cards(page, "data-table-label", label)
@@ -2032,6 +2069,21 @@ class PhoneCardsLabelTests(TestCase):
                     self.assertActionCellLast(table, action)
                 if label != "les plus achetés ici":
                     self.assertReasonAcross(table)
+                headers = [" ".join(cell["text"].split()) for cell in table["head"]]
+                self.assertNotIn("Quantité", headers)
+                if quantity:
+                    self.assertEqual(headers[:3], ["Article", "Produit", "À acheter"])
+                    # « Liste » (« Ajouter ») runs across the card, before the action.
+                    self.assertEqual(headers[-2:], ["Liste", ""])
+                    for number, row in enumerate(table["rows"]):
+                        self.assertEqual([cell["label"] for cell in row[1:3]], ["Produit", "À acheter"], number)
+                        self.assertIn("num", row[2]["classes"], number)
+                        self.assertEqual(row[-2]["label"], "Liste", number)
+                        self.assertIn("phone-card-wide", row[-2]["classes"], number)
+                else:
+                    self.assertNotIn("Produit", headers)
+                    self.assertNotIn("À acheter", headers)
+                    self.assertNotIn("Liste", headers)
         rhythm = reverse("inventory:shopping_rhythm")
         for query, rows in (("", 9), (f"?fournisseur={made.wholesaler.pk}", 7)):
             with self.subTest(rhythm=query):
@@ -2040,6 +2092,34 @@ class PhoneCardsLabelTests(TestCase):
                 self.assertActionCellLast(table, "Ne jamais proposer")
                 headers = [" ".join(cell["text"].split()) for cell in table["head"]]
                 self.assertEqual("Habitude ici" in headers, bool(query))
+
+    def test_the_shopping_lists(self):
+        """« Listes de courses »: the lists open and finished, a store's list
+        - each figure under its header's words, « Modifier » and « Retirer »
+        last, across the card -, and a finished list. Invented data
+        (make_shopping_lists)."""
+        made = make_shopping_history()
+        lists = make_shopping_lists(made)
+        index = reverse("inventory:shopping_lists")
+        page = reverse("inventory:shopping_list_page")
+        for url, label, rows, action in (
+            (index, "listes en cours", 1, ["Faire", "les", "courses"]),
+            (index, "listes terminées", 1, None),
+            (f"{page}?fournisseur={made.wholesaler.pk}", "articles", 3, ["Modifier", "Retirer"]),
+            (f"{page}?liste={lists.finished.pk}", "courses terminées", 2, None),
+        ):
+            with self.subTest(table=label):
+                table = self.cards(url, "data-table-label", label)
+                self.assertLabelled(table, rows)
+                for number, row in enumerate(table["rows"]):
+                    actions = [cell for cell in row if "row-actions" in cell["classes"]]
+                    if action is None:
+                        self.assertEqual(actions, [], number)
+                        continue
+                    self.assertEqual(row[-1]["classes"], ["row-actions"], number)
+                    self.assertIsNone(row[-1]["label"], number)
+                    self.assertEqual(row[-1]["text"].split(), action, number)
+                    self.assertEqual(len(actions), 1, number)
 
     def test_the_gaps_with_something_excluded(self):
         """An article left out of the gaps - alone, or with its category -
@@ -2227,6 +2307,35 @@ class ShoppingStylesheetTests(StylesheetTestCase):
         filter's label on one line, and outweighs `.inline-label`'s own
         phone rule: this one names both."""
         self.assertDeclares(".filter-row.shopping-form label", "(max-width: 600px)", {"white-space": "normal"})
+
+
+class ShoppingListStylesheetTests(StylesheetTestCase):
+    """« Listes de courses »' tick page, read in a store with a phone in one
+    hand (marginmate.css, after « Prévoir les courses »' rules)."""
+
+    def test_each_item_is_a_button_a_thumb_tall(self):
+        self.assertDeclares(".shopping-tick-button", None, {"min-height": "56px", "width": "100%", "cursor": "pointer"})
+        self.assertGreaterEqual(int(self.declared(".shopping-tick-button")["min-height"].removesuffix("px")), 44)
+
+    def test_a_ticked_item_reads_bought(self):
+        self.assertDeclares(".shopping-tick.is-ticked .shopping-tick-name", None, {"text-decoration": "line-through"})
+        self.assertDeclares(".shopping-tick.is-ticked .shopping-tick-box", None, {"background": "var(--green)"})
+
+    def test_finishing_stays_at_the_foot_of_the_screen(self):
+        self.assertDeclares(".shopping-finish", None, {"position": "sticky", "bottom": "0"})
+
+    def test_the_tick_page_is_phone_first_at_every_width(self):
+        """Its fields at 16 px (iOS zooms the page in under it) and its
+        buttons 44 px tall, with or without a touch screen - as Consignes'."""
+        self.assertDeclares(".shopping-run-page :is(input, select, textarea)", None, {"font-size": "1rem"})
+        self.assertDeclares(".shopping-run-page .btn", None, {"min-height": "44px"})
+
+    def test_no_rule_of_the_lists_unsets_everything(self):
+        """`all: unset` would take the app's focus ring off the tick buttons
+        (FocusRingTests)."""
+        rules = [rule for rule in self.rules if any("shopping-" in selector for selector in rule.selectors)]
+        self.assertGreater(len(rules), 10)
+        self.assertEqual([rule.selectors for rule in rules if "all" in rule.declarations], [])
 
 
 class GapExclusionListStylesheetTests(StylesheetTestCase):

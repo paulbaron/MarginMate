@@ -14,12 +14,20 @@ Hiding a link is never the boundary, but the links are what an employee
 reads first: `TopbarTests` checks that he sees his own pages and no other,
 and that the owner's bar is drawn exactly as before.
 
+« Liste de courses » (`shopping`, 04/10/2026) opens « Prévoir les courses »
+and the shopping lists as « Produits & charges » does; the forecast's
+settings and exclusions stay « Produits & charges »' alone
+(`ShoppingAreaTests`). Accounts 0005 gave it to every employee already
+invited (`ShoppingAreaMigrationTests`).
+
 Every login and name here is invented; the addresses end in
 @example.invalid.
 """
 
+import importlib
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from django.apps import apps
@@ -38,6 +46,7 @@ from accounts.access import (
     AREA_KEYS,
     AREAS,
     COST_AREAS,
+    DEFAULT_AREAS,
     EVERYONE,
     FULL,
     HOME,
@@ -50,14 +59,35 @@ from accounts.access import (
     areas_of_file,
     areas_of_route,
 )
-from accounts.models import Membership
+from accounts.models import Membership, Tenant
+from accounts.router import ACCOUNTS_ALIAS
 from accounts.tests.test_middleware import SAMPLES, routes
+from inventory.models import ShoppingExclusion, ShoppingList, ShoppingListItem
 from invoices.models import Invoice
 from tests.factories import make_invoice, make_product
-from tests.runner import TEST_TENANT_NAME, employee_of_the_test_tenant, test_user
-from tests.test_navigation import LABELS, active_labels, label_of, nav_links
+from tests.runner import TEST_TENANT_NAME, TEST_TENANT_PK, employee_of_the_test_tenant, test_user
+from tests.test_navigation import LABELS, active_labels, label_of, nav_links, section_shown
+from tests.test_views_smoke import make_shopping_history, make_shopping_lists
 
 NO_ACCESS = reverse("accounts:no_access")
+#: « Prévoir les courses » and the shopping lists: they open with « Liste de
+#: courses » or with « Produits & charges ».
+SHOPPING_ROUTES = (
+    "inventory:shopping_list",
+    "inventory:shopping_rhythm",
+    "inventory:shopping_lists",
+    "inventory:shopping_list_page",
+    "inventory:shopping_list_add",
+    "inventory:shopping_list_add_all",
+    "inventory:shopping_list_item_edit",
+    "inventory:shopping_list_item_delete",
+    "inventory:shopping_list_item_tick",
+    "inventory:shopping_list_finish",
+)
+#: The forecast's settings and exclusions: « Produits & charges »' alone.
+TUNING_ROUTES = ("inventory:shopping_settings", "inventory:shopping_exclude", "inventory:shopping_include")
+#: The data migration giving every employee already invited the lists.
+SHOPPING_AREA_MIGRATION = importlib.import_module("accounts.migrations.0005_shopping_area")
 #: The routes every login of the espace opens, whatever is ticked.
 EVERYONE_ROUTES = [
     "accounts:confirm_password",
@@ -225,6 +255,19 @@ class AreasOfRouteTests(SimpleTestCase):
         self.assertEqual(areas_of_route("nouvelle:page", "nouvelle"), OWNER_ONLY)
         self.assertEqual(areas_of_route("page_sans_app", ""), OWNER_ONLY)
 
+    def test_the_shopping_pages_open_with_the_lists_or_the_products(self):
+        """The forecast, its rhythm and every list route: « Liste de
+        courses » or « Produits & charges ». The forecast's settings and
+        exclusions change the list for everybody: its app's area alone, no
+        entry of their own."""
+        for name in SHOPPING_ROUTES:
+            with self.subTest(name=name):
+                self.assertEqual(areas_of_route(name, "inventory"), frozenset({"products", "shopping"}))
+        for name in TUNING_ROUTES:
+            with self.subTest(name=name):
+                self.assertNotIn(name, VIEW_AREAS)
+                self.assertEqual(areas_of_route(name, "inventory"), frozenset({"products"}))
+
 
 class AccessTests(SimpleTestCase):
     def test_an_owner_opens_everything(self):
@@ -266,14 +309,30 @@ class AccessTests(SimpleTestCase):
         self.assertEqual(template.render({"can": given}), "True|False|False|True|/invoices/")
 
     def test_who_sees_what_articles_cost(self):
-        """Counting alone shows no price; any area already showing what
-        articles cost shows an inventory's values too."""
-        self.assertFalse(Access.of(member(["stock_takes", "returnables", "invoices_add", "staff", "bank"])).sees_costs)
+        """Counting alone shows no price, nor do the shopping lists; any
+        area already showing what articles cost shows an inventory's values
+        too."""
+        self.assertNotIn("shopping", COST_AREAS)
+        self.assertFalse(
+            Access.of(member(["stock_takes", "returnables", "invoices_add", "staff", "bank", "shopping"])).sees_costs
+        )
         for area in sorted(COST_AREAS):
             with self.subTest(area=area):
                 self.assertTrue(Access.of(member(["stock_takes", area])).sees_costs)
 
+    def test_the_lists_are_ticked_for_a_new_employee(self):
+        """« Liste de courses » goes with the defaults, after « Consignes »:
+        the boxes ticked are the first ones of the page."""
+        self.assertEqual(DEFAULT_AREAS, ("invoices_add", "stock_takes", "returnables", "shopping"))
+        self.assertEqual([area.key for area in AREAS][: len(DEFAULT_AREAS)], list(DEFAULT_AREAS))
+        (lists,) = [area for area in AREAS if area.key == "shopping"]
+        self.assertEqual(lists.label, "Liste de courses")
+        self.assertEqual(lists.entry, "inventory:shopping_lists")
+        # Its help says what it shows, and that it shows no price.
+        self.assertIn("sans les prix", lists.help)
+
     def test_where_each_login_starts(self):
+        lists = reverse("inventory:shopping_lists")
         cases = [
             (Access.of(Membership(role=Membership.Role.OWNER)), "/"),
             (Access.of(member(["returnables", "products"])), "/"),
@@ -281,6 +340,14 @@ class AccessTests(SimpleTestCase):
             (Access.of(member(["stock_takes"])), reverse("inventory:stock_take_list")),
             # The first area in the order the owner reads them.
             (Access.of(member(["bank", "returnables", "stock_takes"])), reverse("inventory:stock_take_list")),
+            # The lists are the start page only of one given nothing else:
+            # beside another area, his usual page (accounts 0005 moved none).
+            (Access.of(member(["shopping"])), lists),
+            (Access.of(member(["shopping", "bank"])), reverse("bank:bank_home")),
+            (Access.of(member(["shopping", "invoices"])), reverse("invoices:invoice_list")),
+            (Access.of(member(["shopping", "products"])), "/"),
+            # A new employee's boxes: « Ajouter des factures » first.
+            (Access.of(member(list(DEFAULT_AREAS))), reverse("invoices:invoice_add")),
             (Access.of(member([])), NO_ACCESS),
         ]
         self.assertEqual(reverse(HOME), "/")
@@ -702,6 +769,49 @@ class TopbarTests(TestCase):
         response = self.client.get(reverse("returnables:home"))
         self.assertEqual(self.labels(response), [label for label in LABELS if label != "Données"])
 
+    def test_the_lists_only_lead_courses_to_the_lists(self):
+        """Given « Liste de courses » without « Produits & charges », his
+        link reads « Courses » - « Produits & charges » would promise the
+        prices and charges his employer did not open - and leads to the
+        lists, with no badge: the products to classify are not his."""
+        make_product(raw_name="Sirop de test")
+        self.client.force_login(employee_of_the_test_tenant("courses@example.invalid", ["shopping"]))
+        lists = reverse("inventory:shopping_lists")
+        response = self.client.get(lists)
+        self.assertEqual(self.labels(response), ["Courses"])
+        link = link_labelled(response, "Courses")
+        self.assertIn(f'href="{lists}"', link)
+        self.assertNotIn('class="badge"', link)
+        self.assertEqual(active_labels(response), ["Courses"])
+        self.assertEqual(section_shown(response), "Courses")
+        self.assertEqual(brand_href(response), lists)
+
+    def test_with_the_products_the_link_is_produits_et_charges(self):
+        self.client.force_login(employee_of_the_test_tenant("deux@example.invalid", ["shopping", "products"]))
+        response = self.client.get(reverse("inventory:shopping_lists"))
+        self.assertEqual(self.labels(response), ["Produits &amp; charges"])
+        self.assertEqual(active_labels(response), ["Produits &amp; charges"])
+        self.assertEqual(brand_href(response), "/")
+
+    def test_courses_takes_the_place_of_produits_et_charges(self):
+        """« Courses » is drawn where « Produits & charges » is, and never
+        beside it: no employee's bar holds more links than with every box
+        ticked - the bar the topbar's browser tests measure. And a new
+        employee's boxes lead to his four pages."""
+        everything = sorted(AREA_KEYS)
+        for email, pages, labels in (
+            ("tout@example.invalid", everything, [label for label in LABELS if label != "Données"]),
+            (
+                "sans-produits@example.invalid",
+                [key for key in everything if key != "products"],
+                ["Courses", *[label for label in LABELS[1:] if label != "Données"]],
+            ),
+            ("nouveau@example.invalid", list(DEFAULT_AREAS), ["Courses", "Factures", "Inventaires", "Consignes"]),
+        ):
+            with self.subTest(email=email):
+                self.client.force_login(employee_of_the_test_tenant(email, pages))
+                self.assertEqual(self.labels(self.client.get(reverse("inventory:shopping_lists"))), labels)
+
 
 class QueryCostTests(TestCase):
     """The access is read in the membership's own row, the one the tenant
@@ -727,3 +837,334 @@ class QueryCostTests(TestCase):
                     drawn = (can.home_url, can["invoices"], can["invoices_add"], can.owner, can.sees_costs)
                 self.assertTrue(drawn[0])
                 self.assertIs(drawn[2], True)
+
+
+class ShoppingAreaTests(TestCase):
+    """« Liste de courses » (`shopping`): the shopping lists and « Prévoir
+    les courses » open with it as with « Produits & charges »; what changes
+    the forecast for everybody - its settings, its exclusions - stays
+    « Produits & charges »', and its forms are not drawn for him; its money
+    stays for one shown what articles cost. Without either area, every
+    shopping route is refused before its view: nothing written. The data:
+    tests/test_views_smoke.py's invented history and lists."""
+
+    def setUp(self):
+        self.made = make_shopping_history()
+        self.lists = make_shopping_lists(self.made)
+        self.store = self.made.wholesaler.pk
+        self.exclusion = ShoppingExclusion.objects.create(stock_type=self.made.rum)
+
+    def log_in(self, *pages, email="courses@example.invalid"):
+        employee = employee_of_the_test_tenant(email, pages, name="Sacha Exemple")
+        self.client.force_login(employee)
+        return employee
+
+    def posted(self) -> dict:
+        """What each shopping route is posted, as its page's form posts it:
+        reaching its view, every one of them writes."""
+        return {
+            "inventory:shopping_list": {},
+            "inventory:shopping_rhythm": {},
+            "inventory:shopping_lists": {},
+            "inventory:shopping_list_page": {},
+            "inventory:shopping_list_add": {"fournisseur": self.store, "nom": "Serviettes exemple"},
+            "inventory:shopping_list_add_all": {"fournisseur": self.store},
+            "inventory:shopping_list_item_edit": {
+                "fournisseur": self.store,
+                "ligne": self.lists.bread.pk,
+                "quantite": "5",
+                "note": "Complet",
+            },
+            "inventory:shopping_list_item_delete": {"fournisseur": self.store, "ligne": self.lists.bread.pk},
+            "inventory:shopping_list_item_tick": {"fournisseur": self.store, "ligne": self.lists.beer.pk, "pris": "1"},
+            "inventory:shopping_list_finish": {"liste": self.lists.open.pk, "garder": "1"},
+            "inventory:shopping_settings": {"fournisseur": self.store, "seuil": "30", "memoire": "6"},
+            "inventory:shopping_exclude": {
+                "fournisseur": self.store,
+                "article": self.made.syrup.pk,
+                "chez": self.store,
+                "retour": "liste",
+            },
+            "inventory:shopping_include": {"fournisseur": self.store, "exclusion": self.exclusion.pk},
+        }
+
+    def forecast(self) -> str:
+        return self.client.get(reverse("inventory:shopping_list"), {"fournisseur": self.store}).content.decode()
+
+    def test_the_lists_alone_open_the_shopping_routes_and_no_other_page_of_the_app(self):
+        """Swept over every route: among the inventory app's, exactly the
+        shopping ones; elsewhere, only the pages of every login."""
+        given = Access(owner=False, areas=["shopping"])
+        opened = {match.view_name for _url, match in sample_routes() if given.opens(match)}
+        self.assertEqual(sorted(name for name in opened if name.startswith("inventory:")), sorted(SHOPPING_ROUTES))
+        self.assertLessEqual({name for name in opened if not name.startswith("inventory:")}, set(EVERYONE_ROUTES))
+
+    def test_the_lists_alone_open_the_lists_the_forecast_and_the_rhythm(self):
+        self.log_in("shopping")
+        page = reverse("inventory:shopping_list_page")
+        for url in (
+            reverse("inventory:shopping_lists"),
+            f"{page}?fournisseur={self.store}",
+            f"{page}?fournisseur={self.store}&mode=courses",
+            f"{page}?fournisseur={self.store}&ligne={self.lists.beer.pk}",
+            f"{page}?liste={self.lists.finished.pk}",
+            reverse("inventory:shopping_list"),
+            f"{reverse('inventory:shopping_list')}?fournisseur={self.store}&dans=30",
+            reverse("inventory:shopping_rhythm"),
+            f"{reverse('inventory:shopping_rhythm')}?fournisseur={self.store}",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_the_lists_alone_write_the_lists(self):
+        """The gate lets his posts through to their views: an item added, a
+        tick, the run finished - each under his own login."""
+        employee = self.log_in("shopping")
+        posted = self.posted()
+        for name in (
+            "inventory:shopping_list_add",
+            "inventory:shopping_list_item_tick",
+            "inventory:shopping_list_finish",
+        ):
+            with self.subTest(route=name):
+                self.assertEqual(self.client.post(reverse(name), posted[name]).status_code, 302)
+        added = ShoppingListItem.objects.get(label="Serviettes exemple", shopping_list=self.lists.open)
+        self.assertEqual(added.added_by, employee.get_username())
+        self.lists.beer.refresh_from_db()
+        self.assertEqual(self.lists.beer.checked_by, employee.get_username())
+        self.lists.open.refresh_from_db()
+        self.assertEqual(self.lists.open.finished_by, employee.get_username())
+        # What he did not tick waits on the next list, made by him.
+        carried = ShoppingList.objects.get(supplier=self.made.wholesaler, finished_at__isnull=True)
+        self.assertEqual(carried.created_by, employee.get_username())
+        self.assertTrue(carried.items.filter(label="Serviettes exemple").exists())
+
+    def test_every_shopping_route_answers_him_without_a_refusal(self):
+        """GET and POST, as his pages post them: a page, or the redirect a
+        form answers with - never the gate's refusal, never a 500."""
+        self.log_in("shopping")
+        posted = self.posted()
+        for name in SHOPPING_ROUTES:
+            for method in ("get", "post"):
+                with self.subTest(route=name, method=method):
+                    data = posted[name] if method == "post" else {}
+                    response = getattr(self.client, method)(reverse(name), data)
+                    self.assertIn(response.status_code, (200, 302))
+
+    def test_the_lists_alone_are_refused_the_forecast_s_settings_and_exclusions(self):
+        """Refused by the gate, before their views: nothing written, and the
+        refusal says so."""
+        self.log_in("shopping")
+        posted = self.posted()
+        before = row_counts()
+        for name in TUNING_ROUTES:
+            for method in ("get", "post"):
+                with self.subTest(route=name, method=method):
+                    response = getattr(self.client, method)(reverse(name), posted[name] if method == "post" else {})
+                    self.assertContains(response, "Page non accessible", status_code=403)
+                    if method == "post":
+                        self.assertContains(response, escape(access.REFUSED_POST), status_code=403)
+                    # His one link, lit nowhere: the page is none of his.
+                    self.assertEqual([label_of(link) for link in nav_links(response)], ["Courses"])
+                    self.assertEqual(active_labels(response), [])
+        self.assertEqual(row_counts(), before)
+        self.assertTrue(ShoppingExclusion.objects.filter(pk=self.exclusion.pk).exists())
+
+    def test_the_rest_of_produits_et_charges_is_refused(self):
+        """« / » - « Produits & charges »' list - sends him to the lists; an
+        article's form is refused."""
+        self.log_in("shopping")
+        self.assertRedirects(
+            self.client.get(reverse("inventory:stock_list")),
+            reverse("inventory:shopping_lists"),
+            fetch_redirect_response=False,
+        )
+        for name in ("inventory:stock_type_create", "inventory:review_queue"):
+            with self.subTest(route=name):
+                self.assertContains(self.client.get(reverse(name)), "Page non accessible", status_code=403)
+
+    def test_the_forecast_draws_no_tuning_form_and_no_money_for_him(self):
+        """He may add to the list from the forecast; he is not shown what he
+        may not post - « Pas ici », « Ne plus proposer », « Réglages »,
+        « Exclusions » - nor « Total HT », and « Rythme d'achat » draws no
+        « Ne jamais proposer »."""
+        self.log_in("shopping")
+        html = self.forecast()
+        self.assertIn(f'action="{reverse("inventory:shopping_list_add")}"', html)
+        for route in TUNING_ROUTES:
+            with self.subTest(route=route):
+                self.assertNotIn(f'action="{reverse(route)}"', html)
+        for words in ("Pas ici", "Ne plus proposer", "Réglages", 'id="reglages"', 'id="exclusions"', "Total HT"):
+            with self.subTest(words=words):
+                self.assertNotIn(words, html)
+        rhythm = self.client.get(reverse("inventory:shopping_rhythm"), {"fournisseur": self.store}).content.decode()
+        self.assertNotIn("Ne jamais proposer", rhythm)
+        self.assertNotIn(f'action="{reverse("inventory:shopping_exclude")}"', rhythm)
+
+    def test_with_an_area_showing_costs_he_sees_the_money_and_still_no_tuning_form(self):
+        self.log_in("shopping", "invoices")
+        html = self.forecast()
+        self.assertIn("Total HT", html)
+        for route in TUNING_ROUTES:
+            with self.subTest(route=route):
+                self.assertNotIn(f'action="{reverse(route)}"', html)
+
+    def test_the_owner_is_drawn_every_form(self):
+        self.client.force_login(test_user())
+        html = self.forecast()
+        for route in (*TUNING_ROUTES, "inventory:shopping_list_add"):
+            with self.subTest(route=route):
+                self.assertIn(f'action="{reverse(route)}"', html)
+        self.assertIn("Total HT", html)
+
+    def test_without_the_lists_every_shopping_route_is_refused(self):
+        """An employee given « Faire un inventaire » alone: GET and POST,
+        every shopping route refused before its view - nothing written - and
+        a tick sent by htmx to his own first page."""
+        self.log_in("stock_takes")
+        posted = self.posted()
+        before = row_counts()
+        for name in (*SHOPPING_ROUTES, *TUNING_ROUTES):
+            for method in ("get", "post"):
+                with self.subTest(route=name, method=method):
+                    response = getattr(self.client, method)(reverse(name), posted[name] if method == "post" else {})
+                    self.assertContains(response, "Page non accessible", status_code=403)
+        response = self.client.post(
+            reverse("inventory:shopping_list_item_tick"),
+            posted["inventory:shopping_list_item_tick"],
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response["HX-Redirect"], reverse("inventory:stock_take_list"))
+        self.assertEqual(row_counts(), before)
+
+    def test_the_products_alone_open_the_lists_too(self):
+        employee = self.log_in("products")
+        self.assertEqual(self.client.get(reverse("inventory:shopping_lists")).status_code, 200)
+        page = reverse("inventory:shopping_list_page")
+        self.assertEqual(self.client.get(page, {"fournisseur": self.store}).status_code, 200)
+        posted = self.posted()["inventory:shopping_list_add"]
+        self.assertEqual(self.client.post(reverse("inventory:shopping_list_add"), posted).status_code, 302)
+        self.assertEqual(ShoppingListItem.objects.get(label="Serviettes exemple").added_by, employee.get_username())
+        # And the forecast's settings, his app's.
+        self.assertIn(f'action="{reverse("inventory:shopping_settings")}"', self.forecast())
+
+
+class ShoppingAreaMigrationTests(TestCase):
+    """accounts/migrations/0005_shopping_area: every employee already
+    invited, of every espace, opens « Liste de courses » (the owner,
+    04/10/2026); the pages are kept in the page's order, the new key at its
+    place, and anything stored that is no key stays, after them. The owner's
+    rows are left as they are. Run on the central database, as `migrate`
+    runs it there (the router sends accounts' rows to ACCOUNTS_ALIAS)."""
+
+    def migrate(self):
+        SHOPPING_AREA_MIGRATION.give_every_employee_the_shopping_lists(
+            apps, SimpleNamespace(connection=SimpleNamespace(alias=ACCOUNTS_ALIAS))
+        )
+
+    def employee(self, pages, email, tenant_id=TEST_TENANT_PK) -> Membership:
+        """An employee's membership storing `pages` exactly - a value no form
+        would store included."""
+        user = employee_of_the_test_tenant(email)
+        membership = Membership.objects.get(user=user)
+        Membership.objects.filter(pk=membership.pk).update(pages=pages, tenant_id=tenant_id)
+        return membership
+
+    def pages_of(self, membership) -> object:
+        return Membership.objects.get(pk=membership.pk).pages
+
+    def test_an_employee_given_the_areas_of_0003_gets_the_lists_in_their_place(self):
+        before_0005 = [key for key in SHOPPING_AREA_MIGRATION.AREAS_IN_0005 if key != "shopping"]
+        given = self.employee(before_0005, "tout-0003@example.invalid")
+        self.migrate()
+        self.assertEqual(self.pages_of(given), SHOPPING_AREA_MIGRATION.AREAS_IN_0005)
+        self.assertEqual(len(self.pages_of(given)), 11)
+
+    def test_each_employee_s_pages_gain_the_lists_in_the_page_s_order(self):
+        cases = [
+            (["returnables", "invoices_add"], ["invoices_add", "returnables", "shopping"]),
+            ([], ["shopping"]),
+            (["bank"], ["shopping", "bank"]),
+            (["returnables", "returnables"], ["returnables", "shopping"]),
+            # A key no area has, a value that is no key: kept, after.
+            (["returnables", "inconnue", 7], ["returnables", "shopping", "inconnue", 7]),
+            (["staff", {"bank": True}, ["products"]], ["shopping", "staff", {"bank": True}, ["products"]]),
+            # Stored as no list: it opened nothing; now the lists.
+            ({"returnables": True}, ["shopping"]),
+            ("returnables", ["shopping"]),
+            (3, ["shopping"]),
+        ]
+        given = [
+            (self.employee(pages, f"cas-{number}@example.invalid"), wanted)
+            for number, (pages, wanted) in enumerate(cases)
+        ]
+        self.migrate()
+        for membership, wanted in given:
+            with self.subTest(email=membership.user.username):
+                self.assertEqual(self.pages_of(membership), wanted)
+
+    def test_an_employee_already_given_the_lists_is_left_as_he_is(self):
+        given = self.employee(["shopping", "bank", "inconnue"], "deja@example.invalid")
+        self.migrate()
+        self.assertEqual(self.pages_of(given), ["shopping", "bank", "inconnue"])
+
+    def test_an_employee_of_another_espace_gets_them_too_and_the_owner_is_left_alone(self):
+        """The logins are central: every espace's employees. An owner opens
+        everything already - his row is not rewritten."""
+        neighbour = Tenant.objects.create(name="Bar Voisin", dir_name="voisin000005")
+        elsewhere = self.employee(["returnables"], "voisin@example.invalid", tenant_id=neighbour.pk)
+        owner = Membership.objects.get(user=test_user(), tenant_id=TEST_TENANT_PK)
+        self.assertEqual(owner.role, Membership.Role.OWNER)
+        Membership.objects.filter(pk=owner.pk).update(pages=["returnables"])
+        self.migrate()
+        self.assertEqual(self.pages_of(elsewhere), ["returnables", "shopping"])
+        self.assertEqual(self.pages_of(owner), ["returnables"])
+
+    def test_no_employee_s_start_page_moves(self):
+        """The owner asked that every employee get the lists, not that his
+        start page change: one already invited logs in, clicks the brand or
+        « Revenir à l'accueil » and lands where he did before 0005."""
+        cases = [
+            ["invoices"],
+            ["bank"],
+            ["staff"],
+            ["recipes", "margins"],
+            ["stock_gaps"],
+            [key for key in DEFAULT_AREAS if key != "shopping"],
+            ["returnables", "bank"],
+        ]
+        given = []
+        for number, pages in enumerate(cases):
+            membership = self.employee(pages, f"accueil-{number}@example.invalid")
+            given.append((membership, Access.of(Membership.objects.get(pk=membership.pk)).home_url))
+        self.migrate()
+        for membership, home in given:
+            with self.subTest(email=membership.user.username):
+                now = Membership.objects.get(pk=membership.pk)
+                self.assertIn("shopping", now.pages)
+                self.assertEqual(Access.of(now).home_url, home)
+
+    def test_run_twice_it_changes_nothing_more(self):
+        given = self.employee(["staff", "invoices_add", "inconnue"], "deux-fois@example.invalid")
+        self.migrate()
+        once = self.pages_of(given)
+        self.migrate()
+        self.assertEqual(self.pages_of(given), once)
+        self.assertEqual(once, ["invoices_add", "shopping", "staff", "inconnue"])
+
+    def test_the_areas_it_knows_are_the_page_s_in_their_order(self):
+        """AREAS as the migration found them: a later area joins AREAS, never
+        this list (a migration replays what it did)."""
+        known = SHOPPING_AREA_MIGRATION.AREAS_IN_0005
+        self.assertIn("shopping", known)
+        self.assertEqual([area.key for area in AREAS if area.key in known], known)
+        self.assertLessEqual(set(known), AREA_KEYS)
+
+    def test_it_follows_the_push_devices_and_goes_back_doing_nothing(self):
+        migration = SHOPPING_AREA_MIGRATION.Migration
+        self.assertEqual(migration.dependencies, [("accounts", "0004_pushdevice")])
+        (operation,) = migration.operations
+        self.assertIs(operation.reverse_code, type(operation).noop)
+        self.assertIs(operation.code, SHOPPING_AREA_MIGRATION.give_every_employee_the_shopping_lists)
+        self.assertIn("Liste de courses", SHOPPING_AREA_MIGRATION.__doc__)

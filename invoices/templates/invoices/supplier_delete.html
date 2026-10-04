@@ -3,7 +3,8 @@
 {% block content %}
     {% comment %}
     Only a supplier nothing rests on is deleted (supplier_views.supplier_delete),
-    after saying what goes with it. Posted without `confirme`, nothing happens.
+    after saying what goes with it - its shopping lists included, finished or
+    not (the CASCADE deletes them). Posted without `confirme`, nothing happens.
     {% endcomment %}
     <div class="page-header">
         <div>
@@ -21,10 +22,11 @@
             <div class="actions"><a class="btn btn-secondary" href="{{ supplier_page }}">Revenir à sa fiche</a></div>
         {% else %}
             <p>
-                {% if products or prices or aliases %}
+                {% if products or prices or shopping_lists or aliases %}
                     Partent avec lui :
-                    {% if products %}{{ products }} produit{{ products|pluralize }} sans aucune ligne{% if prices or aliases %}, {% endif %}{% endif %}
-                    {% if prices %}{{ prices }} prix connu{{ prices|pluralize }}{% if aliases %}, {% endif %}{% endif %}
+                    {% if products %}{{ products }} produit{{ products|pluralize }} sans aucune ligne{% if prices or shopping_lists or aliases %}, {% endif %}{% endif %}
+                    {% if prices %}{{ prices }} prix connu{{ prices|pluralize }}{% if shopping_lists or aliases %}, {% endif %}{% endif %}
+                    {% if shopping_lists %}{{ shopping_lists }} liste{{ shopping_lists|pluralize }} de courses{% if aliases %}, {% endif %}{% endif %}
                     {% if aliases %}{{ aliases }} libellé{{ aliases|pluralize }} bancaire{{ aliases|pluralize }}{% endif %}
                     et son historique.
                 {% else %}

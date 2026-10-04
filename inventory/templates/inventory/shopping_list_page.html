@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Courses chez {{ store.name }} - MarginMate{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+{% comment %}
+One store's shopping list (views.shopping_list_page), in one of three modes:
+- `finished`: a list finished, read as it was - no form, no link to change it;
+- `run` (`?mode=courses`): ticking in the store, phone first
+  (.shopping-run-page) - the block htmx swaps (_shopping_run.html), then
+  « Courses terminées » OUTSIDE it, so that a swap never resets its box: a
+  tick's answer swaps its list (#shopping-finish-list) out of band, so it
+  always names the list the block shows;
+- else preparing it: the card changing one item (`editing`, `?ligne=`,
+  #modifier, its refusals said in it), the form adding one (an article of
+  the menu, the store's own first, or any text), the items with their
+  « Modifier » and « Retirer ».
+{% endcomment %}
+<div class="shopping-list-page{% if run %} shopping-run-page{% endif %}">
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'inventory:shopping_lists' %}">← Listes de courses</a></p>
+            <h1>Courses chez {{ store.name }}</h1>
+            {% if finished %}
+            <p class="page-subtitle">Terminées le {{ shopping_list.finished_at|date:"d/m/Y" }}{% if finished_by %} par {{ finished_by }}{% endif %} · {{ ticked }} / {{ total }} pris.</p>
+            {% elif not run %}
+            <p class="page-subtitle">Préparez la liste, puis cochez en magasin.</p>
+            {% endif %}
+        </div>
+        {% if not finished %}
+        <div class="actions">
+            {% if run %}
+            <a class="btn btn-secondary" href="{{ edit_url }}">Modifier la liste</a>
+            {% else %}
+            {% if rows %}<a class="btn" href="{{ run_url }}">Faire les courses</a>{% endif %}
+            <a class="btn btn-secondary" href="{% url 'inventory:shopping_list' %}?{{ store_param }}={{ store.pk }}">Ajouter depuis la prévision</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% if finished %}
+        {% if rows %}
+        <div class="table-wrap">
+        <table data-table data-table-label="courses terminées" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Article</th>
+                    <th>Produit</th>
+                    <th class="num">Quantité</th>
+                    <th>Note</th>
+                    <th>État</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.item.name }}</td>
+                    <td data-label="Produit">{{ row.item.product_name }}{% if row.packs %}<br><span class="muted small">{{ row.packs }}</span>{% endif %}</td>
+                    <td class="num" data-label="Quantité" data-sort="{{ row.plain }}">{{ row.quantity }}</td>
+                    <td data-label="Note">{{ row.item.note }}</td>
+                    <td data-label="État">{% if row.item.checked_at %}pris{% else %}non pris{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty-state"><p>Liste vide.</p></div>
+        {% endif %}
+
+    {% elif run %}
+        {% include "inventory/_shopping_run.html" %}
+        {% if items %}
+        <form method="post" action="{% url 'inventory:shopping_list_finish' %}" class="shopping-finish" id="shopping-finish" data-confirm="Terminer ces courses ?">
+            {% csrf_token %}
+            <input type="hidden" name="{{ list_param }}" value="{{ shopping_list.pk }}" id="shopping-finish-list">
+            <label class="checkbox-label"><input type="checkbox" name="{{ keep_param }}" value="1" checked> Garder les articles non pris pour la prochaine liste</label>
+            <button class="btn" type="submit" data-busy-label="Enregistrement…">Courses terminées</button>
+        </form>
+        {% endif %}
+
+    {% else %}
+        {% if rows %}<p class="muted">{{ ticked }} / {{ total }} pris</p>{% endif %}
+        {% if item_missing %}<div class="message message-warning">{{ not_in_list }}</div>{% endif %}
+
+        {% if editing %}
+        <section class="card shopping-item-edit" id="modifier">
+            <h2>Modifier « {{ editing.item.name }} »</h2>
+            {% if edit_messages %}
+            <ul class="messages">
+                {% for message in edit_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+            <form method="post" action="{% url 'inventory:shopping_list_item_edit' %}" class="inline-form">
+                {% csrf_token %}
+                <input type="hidden" name="{{ item_param }}" value="{{ editing.item.pk }}">
+                <input type="hidden" name="{{ store_param }}" value="{{ store.pk }}">
+                <label class="inline-label">Quantité <input type="text" name="{{ quantity_param }}" value="{{ editing.plain }}" inputmode="decimal" size="6" required autofocus></label>{% if editing.counts %} <span class="muted small">{{ editing.counts }}{% if editing.packs %} · {{ editing.packs }}{% endif %}</span>{% endif %}
+                <label class="inline-label">Note <input type="text" name="{{ note_param }}" value="{{ editing.item.note }}" maxlength="{{ note_max }}"></label>
+                <button class="btn" type="submit" data-busy-label="Enregistrement…">Enregistrer</button>
+                <a class="btn btn-secondary" href="{{ edit_url }}">Annuler</a>
+            </form>
+        </section>
+        {% endif %}
+
+        <form method="post" action="{% url 'inventory:shopping_list_add' %}" class="inline-form shopping-add">
+            {% csrf_token %}
+            <input type="hidden" name="{{ store_param }}" value="{{ store.pk }}">
+            <label class="inline-label">Article <input type="text" name="{{ name_param }}" list="shopping-articles" required maxlength="{{ label_max }}" autocomplete="off"></label>
+            <label class="inline-label">Quantité <input type="text" name="{{ quantity_param }}" inputmode="decimal" size="6" placeholder="habituelle"></label>
+            <label class="inline-label">Note <input type="text" name="{{ note_param }}" maxlength="{{ note_max }}"></label>
+            <button class="btn" type="submit" data-busy-label="Ajout…">Ajouter</button>
+        </form>
+        <datalist id="shopping-articles">{% for name in articles_here %}<option value="{{ name }}">{% endfor %}{% for name in articles_other %}<option value="{{ name }}">{% endfor %}</datalist>
+        <p class="muted small">Un nom inconnu s'ajoute tel quel. Quantité : en unités, jamais en colis ; vide : celle d'habitude ici.</p>
+
+        {% if rows %}
+        <div class="table-wrap">
+        <table data-table data-table-label="articles" class="phone-cards">
+            <thead>
+                <tr>
+                    <th>Article</th>
+                    <th>Produit</th>
+                    <th class="num">Quantité</th>
+                    <th>Note</th>
+                    <th>État</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.item.name }}</td>
+                    <td data-label="Produit">{{ row.item.product_name }}{% if row.packs %}<br><span class="muted small">{{ row.packs }}</span>{% endif %}</td>
+                    <td class="num" data-label="Quantité" data-sort="{{ row.plain }}">{{ row.quantity }}</td>
+                    <td data-label="Note">{{ row.item.note }}</td>
+                    <td data-label="État">{% if row.item.checked_at %}pris{% endif %}</td>
+                    <td class="row-actions">
+                        <a class="btn btn-small btn-secondary" href="{{ row.edit_url }}">Modifier</a>
+                        <form method="post" action="{% url 'inventory:shopping_list_item_delete' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="{{ item_param }}" value="{{ row.item.pk }}">
+                            <input type="hidden" name="{{ store_param }}" value="{{ store.pk }}">
+                            <button class="btn btn-small btn-secondary" type="submit">Retirer</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty-state"><p>Liste vide.</p></div>
+        {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

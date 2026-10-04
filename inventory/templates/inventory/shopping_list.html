@@ -18,6 +18,7 @@
         </div>
         {% if store %}
         <div class="actions">
+            <a class="btn" href="{{ list_url }}">Liste de courses{% if list_count %} ({{ list_count }}){% endif %}</a>
             <a class="btn btn-secondary" href="{% url 'inventory:shopping_rhythm' %}?{{ store_param }}={{ store.store_id }}">Rythme d'achat</a>
         </div>
         {% endif %}
@@ -93,7 +94,15 @@
             <p>{% if all_excluded_here %}Tous les articles achetés ici sont exclus.{% else %}Premier passage ici : rien à prévoir.{% endif %}</p>
         </div>
     {% elif to_buy %}
-        {% include "inventory/_shopping_lines.html" with rows=to_buy label="à acheter" quantity=True chance=True words=True action="here" landing="liste" %}
+        {% if add_all_count %}
+        <form method="post" action="{% url 'inventory:shopping_list_add_all' %}" class="inline-form shopping-add-all">
+            {% csrf_token %}
+            <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+            {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+            <button class="btn btn-secondary" type="submit" data-busy-label="Ajout…">Tout ajouter ({{ add_all_count }})</button>
+        </form>
+        {% endif %}
+        {% include "inventory/_shopping_lines.html" with rows=to_buy label="à acheter" quantity=True chance=True words=True action="here" landing="liste" add_landing="liste" %}
     {% else %}
         <div class="empty-state">
             <p>Rien de sûr à racheter ici aujourd'hui.{% if maybe and plan.top_here %} Regardez « Peut-être » et vos achats habituels ci-dessous.{% elif maybe %} Regardez « Peut-être » ci-dessous.{% elif plan.top_here %} Regardez vos achats habituels ci-dessous.{% endif %}</p>
@@ -101,16 +110,26 @@
     {% endif %}
 
     {% if maybe %}
-    <details class="explainer" id="maybe"{% if not to_buy %} open{% endif %}>
+    <details class="explainer" id="peut-etre"{% if not to_buy or maybe_messages %} open{% endif %}>
         <summary>Peut-être ({{ maybe|length }})</summary>
-        {% include "inventory/_shopping_lines.html" with rows=maybe label="peut-être" quantity=True chance=True words=True action="here" landing="exclusions" %}
+        {% if maybe_messages %}
+        <ul class="messages">
+            {% for message in maybe_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% include "inventory/_shopping_lines.html" with rows=maybe label="peut-être" quantity=True chance=True words=True action="here" landing="exclusions" add_landing="peut-etre" %}
     </details>
     {% endif %}
 
     {% if new %}
-    <details class="explainer">
+    <details class="explainer" id="nouveaux-ici"{% if new_messages %} open{% endif %}>
         <summary>Nouveaux ici ({{ new|length }})</summary>
-        {% include "inventory/_shopping_lines.html" with rows=new label="nouveaux ici" quantity=True chance=True words=False action="here" landing="exclusions" %}
+        {% if new_messages %}
+        <ul class="messages">
+            {% for message in new_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% include "inventory/_shopping_lines.html" with rows=new label="nouveaux ici" quantity=True chance=True words=False action="here" landing="exclusions" add_landing="nouveaux" %}
     </details>
     {% endif %}
 
@@ -139,7 +158,7 @@
                     <th>Article</th>
                     <th>Où</th>
                     <th>Pourquoi</th>
-                    <th></th>
+                    {% if may_tune %}<th></th>{% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -148,6 +167,7 @@
                     <td>{{ row.due.name }}{% for word, kind in row.badges %} <span class="status-pill {{ kind }}">{{ word }}</span>{% endfor %}</td>
                     <td data-label="Où"><a href="{% url 'inventory:shopping_list' %}?{{ store_param }}={{ row.due.store_id }}">{{ row.due.store_name }}</a></td>
                     <td class="phone-card-wide" data-label="Pourquoi">{{ row.due.sentence }}</td>
+                    {% if may_tune %}
                     <td class="row-actions">
                         <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer « {{ row.due.name }} » dans aucune enseigne ?">
                             {% csrf_token %}
@@ -158,6 +178,7 @@
                             <button class="btn btn-small btn-secondary" type="submit">Ne plus proposer</button>
                         </form>
                     </td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -175,7 +196,7 @@
                 <tr>
                     <th>Article</th>
                     <th class="num">Achats (12 mois)</th>
-                    <th class="num">Total HT</th>
+                    {% if can.sees_costs %}<th class="num">Total HT</th>{% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -183,7 +204,7 @@
                 <tr>
                     <td>{{ top.name }}</td>
                     <td class="num" data-label="Achats (12 mois)">{{ top.purchases_12m }}</td>
-                    <td class="num" data-label="Total HT" data-sort="{{ top.total_ht }}">{{ top.total_ht|money }} €</td>
+                    {% if can.sees_costs %}<td class="num" data-label="Total HT" data-sort="{{ top.total_ht }}">{{ top.total_ht|money }} €</td>{% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -201,11 +222,17 @@
             <li>Un article acheté moins de {{ rules.few_purchases }} fois n'est pas encore une habitude.</li>
             <li>La liste garde les articles à {{ setting.threshold_percent }} % ou plus. Un article proposé {{ rules.nag_lifted }} passages de suite sans être pris passe en « Peut-être » ({{ rules.nag_habit }} passages s'il fait partie de vos habitudes).</li>
             <li>Un article dont vos {{ rules.elsewhere_last }} derniers achats étaient ailleurs n'est pas proposé ici.</li>
-            <li>La quantité est celle du milieu de vos {{ rules.quantity_last }} derniers achats ici.</li>
+            <li>« À acheter » : la quantité du milieu de vos {{ rules.quantity_last }} derniers achats ici, comptée dans le produit que vous y prenez.</li>
             <li>Un article jamais acheté ici ne peut pas être prévu.</li>
         </ul>
     </details>
 
+    {% comment %}
+    « Réglages » and « Exclusions » change the list for everybody: drawn for
+    a viewer who may post them (views.shopping_list's `may_tune`, the
+    « Produits & charges » area); the routes refuse anybody else all the same.
+    {% endcomment %}
+    {% if may_tune %}
     <details class="explainer" id="reglages"{% if settings_messages %} open{% endif %}>
         <summary>Réglages · à partir de {{ setting.threshold_percent }} %, mémoire {{ setting.memory_months }} mois{% if not setting.use_till %}, sans la caisse{% endif %}</summary>
         {% if settings_messages %}
@@ -300,5 +327,6 @@
         </div>
         {% endif %}
     </details>
+    {% endif %}
     {% endif %}
 {% endblock %}

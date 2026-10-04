@@ -3,9 +3,9 @@ owner reads them, and their forms.
 
 What he chooses is a store (`?fournisseur=`) and, if he likes, how long a
 purchase made there today must last, until the visit after it (`?dans=`, 1
-to 90); what he reads is the list for shopping there today - each line its
-quantity in the store's own product, its chance
-and why - then the folds: « Peut-être », « Nouveaux ici », « Plus acheté ? »,
+to 90); what he reads is the list for shopping there today - each line the
+store's own product (« Produit », its packs under it), ONE number to buy of
+it (« À acheter »), its chance and why - then the folds: « Peut-être », « Nouveaux ici », « Plus acheté ? »,
 « Acheté ailleurs maintenant », « À acheter ailleurs », « Les plus achetés
 ici », « Comment c'est calculé », « Réglages » and « Exclusions ». The
 figures are the pure module's (inventory/shopping.py, pinned on its own in
@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from html import unescape
 from unittest.mock import patch
@@ -41,10 +41,21 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.access import Access
 from inventory import shopping, views
-from inventory.models import MovementKind, ShoppingExclusion, ShoppingSetting, StockMovement, StockType, UnitChoices
+from inventory.models import (
+    MovementKind,
+    Product,
+    ShoppingExclusion,
+    ShoppingList,
+    ShoppingListItem,
+    ShoppingSetting,
+    StockMovement,
+    StockType,
+    UnitChoices,
+)
 from inventory.tests.test_gap_filler_page import body_rows, busy_button_of, confirm_of, table_of
-from invoices.models import GatherCoverage
+from invoices.models import GatherCoverage, InvoiceLine
 from margins.tests.test_page import cells_of, row_of, stat_of, text_of, value_of
 from recipes import auto_sales, sales_sources
 from recipes.models import RecipeSale
@@ -58,13 +69,21 @@ from tests.factories import (
     make_stock_type,
     make_supplier,
 )
-from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, assertNoUnrenderedTemplateSyntax, make_shopping_history
+from tests.test_views_smoke import (
+    SHOPPING_BEER_PRODUCT,
+    assertNoUnrenderedTemplateSyntax,
+    make_shopping_history,
+    make_shopping_lists,
+)
 
 PAGE = "inventory:shopping_list"
 RHYTHM = "inventory:shopping_rhythm"
 SETTINGS = "inventory:shopping_settings"
 EXCLUDE = "inventory:shopping_exclude"
 INCLUDE = "inventory:shopping_include"
+LIST_PAGE = "inventory:shopping_list_page"
+LIST_ADD = "inventory:shopping_list_add"
+ADD_ALL = "inventory:shopping_list_add_all"
 TO_BUY = "à acheter"
 MAYBE = "peut-être"
 NEW = "nouveaux ici"
@@ -177,8 +196,9 @@ def forms_to(fragment: str, name: str) -> list[str]:
 
 
 def hidden_of(form: str) -> dict[str, str]:
-    """The fields a form carries hidden, its CSRF token aside."""
-    found = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form))
+    """The fields a form carries hidden, its CSRF token aside (an id after
+    the value included: the finish form's list, which a tick swaps)."""
+    found = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"[^>]*>', form))
     found.pop("csrfmiddlewaretoken", None)
     return found
 
@@ -203,6 +223,27 @@ def chance_of_row(row: str) -> tuple[float, str]:
     """(its data-sort, the cell as it reads) of a row's « Chance »."""
     found = re.search(r'<td class="num" data-label="Chance" data-sort="([^"]+)">(.*?)</td>', row, flags=re.DOTALL)
     return float(found.group(1)), readable(found.group(2))
+
+
+def product_of(row: str) -> tuple[str, str]:
+    """(the product, the pack hint under it) of a row's « Produit »."""
+    found = re.search(r'<td data-label="Produit">([^<]*)(?:<br><span class="muted small">([^<]*)</span>)?</td>', row)
+    if found is None:
+        return ("", "")
+    return unescape(found.group(1)), unescape(found.group(2) or "")
+
+
+def to_buy_of(row: str) -> tuple[str, str, str]:
+    """(its data-sort, the number, the grey note under it) of a row's
+    « À acheter »."""
+    found = re.search(
+        r'<td class="num" data-label="À acheter" data-sort="([^"]*)">([^<]*)'
+        r'(?:<br><span class="muted small">([^<]*)</span>)?</td>',
+        row,
+    )
+    if found is None:
+        return ("", "", "")
+    return found.group(1), unescape(found.group(2)), unescape(found.group(3) or "")
 
 
 class ReadBoundedNumberTests(SimpleTestCase):
@@ -241,6 +282,94 @@ class ReadBoundedNumberTests(SimpleTestCase):
             self.assertIsNone(views.read_bounded_number("9" * 5000, 1, 90))
             self.assertIsNone(views.read_bounded_number("100", 1, 90))
         self.assertEqual(views.read_bounded_number("0" * 40 + "12", 10, 60), 12)
+
+
+#: The product of the invented line `a_line` draws.
+BEER_LINE = "BIERE EXEMPLE 33CL X24"
+
+
+def a_line(**fields) -> shopping.Line:
+    """A forecast line (the pure module's): one usual purchase of 24 cans of
+    an invented beer, in its store's product, a pack of 24, no typed
+    horizon - `fields` replacing what a test is about."""
+    values = {
+        "article_id": 1,
+        "name": "Bière exemple",
+        "unit": UnitChoices.UNIT,
+        "category": "",
+        "section": shopping.TO_BUY,
+        "chance": 0.9,
+        "confidence": "presque sûr",
+        "sentence": "",
+        "badges": (),
+        "qty": Decimal("24"),
+        "product_id": 5,
+        "product_name": BEER_LINE,
+        "product_units": Decimal("24"),
+        "packs": (1, Decimal("24")),
+        "multiplier": 1,
+        "last_bought_here": date(2031, 3, 5),
+        "habit": 0.9,
+        "need": None,
+        "clock": None,
+    }
+    values.update(fields)
+    return shopping.Line(**values)
+
+
+class LineRowsTests(SimpleTestCase):
+    """`views._line_rows`: a forecast line as its « Produit » and « À
+    acheter » cells say it - the store's product and its packs, ONE number,
+    and under it the article's own units when they say something else, then
+    « pour N jours » when a typed horizon multiplied it. Lines invented
+    (`a_line`: 24 cans of a beer, in packs of 24)."""
+
+    def row(self, horizon=None, **fields) -> dict:
+        [row] = views._line_rows([a_line(**fields)], horizon)
+        return row
+
+    def cells(self, row) -> tuple[str, str, str, str, str]:
+        return row["product"], row["packs"], row["to_buy"], row["to_buy_note"], row["to_buy_sort"]
+
+    def test_the_store_s_product_counted_in_the_article_s_own_unit(self):
+        self.assertEqual(self.cells(self.row()), (BEER_LINE, "1 colis de 24", "24", "", "24"))
+
+    def test_a_product_counting_otherwise_than_the_article(self):
+        # Four packs of six cans: the cans under the packs.
+        row = self.row(product_name="BIERE PACK X6 EXEMPLE", product_units=Decimal("4"), packs=None)
+        self.assertEqual(self.cells(row), ("BIERE PACK X6 EXEMPLE", "", "4", "24 u.", "4"))
+        row = self.row(unit=UnitChoices.LITRE, qty=Decimal("2"), product_units=Decimal("2"), packs=None)
+        self.assertEqual(self.cells(row), (BEER_LINE, "", "2", "2 L", "2"))
+
+    def test_bought_by_measure(self):
+        row = self.row(
+            unit=UnitChoices.KILOGRAM, qty=Decimal("1.5"), product_units=None, packs=None, product_name="OLIVES"
+        )
+        self.assertEqual(self.cells(row), ("", "", "1.5 kg", "", "1.5"))
+
+    def test_a_typed_horizon_multiplies_the_one_number(self):
+        self.assertEqual(
+            self.cells(self.row(30, multiplier=3)), (BEER_LINE, "3 colis de 24", "72", "pour 30 jours", "72")
+        )
+        row = self.row(
+            20, unit=UnitChoices.LITRE, qty=Decimal("2"), product_units=Decimal("2"), packs=None, multiplier=2
+        )
+        self.assertEqual(self.cells(row), (BEER_LINE, "", "4", "4 L · pour 20 jours", "4"))
+        row = self.row(30, unit=UnitChoices.KILOGRAM, qty=Decimal("1.5"), product_units=None, packs=None, multiplier=3)
+        self.assertEqual(self.cells(row), ("", "", "4.5 kg", "pour 30 jours", "4.5"))
+        # No days typed, no « pour … »: a multiplier is a typed horizon's.
+        self.assertEqual(self.cells(self.row(None, multiplier=3))[3], "")
+
+    def test_a_median_of_two_purchases_is_shown_to_three_places(self):
+        row = self.row(unit=UnitChoices.LITRE, qty=Decimal("1.8125"), product_units=None, packs=None)
+        self.assertEqual(self.cells(row), ("", "", "1.813 L", "", "1.813"))
+
+    def test_the_line_and_its_chance_ride_along_and_the_old_cell_is_gone(self):
+        row = self.row()
+        self.assertEqual(row["line"].name, "Bière exemple")
+        self.assertEqual((row["percent"], row["chance_sort"]), (90, "0.9000"))
+        self.assertNotIn("quantity", row)
+        self.assertNotIn("article_quantity", row)
 
 
 class ShoppingPageTestCase(TestCase):
@@ -336,19 +465,58 @@ class TheListTests(ShoppingPageTestCase):
         self.assertEqual(stat_of(html, "Ventes de la caisse"), "")
 
     def test_to_buy_each_line_in_its_own_row(self):
+        """« Produit » names the store's product, the packs under it; « À
+        acheter » is ONE number - what to take of that product -, the
+        article's own units under it only when they say something else."""
         html = self.html()
         table = table_of(html, TO_BUY)
         self.assertEqual(titles_in(table), ["Bière exemple", "Sirop exemple"])
+        header = re.search(r"<thead>(.*?)</thead>", table, flags=re.DOTALL).group(1)
+        self.assertEqual(
+            [readable(cell) for cell in re.findall(r"<th[^>]*>(.*?)</th>", header, flags=re.DOTALL)],
+            ["Article", "Produit", "À acheter", "Chance", "Pourquoi", "Liste", ""],
+        )
+        self.assertIn('<th class="num">À acheter</th>', header)
         beer = row_of(table, "Bière exemple")
         cells = [unescape(cell) for cell in cells_of(beer)]
-        self.assertEqual(cells[1], f"24 × {SHOPPING_BEER_PRODUCT} (1 colis de 24) 24 u.")
+        self.assertEqual(cells[1:3], [f"{SHOPPING_BEER_PRODUCT} 1 colis de 24", "24"])
+        self.assertEqual(product_of(beer), (SHOPPING_BEER_PRODUCT, "1 colis de 24"))
+        # 24 cans of a beer counted in cans: « 24 u. » under « 24 » would
+        # only say it again.
+        self.assertEqual(to_buy_of(beer), ("24", "24", ""))
         self.assertEqual(
-            cells[3],
+            cells[4],
             "Pris 25 fois sur 25 passages en 6 mois ; dernier achat il y a 7 jours, d'habitude tous les 7 jours.",
         )
-        self.assertEqual(cells[4], "Pas ici")
-        syrup = [unescape(cell) for cell in cells_of(row_of(table, "Sirop exemple"))]
-        self.assertEqual(syrup[1], "2 × SIROP EXEMPLE PRODUIT 2 L")
+        # « Liste », then the line's action, last.
+        self.assertEqual(cells[5:], ["Ajouter", "Pas ici"])
+        syrup = row_of(table, "Sirop exemple")
+        self.assertEqual(product_of(syrup), ("SIROP EXEMPLE PRODUIT", ""))
+        # Two of its product, which make 2 L of the article.
+        self.assertEqual(to_buy_of(syrup), ("2", "2", "2 L"))
+
+    def test_no_quantity_cell_multiplies_anything(self):
+        """The old « m × (n × PRODUIT) » is gone from every section that
+        draws a quantity, a typed horizon included."""
+        for query in ({}, {"dans": "60"}):
+            html = self.html(**query)
+            for label in (TO_BUY, MAYBE, NEW):
+                for row in body_rows(table_of(html, label)):
+                    with self.subTest(query=query, section=label, row=readable(row)[:30]):
+                        product, hint = product_of(row)
+                        _sort, number, note = to_buy_of(row)
+                        self.assertTrue(number)
+                        self.assertNotIn("×", f"{product} {hint} {number} {note}")
+                        self.assertNotIn('data-label="Quantité"', row)
+
+    def test_a_product_bought_by_measure_shows_the_article_s_units(self):
+        """Olives weighed at the till (1,5 kg): no count of a product to
+        name - « Produit » is empty and « À acheter » reads the kilos."""
+        InvoiceLine.objects.filter(product__stock_type=self.made.olives).update(quantity=Decimal("1.5"))
+        StockMovement.objects.filter(stock_type=self.made.olives).update(quantity=Decimal("1.5"))
+        row = row_of(table_of(self.html(), MAYBE), "Olives exemple")
+        self.assertEqual(product_of(row), ("", ""))
+        self.assertEqual(to_buy_of(row), ("1.5", "1.5 kg", ""))
 
     def test_the_chance_reads_as_its_sort_key_says(self):
         """« 98 % · presque sûr »: the percent rounded down from the very
@@ -398,9 +566,9 @@ class TheListTests(ShoppingPageTestCase):
 
     def test_the_folds_are_shut_while_the_list_has_lines(self):
         html = self.html()
-        self.assertTrue(fold_of(html, "maybe"))
+        self.assertTrue(fold_of(html, "peut-etre"))
         self.assertTrue(fold_of(html, "most-bought"))
-        self.assertFalse(opened(fold_of(html, "maybe")))
+        self.assertFalse(opened(fold_of(html, "peut-etre")))
         self.assertFalse(opened(fold_of(html, "most-bought")))
         for anchor in ("reglages", "exclusions"):
             with self.subTest(fold=anchor):
@@ -409,11 +577,16 @@ class TheListTests(ShoppingPageTestCase):
 
     def test_an_id_no_redirect_targets_is_english(self):
         """Only the ids a redirect lands on keep their French (a-acheter,
-        reglages, exclusions: SHOPPING_ANCHORS); the others are internal."""
+        peut-etre, nouveaux-ici - « Ajouter » on their lines -, reglages,
+        exclusions: SHOPPING_ANCHORS); the others are internal."""
         html = self.html()
-        self.assertEqual(sorted(views.SHOPPING_ANCHORS.values()), ["a-acheter", "exclusions", "reglages"])
+        self.assertEqual(
+            sorted(views.SHOPPING_ANCHORS.values()),
+            ["a-acheter", "exclusions", "nouveaux-ici", "peut-etre", "reglages"],
+        )
         ids = set(re.findall(r'<(?:details|h2)[^>]* id="([^"]+)"', html))
-        self.assertEqual(ids, {"a-acheter", "maybe", "most-bought", "reglages", "exclusions"})
+        self.assertEqual(ids, {"a-acheter", "peut-etre", "nouveaux-ici", "most-bought", "reglages", "exclusions"})
+        self.assertEqual(views.FORECAST_ADD_PLACES, ("liste", "peut-etre", "nouveaux"))
 
     def test_the_horizon_is_the_store_s_rhythm(self):
         """The list is worked out for a purchase made today, lasting until
@@ -422,18 +595,24 @@ class TheListTests(ShoppingPageTestCase):
         self.assertEqual(horizon_said(self.html()), HORIZON.format(7, OWN_RHYTHM))
 
     def test_a_typed_horizon_longer_than_the_rhythm_multiplies_the_usual_purchase(self):
+        """60 days at a weekly store: as many usual purchases as the days
+        hold weeks (shopping._multiplier), counted in ONE number - and the
+        packs it makes - with « pour 60 jours » under it."""
         html = self.html(dans="60")
         self.assertIn('name="dans" value="60"', html)
         self.assertEqual(horizon_said(html), HORIZON.format(60, ""))
-        quantity = [unescape(cell) for cell in cells_of(row_of(table_of(html, TO_BUY), "Bière exemple"))][1]
-        found = re.fullmatch(
-            r"(\d+) × \(24 × " + re.escape(SHOPPING_BEER_PRODUCT) + r" \(1 colis de 24\)\) — pour 60 jours (\d+) u\.",
-            quantity,
-        )
-        self.assertIsNotNone(found, quantity)
-        times, units = int(found.group(1)), int(found.group(2))
+        times = math.floor(60 / 7 + 0.5)
         self.assertGreater(times, 1)
-        self.assertEqual(units, 24 * times)
+        beer = row_of(table_of(html, TO_BUY), "Bière exemple")
+        self.assertEqual(product_of(beer), (SHOPPING_BEER_PRODUCT, f"{times} colis de 24"))
+        self.assertEqual(to_buy_of(beer), (str(24 * times), str(24 * times), "pour 60 jours"))
+        syrup = row_of(table_of(html, TO_BUY), "Sirop exemple")
+        self.assertEqual(to_buy_of(syrup), (str(2 * times), str(2 * times), f"{2 * times} L · pour 60 jours"))
+
+    def test_a_typed_horizon_within_the_rhythm_says_nothing_more(self):
+        beer = row_of(table_of(self.html(dans="5"), TO_BUY), "Bière exemple")
+        self.assertEqual(to_buy_of(beer), ("24", "24", ""))
+        self.assertEqual(product_of(beer), (SHOPPING_BEER_PRODUCT, "1 colis de 24"))
 
     def test_the_forms_of_the_lines(self):
         """« Pas ici » on the list and in « Peut-être », « Ne plus proposer »
@@ -478,6 +657,10 @@ class TheListTests(ShoppingPageTestCase):
         self.assertIn("un passage d'il y a 6 mois compte moitié", said)
         self.assertIn("La liste garde les articles à 25 % ou plus.", said)
         self.assertIn("Un article jamais acheté ici ne peut pas être prévu.", said)
+        self.assertIn(
+            "« À acheter » : la quantité du milieu de vos 3 derniers achats ici, comptée dans le produit que vous y prenez.",
+            said,
+        )
         # Worked out for a purchase made today, which must last until the
         # visit after it.
         self.assertIn("la chance que vous le preniez si vous y passez aujourd'hui.", said)
@@ -524,7 +707,7 @@ class StatesTests(ShoppingPageTestCase):
         # the list has lines.
         self.assertEqual(horizon_said(html), HORIZON.format(7, OWN_RHYTHM) + " " + FEW_VISITS)
         self.assertTrue(opened(fold_of(html, "most-bought")))
-        self.assertFalse(opened(fold_of(html, "maybe")))
+        self.assertFalse(opened(fold_of(html, "peut-etre")))
 
     def test_a_few_visits_leave_maybe_folded_while_the_list_has_lines(self):
         """A store under 5 visits opens « Les plus achetés ici » only: its
@@ -536,7 +719,7 @@ class StatesTests(ShoppingPageTestCase):
         self.assertIn(FEW_VISITS, horizon_said(html))
         self.assertTrue(table_of(html, TO_BUY))
         self.assertEqual(titles_in(table_of(html, MAYBE)), ["Menthe exemple"])
-        self.assertFalse(opened(fold_of(html, "maybe")))
+        self.assertFalse(opened(fold_of(html, "peut-etre")))
         self.assertTrue(opened(fold_of(html, "most-bought")))
 
     def test_a_rare_store(self):
@@ -545,7 +728,7 @@ class StatesTests(ShoppingPageTestCase):
         self.assertEqual(horizon_said(html), HORIZON.format(14, DEFAULT_RHYTHM) + " " + FEW_VISITS)
         self.assertIn(EMPTY_LIST, readable(html))
         self.assertEqual(titles_in(table_of(html, MAYBE)), ["Fraises exemple"])
-        self.assertTrue(opened(fold_of(html, "maybe")))
+        self.assertTrue(opened(fold_of(html, "peut-etre")))
         self.assertTrue(opened(fold_of(html, "most-bought")))
 
     def test_the_store_s_rhythm_from_its_third_visit(self):
@@ -582,7 +765,7 @@ class StatesTests(ShoppingPageTestCase):
         self.assertEqual(table_of(html, TO_BUY), "")
         found = re.search(r'<div class="empty-state">(.*?)</div>', html, flags=re.DOTALL)
         self.assertEqual(readable(found.group(1)), EMPTY_LIST)
-        self.assertTrue(opened(fold_of(html, "maybe")))
+        self.assertTrue(opened(fold_of(html, "peut-etre")))
         self.assertTrue(opened(fold_of(html, "most-bought")))
 
     def test_an_empty_list_names_only_the_folds_drawn(self):
@@ -600,7 +783,7 @@ class StatesTests(ShoppingPageTestCase):
         html = self.html(fournisseur=hall.pk)
         found = re.search(r'<div class="empty-state">(.*?)</div>', html, flags=re.DOTALL)
         self.assertEqual(readable(found.group(1)), EMPTY_LIST_MOST_BOUGHT)
-        self.assertEqual(fold_of(html, "maybe"), "")
+        self.assertEqual(fold_of(html, "peut-etre"), "")
         self.assertTrue(opened(fold_of(html, "most-bought")))
         self.assertEqual(titles_in(table_of(html, ELSEWHERE)), ["Tonic exemple"])
 
@@ -611,7 +794,7 @@ class StatesTests(ShoppingPageTestCase):
         html = self.html(fournisseur=old.pk)
         found = re.search(r'<div class="empty-state">(.*?)</div>', html, flags=re.DOTALL)
         self.assertEqual(readable(found.group(1)), EMPTY_LIST_BARE)
-        self.assertEqual(fold_of(html, "maybe"), "")
+        self.assertEqual(fold_of(html, "peut-etre"), "")
         self.assertEqual(fold_of(html, "most-bought"), "")
 
     def test_a_store_whose_every_article_is_left_out(self):
@@ -679,7 +862,7 @@ class FoldsTests(ShoppingPageTestCase):
         chance, reads = chance_of_row(row)
         self.assertEqual(reads, f"{math.floor(chance * 100 + 1e-9)} % · {shopping.UNSURE_WORD}")
         self.assertRegex(
-            unescape(cells_of(row)[3]), r"^Aurait été proposé à vos \d+ derniers passages ici, sans être pris\.$"
+            unescape(cells_of(row)[4]), r"^Aurait été proposé à vos \d+ derniers passages ici, sans être pris\.$"
         )
 
     def test_a_line_no_longer_bought_reads_a_verifier_on_the_list(self):
@@ -1239,3 +1422,224 @@ class PageCostTests(TestCase):
         for table in ("recipes_recipesale", "recipes_saledocumentline", "invoices_gathercoverage"):
             with self.subTest(table=table):
                 self.assertNotIn(table, read)
+
+    def test_a_longer_shopping_list_costs_no_more_queries(self):
+        """The store's open list is read once, whatever it holds."""
+        shopping_list = ShoppingList.objects.create(supplier=self.made.wholesaler)
+        for article in (self.made.beer, self.made.syrup):
+            ShoppingListItem.objects.create(
+                shopping_list=shopping_list, stock_type=article, label=article.name, quantity=Decimal("2")
+            )
+        few = len(self.queries())
+        for number in range(18):
+            ShoppingListItem.objects.create(
+                shopping_list=shopping_list, label=f"Article {number} exemple", quantity=Decimal("1")
+            )
+        self.assertEqual(len(self.queries()), few)
+
+
+def list_cell_of(row: str) -> str:
+    """A row's « Liste » cell, its inside."""
+    found = re.search(
+        r'<td class="shopping-add-cell phone-card-wide" data-label="Liste">(.*?)</td>', row, flags=re.DOTALL
+    )
+    return found.group(1) if found else ""
+
+
+class ListColumnTests(ShoppingPageTestCase):
+    """« Liste »: each line of « À acheter », « Peut-être » and « Nouveaux
+    ici » goes on the store's shopping list with the figures the line shows
+    - its quantity may be changed first -, or says it is there; « Tout
+    ajouter (N) » and « Liste de courses (N) » above. What those forms do:
+    test_shopping_lists_page (ForecastAddTests, AddAllTests)."""
+
+    def add_form(self, html: str, label: str, name: str) -> str:
+        (form,) = forms_to(list_cell_of(row_of(table_of(html, label), name)), LIST_ADD)
+        return form
+
+    def product_of_article(self, article) -> str:
+        return str(article.products.get(supplier=self.made.wholesaler).pk)
+
+    def test_each_line_s_form(self):
+        html = self.html()
+        wholesaler = str(self.made.wholesaler.pk)
+        beer_product = str(Product.objects.get(raw_name=SHOPPING_BEER_PRODUCT).pk)
+        for label, article, landing, hidden, quantity in (
+            (TO_BUY, self.made.beer, "liste", {"produit": beer_product, "colis": "24"}, "24"),
+            (TO_BUY, self.made.syrup, "liste", {"produit": self.product_of_article(self.made.syrup)}, "2"),
+            (MAYBE, self.made.olives, "peut-etre", {"produit": self.product_of_article(self.made.olives)}, "1"),
+            (NEW, self.made.crisps, "nouveaux", {"produit": self.product_of_article(self.made.crisps)}, "1"),
+        ):
+            with self.subTest(section=label, article=article.name):
+                form = self.add_form(html, label, article.name)
+                self.assertIn('class="shopping-add-line"', form)
+                self.assertEqual(
+                    hidden_of(form),
+                    {"article": str(article.pk), **hidden, "fournisseur": wholesaler, "retour": landing},
+                )
+                self.assertIn(
+                    f'<input type="text" name="quantite" value="{quantity}" inputmode="decimal" size="4" '
+                    'aria-label="Quantité à ajouter">',
+                    form,
+                )
+                self.assertIn('<button class="btn btn-small" type="submit">Ajouter</button>', form)
+                # It counts the product « Produit » names: no unit beside it.
+                self.assertEqual(readable(form), "Ajouter")
+        # Neither « Plus acheté ? » nor « Acheté ailleurs maintenant » has a quantity, nor a « Liste ».
+        for label in (QUIET, ELSEWHERE):
+            with self.subTest(section=label):
+                self.assertEqual(forms_to(table_of(html, label), LIST_ADD), [])
+                self.assertNotIn('data-label="Liste"', table_of(html, label))
+
+    def test_a_typed_horizon_rides_along(self):
+        form = self.add_form(self.html(dans="60"), TO_BUY, "Bière exemple")
+        times = math.floor(60 / 7 + 0.5)
+        self.assertEqual(hidden_of(form)["dans"], "60")
+        self.assertIn(f'name="quantite" value="{24 * times}"', form)
+
+    def test_bought_by_measure_counts_the_article(self):
+        InvoiceLine.objects.filter(product__stock_type=self.made.olives).update(quantity=Decimal("1.5"))
+        StockMovement.objects.filter(stock_type=self.made.olives).update(quantity=Decimal("1.5"))
+        form = self.add_form(self.html(), MAYBE, "Olives exemple")
+        self.assertEqual(
+            hidden_of(form),
+            {
+                "article": str(self.made.olives.pk),
+                "fournisseur": str(self.made.wholesaler.pk),
+                "retour": "peut-etre",
+            },
+        )
+        self.assertIn('name="quantite" value="1.5"', form)
+        self.assertEqual(readable(form), "kg Ajouter")
+
+    def test_a_line_already_listed_says_so(self):
+        """An item still to buy is « Dans la liste (24) », a link to the list
+        and no form. One ticked as bought (« pris ») on a list nobody
+        finished is no longer in the list: « Pris (2 L) » beside its
+        « Ajouter », which puts it back to buy."""
+        make_shopping_lists(self.made)
+        html = self.html()
+        page = f"{reverse(LIST_PAGE)}?fournisseur={self.made.wholesaler.pk}"
+        cell = list_cell_of(row_of(table_of(html, TO_BUY), "Bière exemple"))
+        self.assertEqual(forms_to(cell, LIST_ADD), [])
+        self.assertEqual(cell.strip(), f'<a href="{page}">Dans la liste (24)</a>')
+        # The fixture's syrup is ticked: taken, and offered again.
+        cell = list_cell_of(row_of(table_of(html, TO_BUY), "Sirop exemple"))
+        self.assertNotIn("Dans la liste", cell)
+        self.assertTrue(cell.strip().startswith('<span class="muted small">Pris (2 L)</span>'), cell[:120])
+        self.assertEqual(len(forms_to(cell, LIST_ADD)), 1)
+        # Not on it: its form alone.
+        self.assertNotIn("Pris", list_cell_of(row_of(table_of(html, MAYBE), "Olives exemple")))
+        self.assertTrue(self.add_form(html, MAYBE, "Olives exemple"))
+
+    def test_the_list_s_button(self):
+        page = f"{reverse(LIST_PAGE)}?fournisseur={self.made.wholesaler.pk}"
+        self.assertIn(f'<a class="btn" href="{page}">Liste de courses</a>', self.html())
+        make_shopping_lists(self.made)
+        # Three items, a free text included.
+        self.assertIn(f'<a class="btn" href="{page}">Liste de courses (3)</a>', self.html())
+        # The grocer's list is finished: nothing on its next one yet.
+        grocer = f"{reverse(LIST_PAGE)}?fournisseur={self.made.grocer.pk}"
+        self.assertIn(
+            f'<a class="btn" href="{grocer}">Liste de courses</a>', self.html(fournisseur=self.made.grocer.pk)
+        )
+
+    def test_add_all_counts_the_lines_not_listed(self):
+        html = self.html()
+        (form,) = forms_to(html, ADD_ALL)
+        self.assertIn('class="inline-form shopping-add-all"', form)
+        self.assertEqual(hidden_of(form), {"fournisseur": str(self.made.wholesaler.pk)})
+        self.assertEqual(busy_button_of(form), ("Ajout…", "Tout ajouter (2)"))
+        # Above the list it adds.
+        self.assertLess(html.index(form), html.index(table_of(html, TO_BUY)))
+        self.assertEqual(hidden_of(forms_to(self.html(dans="30"), ADD_ALL)[0])["dans"], "30")
+        shopping_list = ShoppingList.objects.create(supplier=self.made.wholesaler)
+        for article in (self.made.beer, self.made.syrup):
+            ShoppingListItem.objects.create(
+                shopping_list=shopping_list, stock_type=article, label=article.name, quantity=Decimal("2")
+            )
+            listed = forms_to(self.html(), ADD_ALL)
+            with self.subTest(listed=article.name):
+                if article == self.made.beer:
+                    self.assertEqual(busy_button_of(listed[0]), ("Ajout…", "Tout ajouter (1)"))
+                else:
+                    self.assertEqual(listed, [])
+        # A ticked item is no longer in the list: counted again.
+        ShoppingListItem.objects.filter(stock_type=self.made.syrup).update(checked_at=timezone.now())
+        self.assertEqual(busy_button_of(forms_to(self.html(), ADD_ALL)[0]), ("Ajout…", "Tout ajouter (1)"))
+
+    def test_a_fold_gone_says_its_message_at_the_top(self):
+        """The olives left out here after their « Ajouter » was drawn: no
+        « Peut-être » to say it in, so it is said at the top."""
+        form = self.add_form(self.html(), MAYBE, "Olives exemple")
+        ShoppingExclusion.objects.create(stock_type=self.made.olives, supplier=self.made.wholesaler)
+        response = self.post(LIST_ADD, **{**hidden_of(form), "quantite": "1"})
+        html = response.content.decode()
+        self.assertEqual(fold_of(html, "peut-etre"), "")
+        self.assertEqual(said_at_the_top(html), ["« Olives exemple » ajouté à la liste (1)."])
+
+
+class ViewerWhoMayNotTuneTests(ShoppingPageTestCase):
+    """A login who may not change « Prévoir les courses » - one given the
+    shopping lists without « Produits & charges » - reads the list and adds
+    to the store's shopping list, and is shown no form he may not post: no
+    « Pas ici », « Ne plus proposer », « Réglages », « Exclusions », nor on
+    « Rythme d'achat » « Ne jamais proposer »; « Total HT » only with an
+    area already showing what articles cost (Access.sees_costs). The
+    login's access is handed to the page - the view's `may_tune` and the
+    `can` the templates read -, the gate itself being accounts' tests'."""
+
+    def html_as(self, areas, name=PAGE, **params) -> str:
+        access = Access(owner=False, areas=areas)
+        with (
+            patch("inventory.views.access_of", return_value=access),
+            patch("accounts.access.access_of", return_value=access),
+        ):
+            return self.html(name, **params)
+
+    def headers(self, table: str) -> list[str]:
+        head = re.search(r"<thead>(.*?)</thead>", table, flags=re.DOTALL).group(1)
+        return [readable(cell) for cell in re.findall(r"<th[^>]*>(.*?)</th>", head, flags=re.DOTALL)]
+
+    def test_no_form_he_may_not_post(self):
+        html = self.html_as(["stock_takes"])
+        for name in (SETTINGS, EXCLUDE, INCLUDE):
+            with self.subTest(form=name):
+                self.assertEqual(forms_to(html, name), [])
+        page = readable(html.split("<main", 1)[1].split("</main>")[0])
+        for words in ("Pas ici", "Ne plus proposer", "Total HT", "Réglages", "Exclusions"):
+            with self.subTest(words=words):
+                self.assertNotIn(words, page)
+        self.assertEqual(fold_of(html, "reglages"), "")
+        self.assertEqual(fold_of(html, "exclusions"), "")
+        # What he may do is all there: the list, its folds, « Ajouter ».
+        self.assertEqual(titles_in(table_of(html, TO_BUY)), ["Bière exemple", "Sirop exemple"])
+        self.assertEqual(len(forms_to(html, LIST_ADD)), 4)
+        self.assertEqual(len(forms_to(html, ADD_ALL)), 1)
+        for label, headers in (
+            (TO_BUY, ["Article", "Produit", "À acheter", "Chance", "Pourquoi", "Liste"]),
+            (QUIET, ["Article", "Pourquoi"]),
+            (DUE_ELSEWHERE, ["Article", "Où", "Pourquoi"]),
+            (TOP_HERE, ["Article", "Achats (12 mois)"]),
+        ):
+            with self.subTest(table=label):
+                table = table_of(html, label)
+                self.assertEqual(self.headers(table), headers)
+                self.assertNotIn("row-actions", table)
+        rhythm = self.html_as(["stock_takes"], RHYTHM, fournisseur=self.made.wholesaler.pk)
+        self.assertEqual(forms_to(rhythm, EXCLUDE), [])
+        self.assertNotIn("Ne jamais proposer", rhythm)
+        self.assertEqual(self.headers(table_of(rhythm, RHYTHM_TABLE))[-1], "Caisse / semaine")
+
+    def test_an_area_showing_what_articles_cost(self):
+        html = self.html_as(["invoices"])
+        top = table_of(html, TOP_HERE)
+        self.assertEqual(self.headers(top), ["Article", "Achats (12 mois)", "Total HT"])
+        self.assertIn('data-label="Total HT" data-sort="1170.00"', top)
+        for name in (SETTINGS, EXCLUDE, INCLUDE):
+            with self.subTest(form=name):
+                self.assertEqual(forms_to(html, name), [])
+
+    def test_a_message_of_a_fold_he_is_not_shown_is_said_at_the_top(self):
+        self.client.post(reverse(SETTINGS), {"fournisseur": self.made.wholesaler.pk, "seuil": "30", "memoire": "6"})
+        self.assertEqual(said_at_the_top(self.html_as(["stock_takes"])), ["Réglages enregistrés."])

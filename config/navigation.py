@@ -13,6 +13,9 @@ Beside them, links of their own: Banque, Marges, Personnel, Inventaires and
 `returnables`, URL namespace "returnables"). A page lights the link of its
 URL namespace - `match.app_name`, the `app_name` of its app's urls.py - so a
 new app lights nothing until it is in SECTION_BY_APP.
+
+An employee given « Liste de courses » without « Produits & charges » reads
+the shopping pages under a link of his own, « Courses » (`SHOPPING_SECTION`).
 """
 
 # Views of the inventory app that belong to "Inventaires"; the rest are
@@ -58,6 +61,12 @@ SECTION_BY_VIEW = {
     "accounts:no_access": "",
 }
 
+#: What an employee given « Liste de courses » without « Produits & charges »
+#: reads the shopping pages under: his link « Courses » (base.html). The
+#: owner's bar has no such link - for him those pages are « Produits &
+#: charges »'.
+SHOPPING_SECTION = "shopping"
+
 #: What the folded topbar says under 860 px (base.html's .topbar-section):
 #: the words of the link a page lights. The links keep their own words in
 #: base.html; tests/test_navigation.py checks each page shows its lit link's.
@@ -71,6 +80,7 @@ SECTION_LABELS = {
     "stock_takes": "Inventaires",
     "returnables": "Consignes",
     "data": "Données",
+    SHOPPING_SECTION: "Courses",
 }
 
 
@@ -100,6 +110,11 @@ def navigation(request):
         # An employee's « Notifications » (his own devices): « Données » is
         # no link of his, there is none to light nor to name.
         section = ""
+    if section == "products" and not access.allows("products"):
+        # The gate opens him the shopping pages only: his link is
+        # « Courses ». Without « Liste de courses » either, no link of his
+        # names the page (a JSON answer of the app, read by a stock take).
+        section = SHOPPING_SECTION if access.allows("shopping") else ""
     # The till products to link: counted for whoever has the link
     # (accounts/access.py).
     pending = PosProduct.objects.filter(recipe__isnull=True, ignored=False).count() if access.allows("recipes") else 0

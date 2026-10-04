@@ -4733,9 +4733,9 @@ imports (`transfer/legacy.py`).
   for suppliers and the payers retained (« Banque »: learnt from that
   bar's own links and choices, naming its payers), the treasury's points
   and adjustments (« Banque » too: that bar's own balances), « Combler les
-  écarts »' exclusions and duration and « Prévoir les courses »' settings
-  and exclusions (never exported, below), « Personnel » and the
-  « Identifiants » vault.
+  écarts »' exclusions and duration, « Prévoir les courses »' settings
+  and exclusions and the shopping lists (never exported, below),
+  « Personnel » and the « Identifiants » vault.
 - **An archive written before a section existed is read as if it had it**
   (`archive.CARVED`, `carved`, `manifest_sections`, `manifest_counts`): one
   declaring « banque » - or « consignes » - and not the new key carries the
@@ -4949,7 +4949,9 @@ imports (`transfer/legacy.py`).
   exclusions (`GapExclusion`) and its duration (`GapFillSetting`),
   « Prévoir les courses »' settings (`ShoppingSetting`) and exclusions
   (`ShoppingExclusion`, CASCADE with its article and its store: a clear
-  deleting either takes the row), the
+  deleting either takes the row), the shopping lists (`ShoppingList`,
+  `ShoppingListItem`: CASCADE with their store, SET_NULL with an article -
+  the item keeps its name), the
   notifications (`notifications`' reminders, alerts, settings and history,
   the central `accounts.PushDevice`), the automatic gathers
   (`invoices.AutoGather`), the automatic sales imports
@@ -5743,8 +5745,10 @@ trip on another day, and the screen says so (« Si vous y allez
 aujourd'hui : de quoi tenir N jours, jusqu'au passage suivant », the
 review's finding: read as « my trip is in N days », a list prepared two
 days ahead dropped lines and doubled quantities). A GET page of
-« Produits & charges » (no `VIEW_AREAS` entry, not in `STOCK_TAKE_VIEWS`), entered from that
-page's header (« 🛒 Prévoir les courses »); « Rythme d'achat »
+« Produits & charges » (not in `STOCK_TAKE_VIEWS`), entered from that
+page's header (« 🛒 Prévoir les courses ») and from the shopping lists;
+it opens with « Liste de courses » too (`VIEW_AREAS`, `_SHOPPING`: « Who
+may tune it », below, and « Employees' access »); « Rythme d'achat »
 (`/courses/rythme/`) answers his « à quelle régularité j'achète chaque
 article » for every article, or for one store's. Three layers:
 `shopping.py` is pure (stdlib only, no Django import; `Prepared.build` is
@@ -5827,13 +5831,31 @@ never proposed there: no history rule reaches a first purchase.
   units (Decimal), and in the store's own product - the product bought on
   most of the last 5 days here (ties: the latest), counted as the
   `statistics.median_high` of its units over its last 3 days, so always an
-  amount really bought; « (2 colis de 6) » when the colisage divides it;
-  article units alone for a product bought by measure or with no name. A
-  typed horizon longer than the usual gap takes as many usual quantities
-  as it holds usual gaps, rounded half up (the usual purchase covers one
-  gap: at a weekly store 8 days is 1, 14 is 2, 30 is 4; « 2 × (…) — pour
-  14 jours »). Never the article's rate, which would count another store's
+  amount really bought; article units alone for a product bought by
+  measure or with no name. A typed horizon longer than the usual gap takes
+  as many usual quantities as it holds usual gaps, rounded half up (the
+  usual purchase covers one gap: at a weekly store 8 days is 1, 14 is 2,
+  30 is 4). Never the article's rate, which would count another store's
   share as this one's. Not measured: no ground truth.
+- **Drawn as two columns, never « m × (n × …) »** (the owner, 04/10/2026:
+  « je préfèrerais avoir une colonne précisant la quantité à acheter
+  directement »; `views._line_rows`, `shopping_lists.line_figures`), in
+  « À acheter », « Peut-être » and « Nouveaux ici »: « Produit », the
+  store's product with « N colis de P » grey under it when the colisage
+  divides the number (`pack_words`; a colisage that is not a whole number
+  within `PACK_RANGE` gives no hint; never a bare « colis de P »: a number
+  that is no whole number of packs - a list item typed so - reads « à
+  l'unité · colis de P »), empty for a product bought by measure; and
+  « À acheter », ONE number - the product's units times the multiplier,
+  quantized to 3 places half up, else the article's units (« 1.5 kg ») -,
+  its `data-sort` the bare number. Grey under it, when the number counts
+  the product: the article's units (« 2 L ») unless they repeat it (an
+  article in « u. » and the same count), then « pour N jours » when a typed
+  horizon multiplied it. **One rule for the page and the shopping list**:
+  `shopping.usual_purchase` (`_usual_qty`, the median `_score` reads too)
+  and `shopping_data.usual_purchase_at` (one article at one store, two
+  queries) give what a line shows with no typed horizon - pinned equal
+  over every line (`UsualPurchaseTests`, `UsualPurchaseAtTests`).
 - One French sentence a line, built from the figures the chance uses
   (« Pris 5 fois sur 8 passages en 6 mois ; dernier achat il y a 4 jours,
   d'habitude tous les 7 jours. », an invented one), and the chance as
@@ -5931,8 +5953,41 @@ constant to shopping's rule). Its forms all POST, a GET goes to the list, and
 each answers with ONE redirect to the list of the store it came from (its
 `dans` kept), its message said where it lands - `_messages_by_place` now
 takes the places (`GAP_FILLER_PLACES` keeps the gap filler's two; this page
-has `liste` above « À acheter », `reglages`, `exclusions`); with no store
-to draw, every message goes to the top:
+has `liste` above « À acheter », `peut-etre` and `nouveaux` first in their
+folds, opened for them, `reglages`, `exclusions`); a fold not drawn says
+its messages at the top, and with no store to draw every message goes
+there:
+- **Onto the shopping list** (« Listes de courses », below): the header's
+  « Liste de courses (N) » (the store's open list, N its items - one
+  query for every line's state); each line of « À acheter », « Peut-être »
+  and « Nouveaux ici » has a « Liste » cell: « Ajouter » posting the line's
+  figures (`article`, `produit`, `colis`, its quantity, which may be
+  changed first; `retour` its place, `FORECAST_ADD_PLACES`), back to that
+  fold with `dans` kept and the message in it - or « Dans la liste (24) »,
+  a link to the list, when the open list holds the article STILL TO BUY (a
+  free text never stands for a line). **A ticked item is no longer in the
+  list** (`taken`): bought on a trip whose list nobody finished, it would
+  hide the article for good - its line draws « Pris (24) » beside its
+  « Ajouter », which puts it back to buy (« « … » remis dans la liste
+  (…). »). « Tout ajouter (N) » above « À acheter » adds every line of it
+  not on the list to buy yet with the page's own figures, a ticked item
+  put back and counted as added (`shopping_list_add_all` works the plan
+  out again, `dans` included, in one transaction): « 7 articles ajoutés à
+  la liste, 3 y étaient déjà. », « Tout est déjà dans la liste. », a line
+  whose figure the list cannot hold left out and counted (« 1 non ajouté :
+  quantité trop grande. »), said above « À acheter ». Pressed during a
+  trip, it puts back an article just ticked in the store (its invoice not
+  imported yet): the « Pris » beside the line is what shows it. The page
+  stays a GET that writes nothing.
+- **Who may tune it** (`may_tune`, `access_of(request).allows("products")`,
+  on the list and on « Rythme d'achat »): the forecast opens with
+  « Liste de courses » or « Produits & charges », but « Réglages »,
+  « Exclusions » and the lines' « Pas ici », « Ne plus proposer » and
+  « Ne jamais proposer » change it for everybody - their routes
+  (`shopping_settings`, `shopping_exclude`, `shopping_include`) stay
+  « Produits & charges »' (no `VIEW_AREAS` entry) and the pages draw them
+  for `may_tune` only, the exclusions then not read at all. « Les plus
+  achetés ici »' « Total HT » is drawn for `can.sees_costs` only.
 - « Réglages » (`shopping_settings`, `#reglages`): `seuil` 10-60, `memoire`
   2-24 months, `caisse` (a checkbox); ASCII digits only, a refusal per
   field and nothing written; « Valeurs par défaut » (`defaut`) deletes the
@@ -5967,10 +6022,13 @@ to draw, every message goes to the top:
   article (« Supprimer les articles vides », a merge, « Données » clearing
   the associations) and deleting a supplier (its page, « Données ») - both
   `ShoppingExclusion` foreign keys are CASCADE, so Django's collector reads
-  the table before it deletes.
-- **Ids**: only the ids a redirect lands on keep their French (`a-acheter`,
-  `reglages`, `exclusions`: `SHOPPING_ANCHORS`, the « Toolchain »
-  precedent); the other folds' are English (`maybe`, `most-bought`).
+  the table before it deletes. Since `inventory/0022` (« Listes de
+  courses », below) the page also reads the store's open list: it answers
+  « no such table » until 0022 is applied too.
+- **Ids**: the ids a redirect lands on are French (`a-acheter`,
+  `peut-etre`, `nouveaux-ici`, `reglages`, `exclusions`:
+  `SHOPPING_ANCHORS`, the « Toolchain » precedent); `most-bought`, which no
+  redirect targets, stays English.
 - **On a phone** the lines are cards (`_shopping_lines.html`, and « À
   acheter ailleurs »): the « Pourquoi » sentence runs across the card
   (`.phone-card-wide`) - squeezed beside the quantity and the chance it
@@ -5984,14 +6042,253 @@ to draw, every message goes to the top:
 
 The tests: `test_shopping` (the pure module, every rule on invented data,
 a speed test; every fold's cap and year bound, the 90-day « Nouveaux ici »
-bound, k's lower bound and « one section at most » pinned),
-`test_shopping_models`, `test_shopping_data` (the till's first day:
-`TillWindowTests`, `TillStartOnTheLineTests`), `test_shopping_page` (every
+bound, k's lower bound and « one section at most » pinned;
+`UsualPurchaseTests`), `test_shopping_models`, `test_shopping_data` (the
+till's first day: `TillWindowTests`, `TillStartOnTheLineTests`;
+`PurchaseFilterTests`, `UsualPurchaseAtTests`), `test_shopping_page` (every
 state and form of both pages, each form posted as the page draws it,
-placed messages, markup never echoed, the query cost), and the sweeps in
+placed messages, markup never echoed, the query cost; `LineRowsTests`, the
+« Liste » column, `ViewerWhoMayNotTuneTests`), and the sweeps in
 `tests/test_views_smoke.py` (`make_shopping_history`, the invented fixture
 the others import; `ShoppingParameterSmokeTests`), `tests/test_ui.py`
-(the cards' labels, the wide « Pourquoi ») and `tests/test_navigation.py`.
+(the cards' labels, the wide « Pourquoi », `data-sort` on « À acheter »),
+`tests/test_navigation.py` and `accounts/tests/test_access.py`
+(`ShoppingAreaTests`: a real employee given `shopping` alone).
+
+### « Listes de courses » (`/courses/listes/`, `inventory/shopping_lists.py`)
+
+The owner, 04/10/2026: a shopping list per store that an employee - and
+the owner - fills from « Prévoir les courses » and uses while shopping;
+his choices: add, change and remove items, a mode to tick as you buy,
+every existing employee given the area. `inventory/shopping_lists.py` is
+the service, testable without a request (its docstring is the
+reference; it never imports the views); the views are thin, at the end of
+`inventory/views.py` (`tests/test_json_islands.py` sweeps `*/views.py`).
+
+**The model** (inventory 0022):
+- `ShoppingList`: its store (`supplier`, CASCADE: a supplier deleted - its
+  page, « Données » - takes its lists, and its delete page names them,
+  « 2 listes de courses »), `created_at`/`created_by`,
+  `finished_at`/`finished_by` (usernames, as `ReceiptBatch.sent_by`). OPEN
+  while `finished_at` is empty, **at most one open per store** (the partial
+  unique constraint `shopping_list_one_open_per_store`; SQLite's refusal
+  names the column, not the constraint), then kept read-only. **Made by
+  its first item** (`open_list_for`: a list made meanwhile by another
+  request is read back, its IntegrityError caught in a savepoint): a page
+  drawn writes nothing, and the store menu is a GET.
+- `ShoppingListItem`: an article (`stock_type`, **SET_NULL**) or a free
+  text (`label` only). `label` is the article's name when added, so an
+  article deleted (« Supprimer les articles vides », « Données » clearing
+  the associations) leaves its items as free texts holding its name -
+  never a hole in a list; `item.name` is the live name. `quantity` (10,3,
+  above 0) counts `product_name` when `unit` is "" (or what a free text
+  names), the article's own unit otherwise; `pack_size` (none, or above 1)
+  is the colisage, a hint (« 1 colis de 24 »); `note` (200);
+  `added_at` (`default=timezone.now`, never `auto_now_add`: a carry-over
+  copies it), `added_by`, `checked_at`/`checked_by` (the tick). A check
+  constraint for each bound, and one item per article per list - free
+  texts are kept apart by the service (`search_key`, spaces collapsed),
+  never by the database: an article deleted turns its items into free
+  texts, which must never trip a constraint. **No `Meta.ordering` and no
+  position**: every read orders `("added_at", "pk")`, and nothing reorders.
+
+**The rules** (`shopping_lists.py`):
+- The stores offered are the forecast's (`offered_stores()`: no supplier
+  of charges, not the AI pseudo-supplier, a positive PURCHASE movement -
+  one query); `store_of` also takes a store with a list in progress, so a
+  list stays reachable once its store's documents are gone. Ids through
+  `is_id`.
+- **An open list with no item is no list in progress.** Emptied by
+  « Retirer », it keeps no store reachable (`store_of` needs an item), it
+  is not under « En cours » (the index filters `total > 0`), and its next
+  item starts it again: `add_item`, in the savepoint that writes, sets its
+  `created_at` and `created_by` to that add's - never the day of a first
+  item long gone. Nothing deletes it (deleting would race an add).
+- **Adding is idempotent** (`add_item(store, *, by, label, figures,
+  stock_type=None, note="", relist=True) -> (item, AddOutcome)`): the same
+  article, or a free text reading the same (one to buy found before a
+  ticked one), already on the open list TO BUY answers ALREADY, unchanged -
+  a double submit or two phones adding at once leave one item. **A ticked
+  (bought) one is put back to buy** (RELISTED): one UPDATE, filtered on an
+  open list and an item still ticked, unticks it and writes the quantity,
+  unit, product and pack asked for over its own, the note only when one is
+  typed; who added it and when are kept (it sorts among the unticked by its
+  first add). With `relist=False` it stays bought (ALREADY). An item ticked
+  on a trip whose list nobody finished would otherwise hide the article for
+  good. Compare the outcome by identity (`AddOutcome.ADDED`…): every member
+  is truthy. **The add looks and writes in ONE transaction**: under
+  IMMEDIATE the write lock is taken before the look, so two adds of one
+  free text give one item and an add and a « Courses terminées » follow one
+  another; the savepoint that writes checks again that the list is still
+  open and, finished meanwhile, the add goes to the store's current open
+  list (`ADD_ATTEMPTS`) - never onto a finished list.
+- **What is written fits its column** (`fits`, `QUANTITY_LIMIT`, « A
+  figure wider than the column behind it is refused, at the door »): SQLite
+  stores a quantity wider than (10, 3) without a word and the row can never
+  be read again. `add_item` raises `QuantityTooWide` (a ValueError, French:
+  « « … » : quantité trop grande, rien n'a été ajouté. ») before reading or
+  writing anything; « Ajouter » says it in place of a 500 (a usual purchase
+  misread, a name typed with no quantity), « Tout ajouter » leaves the line
+  out and counts it. `line_figures` and `usual_figures` give a figure as it
+  is: `add_item` is the one writer, and refuses it. A merge never sums a
+  pair whose total would not fit: the source's item becomes a free text.
+- **A tick names the WANTED state** (`set_ticked`): one UPDATE on an item
+  of an open list, `Coalesce` keeping the first tick's who and when; False
+  when the list was finished meanwhile or the item went.
+- **Finishing carries the rest over** (`finish`): one conditional UPDATE
+  closes the list - none closed means it already was: a double submit
+  carries nothing twice -, then, with « Garder… », a copy of each unticked
+  item goes to the store's next open list (figures, note, `added_at` and
+  `added_by` kept, never the tick); an article, or a free text reading the
+  same, already there is skipped. The finished list keeps every item as it
+  was.
+- **A merge keeps every line** (`carry_on_merge`, called by
+  `services.merge_stock_types` before the source goes), list by list,
+  finished lists included: with no item of the target, the item names the
+  target; beside one counting the same thing (`unit` and `product_name`),
+  one item - quantities added, notes joined with « · » (cut to 200 with
+  « … »), the pack kept if equal else the target's, ticked only if both
+  were; beside one counting something else - or the same thing when the
+  sum would not fit (`fits`) -, the source's item becomes a free text under
+  the name the list showed.
+- What a forecast line counts is `line_figures` (the product's units when
+  known, else the article's; 3 places half up; the pack a whole colisage
+  of `PACK_RANGE` only); a name typed on the list page with no quantity
+  takes the store's usual purchase (`usual_figures`, two queries), else 1
+  in the article's unit; a typed quantity counts what that usual purchase
+  counts - the item shows the product, so what was understood is visible
+  and can be changed. A name is an article when it is one's name, or the
+  ONE whose `search_key` it reads as; else a free text, kept as typed.
+- **What a number counts is said, never read as packs.** A typed quantity
+  counts units (the usual product's bottles, else the article's unit),
+  never packs, and the add form says so (« Quantité : en unités, jamais en
+  colis »). `pack_words` is « N colis de P » for a whole number of packs,
+  else « à l'unité · colis de P » - never a bare « colis de P », which
+  beside « 2 » read as two cartons. The « ajouté », « remis », « déjà » and
+  « Modifié » messages say the packs the number makes
+  (`views._counted_words`: « (2 · à l'unité · colis de 24) », « (48 · 2
+  colis de 24) »), and so does the « Modifier » card beside its field.
+- **Who did what never shows an address** (`display_names(usernames, me,
+  tenant_id)`, the views passing the bound espace's pk): « Vous » for the
+  viewer; a login of THIS espace by its first name, else by its role -
+  « le gérant », « un employé » (a signup sets no first name: the owner's
+  login address was printed to every employee given the lists); anyone
+  else - a login removed, another bar's whose address was reused - « un
+  ancien membre ». One accounts query at most, none when every name is the
+  viewer's or blank. The words are lower case: the « Par » cell prints
+  them `|capfirst`, a finished list's subtitle « … par le gérant ».
+
+**The routes** (`inventory/urls.py`, no converter; each POST route
+answers a GET with a redirect to the lists):
+- `courses/listes/` (`shopping_lists`): « En cours » (each list in
+  progress - an open list holding an item -, its « 7 / 12 » pris, « Faire
+  les courses »), « Ouvrir la liste de … » (a GET store menu), « Terminées »
+  (the last `RECENT_FINISHED`, newest first, who finished them, never an
+  address); the same queries whatever the lists.
+- `courses/liste/` (`shopping_list_page`): `?fournisseur=` a store's list
+  to prepare - the card of `?ligne=` at `#modifier` (quantity, note), the
+  add form (`nom`, the store's articles first in its datalist), the items
+  with « Modifier » and « Retirer » -, with `&mode=courses` to tick;
+  `?liste=` a list by its id: an open one redirects to its store's
+  address, a finished one is drawn read-only. A store or a list the
+  address cannot give: the lists, saying so.
+- POST `ajouter/`, `tout-ajouter/`, `modifier/`, `retirer/` (no
+  confirmation: adding back is one form), `cocher/`, `terminer/`. **Every
+  refusal is said and nothing written** (the sentences are the views'
+  constants, tested word for word); an item is looked up among its store's
+  lists only, and a write is filtered on an open list - none changed says
+  « n'est plus dans la liste » or « terminée », whichever holds. Those
+  guards look redundant beside the views' own `is_open` checks and are
+  not: another phone can act between the read and the write, and the race
+  tests stage it (below).
+- **« Courses terminées » never finishes a list this phone did not name.**
+  It posts a list's pk, never the store (a second submit would close the
+  list carried over). Posted for a list finished already - a double submit,
+  another phone, a tab drawn before - while the store has a list in
+  progress: that list's tick page, « Ces courses étaient déjà terminées :
+  voici la liste en cours. » in its block, nothing finished; with none in
+  progress, the lists and « Ces courses sont déjà terminées. ».
+- **A message is said where its redirect lands**: from the forecast in the
+  fold it came from; the card's refusals in the card (`#modifier`); a tick
+  refused without JavaScript in the tick block (`#courses`); the rest at
+  the top. Said at the top of a page landing two screens down, it is
+  never seen (the gap filler's lesson).
+
+**Ticking** (`?mode=courses`, `_shopping_run.html`, phone first at every
+width: `.shopping-run-page`): each item is a button at least 56 px tall in a form
+posting `pris`, the state WANTED (« 1 » / « 0 »), never a toggle. With
+JavaScript `hx-post` swaps `#courses` whole - the block only, drawn from
+the store's CURRENT open list (the one carried over, once another phone
+finished), what could not be done said in it, nothing stored for the next
+page; without it, the same form posts and lands on `…&mode=courses#courses`.
+« Courses terminées » (`data-confirm`, « Garder les articles non pris pour
+la prochaine liste » ticked) sits OUTSIDE the block: a swap never resets
+its box. **So every htmx tick names its list out of band** (`oob`, in the
+view's htmx branch only): inside `#courses`, `<input … id="shopping-finish-list"
+hx-swap-oob="true">` holding the block's list, which htmx 1.9 lifts out
+of the block and swaps for the finish form's own - the box untouched -,
+so the form always posts the list the block shows; a block with no item
+left (finished elsewhere, nothing kept) takes the form out instead (`<div
+id="shopping-finish" hx-swap-oob="true">`). Without it, a phone still
+ticking after another finished with « Garder » posted the finished list,
+read « déjà terminées » and left the carried list open with its ticks. A
+page drawn whole carries no out-of-band part; without JavaScript each tick
+redraws the page, its form naming the current list. No `data-busy-label`
+on a tick (ui.js disables a busy button) and never `all: unset` (the focus
+ring). **Two phones**: each POST touches one
+item and names the state wanted, so two ticks of two items both land, a
+tick of an item the other phone ticked keeps the first tick's who and
+when, and a double tap changes nothing more. Each answer is the list as it
+stands after its own write: the other phone's ticks show at its next tap,
+and two quick taps answered out of order may show the earlier state until
+the next one - said here, not engineered. Nothing refreshes the page by
+itself.
+
+**Access** (« Employees' access »): the lists, « Prévoir les courses » and
+« Rythme d'achat » open with « Liste de courses » (`shopping`) or
+« Produits & charges »; an employee given `shopping` alone reads them
+under « Courses », and starts on them only when given nothing else
+(`home_url` passes the area over beside any other). No list page shows a
+price, nor any login's address.
+
+**Never exported** by « Données »: CASCADE with their store, SET_NULL with
+an article (the item keeps its name); a merge carries the items.
+
+**Migrations**: `inventory/0022` (the two tables) and `accounts/0005` (the
+area given to every employee) are WRITTEN and left to be applied - the
+owner, after a backup, `migrate_tenants` (which migrates the accounts
+database first); deploy.cmd in production. Until 0022 is applied, every
+list route, « Prévoir les courses » itself (it reads the store's open
+list), deleting or merging an article and deleting a supplier (Django's
+collector reads the new tables) answer « no such table » - 0021's
+situation. Until 0005, employees simply do not have the box ticked.
+
+**Tests**: `inventory/tests/test_shopping_list_models.py` (the
+constraints, CASCADE and SET_NULL, the merge - a sum too wide kept as two
+lines -, the supplier's delete page), `test_shopping_lists.py` (the
+service; races through patched helpers, one UPDATE a tick, the carry-over,
+the relist, `FitsTests`, `DisplayNamesTests`, and `ConcurrentAddTests`:
+real connections on a real espace file with production's SQLITE_OPTIONS,
+a raw connection holding BEGIN IMMEDIATE), `test_shopping_lists_page.py`
+(every page, form and refusal as the page draws and posts it, htmx and
+without JavaScript, the out-of-band list and the stale finish, the query
+cost at 2 and 20 items, markup never echoed, no address to an employee;
+the views' race paths staged by patching `views._item_of` with
+`read_then` - another phone finishing the list or removing the item
+between the read and the write: dropping the edit's open-list filter, or
+answering « terminée » for a removed item, fails them),
+`test_shopping_page.py` (the « Liste » column - « Pris (N) » -, « Tout
+ajouter »), `tests/test_views_smoke.py` (`make_shopping_lists`, the
+parameter sweep), `tests/test_ui.py` (`ShoppingListStylesheetTests`, the
+cards' labels), `tests/test_navigation.py` (« Courses » lit),
+`accounts/tests/test_access.py` (`ShoppingAreaTests`,
+`ShoppingAreaMigrationTests`: no employee's start page moves), and in
+Chrome `tests/test_phone_width_browser.py` (the lists' page, a list to
+prepare with a one-word free text and a 60-letter note, its card, the tick
+page, a finished list, at 320, 375 and 430 px; the owner runs it).
+`tests/factories.py` has no shopping-list builder yet: the modules build
+their own. No browser test drives the htmx tick swap itself (spec §14's
+optional `test_shopping_run_browser`, not written).
 
 ### L'Addition (the till)
 
@@ -7606,9 +7903,14 @@ below, each with its test.
 **Roles.** `Membership.role` OWNER opens everything, as before. MEMBER (« Employé ») opens the areas
 of `Membership.pages` (accounts 0003; the existing MEMBER rows were given every area: they opened
 every page). An AREA (`access.AREAS`, keys stored, never renamed) is one box the owner ticks:
-`invoices_add`, `stock_takes`, `returnables` (ticked for a new employee, `DEFAULT_AREAS`),
-`invoices`, `stock_gaps`, `products`, `recipes`, `bank`, `margins`, `staff`. Each help says what the
-area shows that an owner may not want shown (purchase prices, the invoices' files of « Banque »).
+`invoices_add`, `stock_takes`, `returnables`, `shopping` (ticked for a new employee,
+`DEFAULT_AREAS`), `invoices`, `stock_gaps`, `products`, `recipes`, `bank`, `margins`, `staff`. Each
+help says what the area shows that an owner may not want shown (purchase prices, the invoices' files
+of « Banque »). « Liste de courses » (`shopping`) came on 04/10/2026, with accounts 0005 (data only,
+WRITTEN and left to be applied): every MEMBER of every espace - the logins are central - was given it,
+his pages kept in AREAS' order with the new key at its place and anything stored that is no key
+after them; the owners' rows untouched; run twice, it changes nothing more; reversed, nothing (a
+version without the area passes the key over); no employee's start page moves (`Access.home_url`).
 
 **The gate, deny by default** (`AccessMiddleware.process_view`, after MessageMiddleware). Every
 route is named through its app (`APP_AREAS`) or itself (`VIEW_AREAS`); a route named nowhere is the
@@ -7620,7 +7922,10 @@ non-public page is refused (fails closed). Refused: `accounts/refused.html` insi
 links on top, « Page non accessible »), htmx 403 + `HX-Redirect` to his home (a poll refused bare
 asked every second); « / » - the login's landing, the brand, « Revenir à l'accueil » - redirects to
 `Access.home_url` (« / » itself for one given « Produits & charges », the area it opens; else his
-first area's page in the order of `AREAS`; « Aucune page ouverte » with none).
+first area's page in the order of `AREAS`, « Liste de courses » passed over beside any other area -
+accounts 0005 gave it to every employee and moved no one's start page, so only one given the lists
+alone starts on them (`ShoppingAreaMigrationTests.test_no_employee_s_start_page_moves`); « Aucune
+page ouverte » with none).
 - **Owner only inside the areas** (each a review finding): the sources of invoices
   (`invoice_type_create/update`: a mailbox source's « Tester » lists every sender and subject it
   matches); the slips' formats and types (`returnables:format_*`, `type_*`: a format's start motif
@@ -7645,14 +7950,30 @@ first area's page in the order of `AREAS`; « Aucune page ouverte » with none).
   owner's, like the types.
 - **Hiding a link is never the boundary**: `can` (context processor `accounts.access.context`,
   no query) draws the links he may follow - the topbar (« Factures » to « Ajouter des factures »
-  when that is all he may do there, no badge; his name before the bar's on a shared phone; the
-  owner's bar byte-identical), the stock take, Consignes, Personnel and Données pages. A request
+  when that is all he may do there, no badge; « Courses » to the shopping lists, below; his name
+  before the bar's on a shared phone; the owner's bar byte-identical), the stock take, Consignes,
+  Personnel, Données and « Prévoir les courses » pages. A request
   through no membership (anonymous, public, built by hand) draws everything (`FULL`). The badges'
   counts are skipped for a closed area.
 - **Prices**: an inventory shows values (columns, total, the live price of a line,
   `value_stock_take_line`) only to whoever is shown what articles cost (`sees_costs`: owner, or an
   area of `COST_AREAS`). A barman counting bottles learnt every purchase price otherwise - the
   margin - from a box ticked by default.
+- **« Liste de courses »** (`shopping`, the owner, 04/10/2026; « Listes de courses »): the shopping
+  lists' eight routes, « Prévoir les courses » and « Rythme d'achat » are `_SHOPPING` =
+  {`products`, `shopping`} in `VIEW_AREAS`. The forecast's settings and exclusions
+  (`shopping_settings`, `shopping_exclude`, `shopping_include`) have no entry and stay their app's,
+  `products`: they change the forecast for everybody, so its pages draw their forms only for one
+  who may post them (`may_tune`), and « Total HT » only for `sees_costs` - `shopping` is no cost
+  area. `home_url` passes « Liste de courses » over beside any other area: an employee invited
+  before accounts 0005 still starts on his usual page (the invoices, the bank, « Personnel »…), and
+  one given the lists alone starts on them. His topbar
+  link reads **« Courses »**, in « Produits & charges »' place (`{% elif can.shopping %}`), lit by
+  `navigation.SHOPPING_SECTION` where `section_of` says « products » and he may not open them -
+  the « Factures » → « Ajouter des factures » precedent, with words of its own: « Produits &
+  charges » would announce the prices and charges his employer did not open. An `elif`, so no
+  employee's bar has one link more than with every box ticked (the measured topbar is not
+  measured again), and the owner's bar is byte-identical.
 
 **« Ajouter des factures »** (`invoices:invoice_add`): the import's form on a page of its own
 (`_receipt_upload_form.html`, shared with the card; « Un dossier entier » left to Factures; the

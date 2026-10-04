@@ -3,8 +3,9 @@ the purchase history - and the till's sales, when the owner keeps them in.
 
 Pure: no ORM, no request, no Django. `shopping_data.prepare` reads the
 database once and hands plain rows to `Prepared.build`, the single entry;
-`plan_store`, `store_choices`, `rhythms` and `score_article` then work on
-that in memory, with bisect and running sums.
+`plan_store`, `store_choices`, `rhythms`, `score_article` and
+`usual_purchase` (one article's usual purchase at one store, the shopping
+lists') then work on that in memory, with bisect and running sums.
 
 **One chance per article.** Every article already bought at the store gets
 the chance that the owner takes it on this visit (`chance_of`):
@@ -1019,7 +1020,7 @@ def _score(
         status = BOUGHT_ELSEWHERE
     last_here = here.days[n_here - 1]
     elsewhere_since = min(history.buys[n_all - 1].stores) if last > last_here else None
-    qty = statistics.median(buy.qty for buy in here.buys[max(0, n_here - QTY_LAST) : n_here])
+    qty = _usual_qty(here, n_here)
     return Score(
         article_id=article_id,
         habit=habit,
@@ -1113,6 +1114,13 @@ def _is_whole(value: Decimal) -> bool:
     return value == value.to_integral_value()
 
 
+def _usual_qty(here: History, n_here: int) -> Decimal:
+    """The usual quantity here, in article units: the median of the last
+    QTY_LAST purchase days among the first `n_here`. A median of two can
+    carry one place more than either (1,25 and 2,5 make 1,875)."""
+    return statistics.median(buy.qty for buy in here.buys[max(0, n_here - QTY_LAST) : n_here])
+
+
 def _usual_product(
     here: History, n_here: int, product_names: Mapping[int, str]
 ) -> tuple[int | None, str, Decimal | None, tuple[int, Decimal] | None]:
@@ -1164,6 +1172,33 @@ def _multiplier(state: _StoreState, horizon_typed: bool) -> int:
     if not horizon_typed or state.usual_gap <= 0 or state.horizon <= state.usual_gap:
         return 1
     return max(1, math.floor(state.horizon / state.usual_gap + 0.5))
+
+
+@dataclass(frozen=True, slots=True)
+class UsualPurchase:
+    """What one purchase of an article at a store usually is, as of today:
+    the figures plan_store's lines carry before a typed horizon multiplies
+    them (Line.qty, product_id, product_name, product_units, packs)."""
+
+    qty: Decimal  # article units
+    product_id: int | None
+    product_name: str
+    product_units: Decimal | None  # None: unknown, or bought by measure
+    packs: tuple[int, Decimal] | None
+
+
+def usual_purchase(prepared: Prepared, store_id: int, article_id: int) -> UsualPurchase | None:
+    """One article's usual purchase at one store today, by the very rules
+    of the page's line (`_usual_qty`, `_usual_product`) - whatever its
+    section, its chance or the exclusions. None when it was never bought
+    there up to today."""
+    here = prepared.buys_at.get((article_id, store_id))
+    if here is None:
+        return None
+    n_here = bisect.bisect_left(here.days, _today(prepared).stop)
+    if not n_here:
+        return None
+    return UsualPurchase(_usual_qty(here, n_here), *_usual_product(here, n_here, prepared.product_names))
 
 
 # --------------------------------------------------------------------- the sentences
