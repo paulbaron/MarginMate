@@ -21,7 +21,12 @@ from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import StockMovement, StockTakeLine, StockTakeLineSource, StockType, UnitChoices
-from inventory.services import create_stock_movement_for_line, product_counting_ratio, product_counting_ratios
+from inventory.services import (
+    create_stock_movement_for_line,
+    merge_stock_types,
+    product_counting_ratio,
+    product_counting_ratios,
+)
 from inventory.variance import counted_quantity_in_stock_units
 from recipes.models import RecipeIngredient, SaleDocument, SaleDocumentLine
 from tests.factories import (
@@ -134,6 +139,31 @@ class MergeStockTypesTests(TestCase):
         self.assertEqual((line.pk, line.counted_quantity, line.value_ht), (theirs.pk, D("1.7"), D("21")))
         source_row.refresh_from_db()
         self.assertEqual(source_row.stock_take_line, line)
+
+    def test_an_item_merged_into_itself_is_kept_whole(self):
+        """The page never offers it, a hand-made POST did: every line was its
+        own twin, doubled then deleted, and the item went with its losses -
+        what deleting it refuses."""
+        StockMovement.objects.create(
+            stock_type=self.source, kind="LOSS", quantity=D("-0.7"), unit_cost_ht=D("10"), occurred_on=date(2026, 7, 1)
+        )
+        counted = make_stock_take_line(
+            stock_type=self.source, unit=UnitChoices.LITRE, counted_quantity="0.5", value_ht="6"
+        )
+        response = self.client.post(
+            reverse("inventory:stock_type_merge", args=[self.source.pk]), {"target_id": self.source.pk}
+        )
+        self.assertRedirects(response, reverse("inventory:stock_type_update", args=[self.source.pk]))
+        self.assertIn("choisissez un autre article", " ".join(messages_of(response)))
+        self.assertTrue(StockType.objects.filter(pk=self.source.pk).exists())
+        self.assertEqual(StockMovement.objects.filter(stock_type=self.source).count(), 2)
+        counted.refresh_from_db()
+        self.assertEqual((counted.counted_quantity, counted.value_ht), (D("0.5"), D("6")))
+
+    def test_the_service_refuses_it_too(self):
+        with self.assertRaises(ValueError):
+            merge_stock_types(self.source, StockType.objects.get(pk=self.source.pk))
+        self.assertTrue(StockType.objects.filter(pk=self.source.pk).exists())
 
     def test_a_failure_leaves_nothing_half_merged(self):
         """The products used to have moved already when the delete failed."""

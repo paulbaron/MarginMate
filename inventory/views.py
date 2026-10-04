@@ -1138,6 +1138,11 @@ def merge_stock_type(request, pk):
     target_id = request.POST.get("target_id", "")
     # A posted id that is not one is not found - not a server error.
     target = get_object_or_404(StockType, pk=target_id if is_id(target_id) else None)
+    if target.pk == source.pk:
+        # Never offered by the page; posted by hand, it deleted the item with
+        # its losses and counts - what delete_stock_type refuses.
+        messages.error(request, "Fusion impossible : choisissez un autre article que celui-ci.")
+        return redirect("inventory:stock_type_update", pk=source.pk)
     if source.unit != target.unit:
         messages.error(
             request,

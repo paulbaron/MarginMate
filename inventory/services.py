@@ -454,6 +454,10 @@ def merge_stock_types(source: StockType, target: StockType) -> None:
     """
     from recipes.models import RecipeIngredient, SaleDocumentLine
 
+    if source.pk == target.pk:
+        # Each count line would be its own twin, doubled then deleted, and
+        # the item deleted after them with its losses.
+        raise ValueError("cannot merge a stock type into itself")
     StockMovement.objects.filter(stock_type=source).update(stock_type=target)
     Product.objects.filter(stock_type=source).update(stock_type=target)
     RecipeIngredient.objects.filter(stock_type=source).update(stock_type=target)
