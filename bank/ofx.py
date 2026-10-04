@@ -122,8 +122,9 @@ _OFX_START = re.compile(r"<OFX>", re.IGNORECASE)
 _DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 #: A tag and the text up to the next one: the whole file after <OFX> is
-#: made of these, or it is no OFX.
-_TOKEN = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9.]*)\s*>([^<]*)")
+#: made of these, or it is no OFX. An XML 2.x file may write an empty
+#: element `<MEMO/>`.
+_TOKEN = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9.]*)\s*(/?)>([^<]*)")
 _REFERENCE = re.compile(r"&(?:(amp|lt|gt|quot|apos)|#([0-9]+)|#[xX]([0-9A-Fa-f]+));")
 _NAMED = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
 #: The widest reference read: past U+10FFFF either way is no character.
@@ -164,7 +165,13 @@ class OfxReading:
         operation = None  # the leaves of the STMTTRN being read
         stack: list[str] = []
         last_leaf = None
-        for closing, name, text in _tokens(self._text):
+        for closing, name, empty, text in _tokens(self._text):
+            if empty:
+                # `<MEMO/>`: an element with nothing in it, read as absent.
+                if closing or text.strip():
+                    raise ValueError(NOT_OFX)
+                last_leaf = None
+                continue
             if closing:
                 if name == last_leaf:
                     # 2.x closes its leaves: nothing after the close but space.
@@ -223,14 +230,14 @@ class OfxReading:
 
 
 def _tokens(text: str):
-    """(closing, NAME, text) for each tag of `text` - which must be nothing
-    but tags and their text."""
+    """(closing, NAME, empty, text) for each tag of `text` - which must be
+    nothing but tags and their text."""
     position, end = 0, len(text)
     while position < end:
         token = _TOKEN.match(text, position)
         if token is None:
             raise ValueError(NOT_OFX)
-        yield token.group(1) == "/", token.group(2).upper(), token.group(3)
+        yield token.group(1) == "/", token.group(2).upper(), token.group(3) == "/", token.group(4)
         position = token.end()
 
 

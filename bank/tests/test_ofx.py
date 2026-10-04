@@ -124,6 +124,10 @@ class ReadingTests(SimpleTestCase):
         (line,) = read(sgml((operation,))).lines
         self.assertEqual((line.label, line.amount), ("CB EPICERIE EXEMPLE", Decimal("-4.10")))
 
+    def test_an_empty_xml_element_is_read_as_absent(self):
+        (line,) = read(xml((changed(memo=None, extra=("<MEMO/>", "<CHECKNUM />")),))).lines
+        self.assertEqual(line.label, "CB EPICERIE EXEMPLE")
+
     def test_dates_are_their_first_eight_digits_whatever_the_time_and_zone(self):
         for printed in ("20260803", "20260803120000", "20260803120000.000[+1:CET]", "20260803235959[-5:EST]"):
             with self.subTest(printed=printed):
