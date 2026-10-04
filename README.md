@@ -153,8 +153,9 @@ factor. None of it is model-generated:
   classifications, so it follows its conventions), then a table of (regex
   pattern → article name, category, unit), e.g. any raw name containing
   "RHUM" maps to "Rhum" regardless of brand, then the raw name. A few rules
-  name the original bar's own articles and answer only where that article
-  exists (`bar_specific`).
+  name the original bar's own articles: they name them only where that
+  article exists, and elsewhere file the goods under their raw name with
+  the rule's unit and counting (`bar_specific`).
 - `inventory/quantity_extraction.py` - parses a pack size or count out of
   the raw name (70CL, 1KG, "MPRO 100 GANT LATEX" → 100, ...), cross-checked
   against the invoice line's own colisage/quantity/volume so a pack size
