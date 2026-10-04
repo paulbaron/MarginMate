@@ -143,8 +143,8 @@ INFO: dict[str, SectionInfo] = {
             Group.CONFIG,
             55,
             description=(
-                "Formats de relevé (CSV), règles de reconnaissance des opérations et règles « sans facture » : de "
-                "quoi lire les relevés d'une même banque."
+                "Formats de relevé, règles de reconnaissance des opérations et règles « sans facture » : de quoi "
+                "lire les relevés d'une même banque."
             ),
             # The format seeded by bank/0007 and the rules seeded by
             # bank/0006 go too (sections/bank_rules.py, FORMAT_CLEAR_NOTE,

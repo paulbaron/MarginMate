@@ -30,8 +30,8 @@
             {% csrf_token %}
             <input type="hidden" name="next" value="{{ page_url }}">
             <label>
-                <span class="upload-choice-title">Relevés bancaires (CSV)</span>
-                <input type="file" name="files" multiple accept=".csv,text/csv">
+                <span class="upload-choice-title">Relevés bancaires</span>
+                <input type="file" name="files" multiple accept="{{ statement_accept }}">
             </label>
             {% comment %}
             The format the files are read with: a choice only when there are
@@ -50,7 +50,7 @@
             {% endif %}
             <button class="btn" type="submit">Importer</button>
         </form>
-        <p class="muted">L'export CSV du compte, sur un ou plusieurs mois ; les opérations déjà importées sont ignorées.</p>
+        <p class="muted">L'export du compte - CSV, OFX ou CAMT.053 -, sur un ou plusieurs mois ; les opérations déjà importées sont ignorées.</p>
         <p class="muted">
             {% if not formats %}
                 Aucun format de relevé — <a href="{% url 'bank:statement_formats' %}">en ajouter un</a>
@@ -393,7 +393,8 @@
         {% endif %}
     {% else %}
         <div class="empty-state">
-            <p>Aucun relevé importé : importez ci-dessus l'export CSV du compte.</p>
+            <p>Aucun relevé importé : importez ci-dessus l'export du compte.</p>
+            <p class="muted">Un export que le format ne lit pas ? <a href="{% url 'bank:statement_formats' %}#modeles">Partir d'un modèle</a> ({{ preset_titles }}).</p>
         </div>
     {% endif %}
 {% endblock %}

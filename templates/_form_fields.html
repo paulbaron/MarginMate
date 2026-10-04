@@ -9,9 +9,10 @@ on screen.
 
 Context: `form`. Optional `exclude`, a list of field names the caller renders
 itself somewhere else on the page - or `only`, the list of the ones to
-render here (a folded "advanced" part, say).
+render here (a folded "advanced" part, say). `fields_only` leaves out the
+form's own errors, for a second part of a form whose first part said them.
 {% endcomment %}
-{% if form.non_field_errors %}
+{% if form.non_field_errors and not fields_only %}
     <div class="message message-error">
         {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
     </div>

@@ -10,6 +10,8 @@ How a format reads a file, under its form. Context: `example`
         <li>Le montant : une colonne signée, négative quand l'argent sort, ou une colonne des débits et une des crédits.</li>
         <li>Le numéro de compte est cherché au-dessus de la première opération ; <code>(?P&lt;compte&gt;…)</code> n'en garde qu'une partie.</li>
         <li>Compte, dates, libellé et montant identifient une opération : lus autrement, les opérations déjà importées le seraient une seconde fois.</li>
+        <li>OFX et CAMT.053 : pas de colonnes. Le libellé est le nom et le mémo de l'opération (OFX), ou le libellé de la banque (CAMT.053) ; le type d'opération est son code (TRNTYPE en OFX, code ISO en CAMT.053) ; seuls les relevés en euros s'importent.</li>
+        <li>Changer de type de fichier pour un compte déjà importé : chaque opération serait lue autrement, et importée une seconde fois.</li>
     </ul>
     <p>Exemple, sur un export inventé :</p>
     <ul class="pattern-cheatsheet">

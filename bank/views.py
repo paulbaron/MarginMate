@@ -64,7 +64,7 @@ from invoices.workspace import documents_matching
 from recipes.integration import TILL_REIMPORT, till_commands_shown
 from returnables.patterns import PatternError
 
-from . import income, invoice_files, matching, recognition, reconcile, spending, statements, treasury
+from . import income, invoice_files, matching, presets, recognition, reconcile, spending, statements, treasury
 from .forms import (
     FORMAT_NAME_TAKEN,
     NAME_TAKEN,
@@ -447,6 +447,11 @@ def bank_home(request):
             # The import card's formats, in their order: a choice when there
             # are several, the first being the import's default.
             "formats": list(StatementFormat.objects.order_by("position", "name").only("pk", "name")),
+            # What its file input offers: every kind of statement read.
+            "statement_accept": statements.ACCEPT_ATTRIBUTE,
+            # The empty state names the presets offered - no bank written
+            # in the template.
+            "preset_titles": ", ".join(preset.title for preset in presets.PRESETS),
         },
     )
 
@@ -1619,7 +1624,7 @@ def recognition_reapply(request):
 
 
 # -- « Format du relevé » ----------------------------------------------------------------------------------------
-# How a bank's CSV export is laid out (`StatementFormat`, read by
+# How a bank's export is read (`StatementFormat`, read by
 # bank/statements.py): the formats in their order - the first is the one an
 # import reads with when nobody chooses -, a new one, and one format's page.
 # Both forms carry « Tester »: a file picked on the page read with the format
@@ -1638,9 +1643,21 @@ NEW_FORMAT_ANCHOR = "nouveau-format"
 TEST_ROWS_SHOWN = 15
 TEST_LINES_SHOWN = 30
 NO_TEST_FILE = "Choisissez un fichier pour voir ce que le format en lit."
-CSV_ONLY = "seuls les fichiers CSV sont acceptés."
+#: A file not named as a statement is (`statements.ACCEPTED_EXTENSIONS`).
+UNSUPPORTED_FILE = "seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés."
 KEEP_ONE_FORMAT = "Gardez au moins un format : modifiez-le plutôt."
 UNKNOWN_FORMAT = "Format de relevé inconnu."
+#: « Partir d'un modèle » (`bank.presets`): the action, the preset posted,
+#: and where the card is.
+PRESET = "modele"
+PRESET_PARAM = "modele"
+PRESETS_ANCHOR = "modeles"
+UNKNOWN_PRESET = "Modèle inconnu : rien n'a été ajouté."
+#: A name of the preset taken between the look-up and the write (two tabs,
+#: a double click): the install is rolled back whole.
+PRESET_RACED = "Ce modèle n'a pas pu être ajouté (un nom pris au même moment ?) : rien n'a été ajouté, réessayez."
+#: Past this many names kept, the message counts them.
+KEPT_NAMED = 3
 
 
 @dataclass(frozen=True)
@@ -1690,9 +1707,21 @@ class FormatRow:
     first: bool = False
     last: bool = False
 
+    @property
+    def reads_columns(self) -> bool:
+        """A CSV: its separator, dates and decimals mean something."""
+        return self.fmt.file_type == StatementFormat.FileType.CSV
+
+
+#: What the list says of the columns of a file that says where each datum is.
+COLUMNS_IN_THE_FILE = "lues dans le fichier"
+
 
 def _columns_said(fmt: StatementFormat) -> str:
-    """« date 1 · libellé 4 · montant 6 »: which column holds what."""
+    """« date 1 · libellé 4 · montant 6 »: which column holds what - « lues
+    dans le fichier » for an OFX or a CAMT.053 format, which names none."""
+    if fmt.file_type != StatementFormat.FileType.CSV:
+        return COLUMNS_IN_THE_FILE
     try:
         labels = ", ".join(str(number) for number in statements.label_columns(fmt.label_columns))
     except statements.FormatError:
@@ -1741,13 +1770,62 @@ def _format_url(pk) -> str:
 
 
 @dataclass
+class PresetRow:
+    """One preset, as « Partir d'un modèle » draws it."""
+
+    preset: presets.Preset
+    #: Its format and every one of its rules are here already.
+    added: bool
+
+
+def _preset_rows() -> list[PresetRow]:
+    """Every preset, and whether it is here already - two queries."""
+    formats = {recognition.name_key(name) for name in StatementFormat.objects.values_list("name", flat=True)}
+    rules = {recognition.name_key(name) for name in OperationRule.objects.values_list("name", flat=True)}
+    return [PresetRow(preset, presets.holds(preset, formats, rules)) for preset in presets.PRESETS]
+
+
+def _install_preset(request):
+    """« Ajouter » on a preset: what it brings that is not here, written in
+    one transaction, every name here kept as it is (`presets.install`) -
+    answered before the « Nouveau format » form is read, which this POST
+    does not carry. An unknown preset writes nothing."""
+    back = f"{reverse('bank:statement_formats')}#{PRESETS_ANCHOR}"
+    preset = presets.BY_KEY.get(request.POST.get(PRESET_PARAM, ""))
+    if preset is None:
+        messages.error(request, UNKNOWN_PRESET)
+        return redirect(back)
+    try:
+        done = presets.install(preset)
+    except (IntegrityError, ValidationError):
+        messages.error(request, PRESET_RACED)
+        return redirect(back)
+    parts = []
+    if done.format is not None:
+        parts.append(f"format « {done.format.name} » ajouté")
+    if done.rules:
+        parts.append(
+            f"{len(done.rules)} règle(s) de reconnaissance ajoutée(s), dernière(s) de leur partie : elles valent "
+            "pour les relevés importés ensuite"
+        )
+    said = f"Modèle « {preset.title} » : {', '.join(parts) if parts else 'rien à ajouter'}."
+    if len(done.kept) > KEPT_NAMED:
+        said += f" {len(done.kept)} noms déjà là (le format ou des règles), gardés tels quels."
+    elif done.kept:
+        said += f" {', '.join(f'« {name} »' for name in done.kept)} déjà là : gardé(s) tel(s) quel(s)."
+    (messages.success if done.wrote else messages.info)(request, said)
+    return redirect(_format_url(done.format.pk) if done.format is not None else back)
+
+
+@dataclass
 class FormatTest:
     """What « Tester » read in a file with the format as typed: its first
     rows in numbered columns - what a person picks the numbers from - and
     the operations the format reads there, or why it reads none."""
 
     file_name: str = ""
-    #: Why the file was not read at all: none chosen, too heavy, no CSV.
+    #: Why the file was not read at all: none chosen, too heavy, not a
+    #: statement file.
     problem: str = ""
     #: The first rows, each as wide as the widest (`width` cells).
     rows: list = field(default_factory=list)
@@ -1785,28 +1863,38 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
     if upload is None:
         return FormatTest(problem=NO_TEST_FILE)
     test = FormatTest(upload.name)
-    if not upload.name.lower().endswith(".csv"):
-        test.problem = f"{upload.name} : {CSV_ONLY}"
+    if not upload.name.lower().endswith(statements.ACCEPTED_EXTENSIONS):
+        test.problem = f"{upload.name} : {UNSUPPORTED_FILE}"
         return test
     too_heavy = file_too_big(upload)
     if too_heavy:
         test.problem = too_heavy
         return test
     content = upload.read()
-    try:
-        # The rows as the reader splits them - decoded, the blank ones left
-        # out - so a column numbered here is the column the format names.
-        rows = statements.rows(content, form.layout)
-    except ValueError as refusal:
-        test.refusal = str(refusal)
-        return test
-    shown = rows[:TEST_ROWS_SHOWN]
+    shown = []
+    text = None
+    if form.layout.file_type == StatementFormat.FileType.CSV:
+        try:
+            # A file plainly of another kind is refused before a row of it is
+            # numbered as a CSV's (`refuse_another_kind`, as the import says).
+            statements.refuse_another_kind(content, form.layout)
+            # The rows as the reader splits them - decoded, the blank ones
+            # left out - so a column numbered here is the column the format
+            # names; the first ones only, never a list of every row. The
+            # text checked once, for both: the file is split twice, never
+            # three times. A file that says where each datum is has no
+            # column to number.
+            text = statements.csv_text(content, form.layout)
+            shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN, text=text)
+        except ValueError as refusal:
+            test.refusal = str(refusal)
+            return test
     widest = max((len(row) for row in shown), default=0)
     test.width = min(widest, statements.MAX_COLUMN)
     test.wider = widest > statements.MAX_COLUMN
     test.rows = [(row + [""] * test.width)[: test.width] for row in shown]
     try:
-        statement = statements.parse_statement(content, recognition.load(), form.layout)
+        statement = statements.parse_statement(content, recognition.load(), form.layout, text=text)
     except ValueError as refusal:
         test.refusal = str(refusal)
         return test
@@ -1823,7 +1911,9 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
 def statement_formats(request):
     """« Format du relevé »: the formats in their order, and a new one -
     « Tester » reads a file with it and saves nothing; « Enregistrer le
-    format » puts it last."""
+    format » puts it last; « Partir d'un modèle » adds a preset."""
+    if request.method == "POST" and request.POST.get(RULE_ACTION) == PRESET:
+        return _install_preset(request)
     form = StatementFormatForm(request.POST or None)
     test = None
     if request.method == "POST":
@@ -1842,7 +1932,14 @@ def statement_formats(request):
     return render(
         request,
         "bank/statement_formats.html",
-        {"form": form, "test": test, "rows": _format_rows(), "example": FORMAT_EXAMPLE},
+        {
+            "form": form,
+            "test": test,
+            "rows": _format_rows(),
+            "presets": _preset_rows(),
+            "example": FORMAT_EXAMPLE,
+            "statement_accept": statements.ACCEPT_ATTRIBUTE,
+        },
     )
 
 
@@ -1871,7 +1968,14 @@ def statement_format(request, pk):
         return render(
             request,
             "bank/statement_format.html",
-            {"fmt": fmt, "form": form, "test": test, "problem": _format_problem(fmt), "example": FORMAT_EXAMPLE},
+            {
+                "fmt": fmt,
+                "form": form,
+                "test": test,
+                "problem": _format_problem(fmt),
+                "example": FORMAT_EXAMPLE,
+                "statement_accept": statements.ACCEPT_ATTRIBUTE,
+            },
         )
     if action == DELETE:
         # Deleted, then counted, in one transaction: two tabs deleting the
@@ -1924,10 +2028,10 @@ def _import_statements(request):
     back = _back(request)
     uploads = request.FILES.getlist("files")
     if not uploads:
-        messages.error(request, "Choisissez au moins un relevé bancaire (fichier CSV).")
+        messages.error(request, "Choisissez au moins un relevé bancaire (CSV, OFX ou CAMT.053).")
         return redirect(back)
     # What an upload may weigh (security audit UPLOAD-1): the selection as a
-    # whole, then each file by its name - a bank's CSV is a few KB a month.
+    # whole, then each file by its name - a bank's export is a few KB a month.
     too_heavy = selection_too_big(uploads)
     if too_heavy:
         messages.error(request, f"{too_heavy} Aucun relevé n'a été importé.")
@@ -1941,8 +2045,8 @@ def _import_statements(request):
     # one refuses the others too, rather than being tried afresh on each.
     rules = recognition.load()
     for upload in uploads:
-        if not upload.name.lower().endswith(".csv"):
-            messages.error(request, f"{upload.name} : {CSV_ONLY}")
+        if not upload.name.lower().endswith(statements.ACCEPTED_EXTENSIONS):
+            messages.error(request, f"{upload.name} : {UNSUPPORTED_FILE}")
             continue
         if file_too_big(upload):
             messages.error(request, f"{file_too_big(upload)} Ce relevé n'a pas été importé.")

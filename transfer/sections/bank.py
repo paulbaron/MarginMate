@@ -2,7 +2,7 @@
 payee names learnt for suppliers, the payers retained on « Entrées
 d'argent », and the treasury's points and adjustments (« Trésorerie »).
 
-What reads the statements - the layouts of the bank's CSV export, the rules
+What reads the statements - how the bank's export is read, the rules
 that recognise what an operation is and the rules for the payments that
 never have an invoice - is « Règles de la banque » (sections/bank_rules.py)
 since 02/10/2026: configuration another bar on the same bank takes without
