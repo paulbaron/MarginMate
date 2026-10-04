@@ -2886,8 +2886,8 @@ thread blocked for good in one call is left to the reaper.
 
 **Metro's files and a mailbox source naming its reader**
 (`tasks._import_downloaded_file`) go through the same two guards as every
-other way in, before the reader: the file's digest (« Skipped … (already
-imported) ») and the e-invoice, read from its XML
+other way in, before the reader: the file's digest (« Ignoré : … (déjà
+importé) ») and the e-invoice, read from its XML
 (`receipts.import_einvoice`). Through the reader alone a Factur-X's stated
 figures were thrown away, and a document the reader finds no number on (a
 credit note) was filed again at every gather. The returnables slip guard

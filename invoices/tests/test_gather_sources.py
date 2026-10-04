@@ -393,7 +393,7 @@ class OwnReaderSourceTests(TestCase):
         parse_and_import.assert_not_called()
         self.assertEqual(Invoice.objects.filter(supplier=self.wholesaler).count(), 1)
         self.assertEqual(Invoice.objects.get(supplier=self.wholesaler).source_sha256, file_sha256(path))
-        self.assertIn("already imported", job.log)
+        self.assertIn("(déjà importé)", job.log)
 
     def test_metro_s_files_keep_their_digest(self):
         metro = Supplier.objects.filter(code="METRO").first() or make_supplier(code="METRO", name="Metro")

@@ -127,6 +127,14 @@ class Recorder(InvoiceParser):
         return pages
 
 
+def read_text(path: str) -> str:
+    """Every page's text as a supplier's reader is handed it
+    (InvoiceParser.parse: ocr.pdf_pages inside ocr.bounded_reading)."""
+    recorder = Recorder()
+    recorder.parse(path)
+    return "\n".join(page.text for page in recorder.pages)
+
+
 class CheckedBeforeAnyPageTests(SimpleTestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
@@ -539,7 +547,7 @@ class InflatedContentTests(TestCase):
                 ocr.text_layer_pages(self.path)
         self.assertEqual(str(refused.exception), "Document trop long à lire : plus de 9 Ko de contenu à dessiner.")
         with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
-            self.assertEqual(ocr.document_text(self.path).count("REPRISE VIDE"), 3)
+            self.assertEqual(read_text(self.path).count("REPRISE VIDE"), 3)
 
     def test_the_readers_share_the_budget_too(self):
         """Should a stream escape the weighing (a form a page draws, a
@@ -698,7 +706,7 @@ class DrawnContentTests(TestCase):
         )
         with mock.patch.object(ocr, "MAX_RUN_TOTAL", 100):
             ocr.check_page_count(self.path)
-        self.assertEqual(ocr.document_text(self.path).count("REPRISE VIDE"), 1)
+        self.assertEqual(read_text(self.path).count("REPRISE VIDE"), 1)
 
     def test_a_file_pdfminer_cannot_weigh_is_never_drawn(self):
         """PDFium rebuilds a PDF cut before its xref, which pdfminer cannot
