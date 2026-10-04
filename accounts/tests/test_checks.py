@@ -5,7 +5,7 @@ Metro's pause (24 hours between two sign-ins, a week after a refusal) lives
 on the METRO row of the tenant that signs in. Two tenants with
 `uses_server_integrations` would each keep a pause of their own and sign in
 to the ONE account twice as often - how its firewall blocks the owner - and
-two bars would share his mailbox, his till and his AI key. Names invented."""
+two bars would share his mailbox and his till. Names invented."""
 
 import tempfile
 import warnings

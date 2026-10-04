@@ -95,9 +95,9 @@ def storage_scope(tenant) -> str:
 
 
 def integrations_allowed() -> bool:
-    """Whether the connectors - the invoice mailbox, L'Addition, the AI
-    reading - may run for this thread: any bound tenant (since 04/10/2026;
-    before, the platform owner's only), each signing in with the accounts
+    """Whether the connectors - the invoice mailbox and L'Addition - may run
+    for this thread: any bound tenant (since 04/10/2026; before, the
+    platform owner's only), each signing in with the accounts
     typed on ITS « Identifiants » page (accounts/vault.py). Never unbound. A
     tenant closed (`Tenant.is_active` unticked) is bound by no request.
 

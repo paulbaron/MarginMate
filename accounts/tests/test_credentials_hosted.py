@@ -1,8 +1,8 @@
 """« Identifiants » in another bar's espace (accounts/credentials.py).
 
 Since 04/10/2026 every espace's owner types there what its own connectors
-sign in with - the mailbox, L'Addition, the AI reading -, his MarginMate
-password confirmed as in the owner's. Metro and the portals are the platform
+sign in with - the mailbox and L'Addition -, his MarginMate password
+confirmed as in the owner's. Metro and the portals are the platform
 owner's alone, so another bar's page has neither; and nothing of the
 server's reaches it: no « Fichier .env », no server variable's name - not
 even as a field's name -, no server setting in a refusal. Two real espaces
@@ -30,18 +30,17 @@ from tests.runner import confirm_password
 URL = reverse("accounts:credentials")
 HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)"')
 SECRET = "Tres-Secret-456"
-#: What a server's .env holds: Metro, the mailbox, the till, the AI, a portal.
+#: What a server's .env holds: Metro, the mailbox, the till, a portal.
 SERVER_ENV_FILE = (
     "METRO_EMAIL=acheteur@exemple.invalid\n"
     "METRO_PASSWORD=secret-metro\n"
     "INVOICE_EMAIL_ADDRESS=factures@exemple.invalid\n"
     "INVOICE_EMAIL_APP_PASSWORD=secret-boite\n"
     "LADDITION_EMAIL=caisse@exemple.invalid\n"
-    "ANTHROPIC_API_KEY=cle-serveur\n"
     "BOX_LOGIN=gerant@exemple.invalid\n"
 )
 #: What a hosted bar's page must never hold.
-SERVER_WORDS = (".env", "METRO_", "INVOICE_", "LADDITION_", "ANTHROPIC_", "BOX_", "DJANGO_", "manage.py")
+SERVER_WORDS = (".env", "METRO_", "INVOICE_", "LADDITION_", "BOX_", "DJANGO_", "manage.py")
 
 
 class HostedCredentialsTests(TwoTenantsTestCase):
@@ -81,7 +80,7 @@ class HostedCredentialsTests(TwoTenantsTestCase):
 
     def test_another_bar_s_page_holds_its_connectors_accounts_and_nothing_of_the_server(self):
         page = self.page(self.user_b)
-        for title in ("Boîte mail des factures", "L&#x27;Addition (caisse)", "Analyse IA (Anthropic)"):
+        for title in ("Boîte mail des factures", "L&#x27;Addition (caisse)"):
             self.assertIn(title, page)
         self.assertNotIn("docs.metro.fr", page)
         self.assertNotIn("Box Exemple", page)
@@ -108,7 +107,6 @@ class HostedCredentialsTests(TwoTenantsTestCase):
             boite_mot_de_passe=SECRET,
             caisse_identifiant="caisse-beta@exemple.invalid",
             caisse_mot_de_passe=SECRET,
-            ia_cle="cle-beta",
         )
         self.assertRedirects(response, URL)
         with bound_tenant(self.bar_b):
@@ -120,7 +118,6 @@ class HostedCredentialsTests(TwoTenantsTestCase):
                 "INVOICE_EMAIL_APP_PASSWORD": SECRET,
                 "LADDITION_EMAIL": "caisse-beta@exemple.invalid",
                 "LADDITION_PASSWORD": SECRET,
-                "ANTHROPIC_API_KEY": "cle-beta",
             },
         )
         # Bound to the default server: the .env's is the owner's alone.
@@ -177,6 +174,6 @@ class HostedCredentialsTests(TwoTenantsTestCase):
 
     def test_paths_of_the_page_are_the_espace_s(self):
         """The store is written in Beta's own private folder."""
-        self.post(self.user_b, ia_cle="cle-beta")
+        self.post(self.user_b, caisse_mot_de_passe=SECRET)
         self.assertTrue((paths.tenant_dir(self.bar_b) / "private" / vault.FILE_NAME).is_file())
         self.assertFalse((paths.tenant_dir(self.bar_a) / "private" / vault.FILE_NAME).exists())
