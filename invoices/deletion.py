@@ -27,11 +27,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import Exists, OuterRef, ProtectedError
 
-from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
+from inventory.models import Product, StockMovement, StockTake, StockTakeLine, StockTakeLineSource
 
-from .models import Invoice
+from .models import Invoice, InvoiceLine
 
 
 class InvoiceInUseError(Exception):
@@ -89,7 +89,28 @@ def delete_invoice(invoice: Invoice) -> DeletionSummary:
 
 def remove_orphan_products(product_ids) -> int:
     """Delete those of `product_ids` that no invoice line uses any more and
-    nobody has classified. Returns how many went."""
+    nobody has classified. Returns how many went.
+
+    A few queries, not six per product: a full « Effacer » passes the whole
+    catalogue and spent most of its time here (audit 04/10/2026). What holds
+    a product (PROTECT) is filtered out first: a line of an invoice, a line
+    of a stock take. A relation added later and not listed falls back to one
+    by one (`_remove_one_by_one`). A queryset delete sends a product's
+    signals but skips a Product.delete() of its own - it has none."""
+    orphans = Product.objects.filter(id__in=product_ids, stock_type__isnull=True).filter(
+        ~Exists(InvoiceLine.objects.filter(product=OuterRef("pk"))),
+        ~Exists(StockTakeLine.objects.filter(product=OuterRef("pk"))),
+    )
+    try:
+        # Its own savepoint: refused, it must not undo the whole operation.
+        with transaction.atomic():
+            _count, by_model = orphans.delete()
+    except ProtectedError:
+        return _remove_one_by_one(product_ids)
+    return by_model.get(Product._meta.label, 0)
+
+
+def _remove_one_by_one(product_ids) -> int:
     removed = 0
     for product in Product.objects.filter(id__in=product_ids, stock_type__isnull=True):
         if product.invoice_lines.exists():
