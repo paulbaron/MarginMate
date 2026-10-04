@@ -1099,8 +1099,14 @@ def rule_action(request, pk):
                 f"Catégorie retirée : les dépenses de « {rule} » comptent en "
                 f"« {spending.NO_CATEGORY} », sauf celles classées à la main.",
             )
-    elif action == "toggle":
-        rule.is_active = not rule.is_active
+    elif action in (SUSPEND, REACTIVATE):
+        # The state the page asked for, never « toggle »: a double click or a
+        # second tab drawn before the first click flipped the rule back.
+        wanted = action == REACTIVATE
+        if rule.is_active == wanted:
+            messages.info(request, f"Règle « {rule} » déjà {'active' if wanted else 'suspendue'}.")
+            return redirect("bank:rule_list")
+        rule.is_active = wanted
         rule.save(update_fields=["is_active"])
         linked = 0 if rule.is_active else reconcile.reconcile()
         state = "réactivée" if rule.is_active else "suspendue"
