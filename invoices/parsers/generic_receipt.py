@@ -243,9 +243,11 @@ DOCUMENT_WORDS = r"(?:facture|document|commande|pi[eè]ce|avoir|bon\s+de\s+livra
 # What a document's own reference is made of: its characters, and a dash a
 # PDF's rules left inside it ("FR-F033—763"), taken back out in _ticket_number.
 # A dot too ("20250314.38604"): cut at it, an ice supplier's number was its
-# date, and a second delivery that day was refused as a duplicate. A
-# sentence's dot after a number is stripped in _ticket_number.
-REFERENCE = r"[A-Z0-9][A-Z0-9.\-/\u2013\u2014]{3,}"
+# date, and a second delivery that day was refused as a duplicate. Only
+# before a figure: a word glued after a sentence's dot (\u00ab 1234.Merci \u00bb) is no
+# part of the number. A sentence's dot after a number is stripped in
+# _ticket_number.
+REFERENCE = r"[A-Z0-9](?:[A-Z0-9\-/\u2013\u2014]|\.(?=\d)){3,}"
 # "N°", "No", "Nº" with an ordinal indicator, "#".
 NUMBER_MARK = r"(?:n\s*[°\u00bao]\.?|num[ée]ro|#)"
 DOCUMENT_NUMBER_RES = (

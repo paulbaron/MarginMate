@@ -664,6 +664,15 @@ class LineShapeTests(SimpleTestCase):
         self.assertEqual(_ticket_number("Facture N° 1234. Merci", day), "1234")
         self.assertEqual(_ticket_number("Facture # FR-F090—264", day), "FR-F090264")
 
+    def test_a_word_glued_after_a_dot_is_no_part_of_the_number(self):
+        """A text layer or OCR that closes the space after a sentence's dot
+        (« 1234.Merci ») must not file the word as part of the number: a dot
+        belongs to it only between figures."""
+        day = date(2026, 7, 12)
+        self.assertEqual(_ticket_number("Facture N° 1234.Merci", day), "1234")
+        self.assertEqual(_ticket_number("Facture n°12345.TOTAL 12,00", day), "12345")
+        self.assertEqual(_ticket_number("Numéro de facture : 20260712.61297.Merci", day), "20260712.61297")
+
     def test_lines_set_aside_are_said(self):
         """A header or a total read among the items is left out when the rest
         adds up - and said, in case it was an item after all."""
