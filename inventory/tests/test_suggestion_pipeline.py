@@ -511,20 +511,35 @@ class ApproveSureSuggestionsTests(TestCase):
         self.assertEqual((made.unit, made.category), (UnitChoices.LITRE, "Spiritueux"))
         self.assertEqual((product.stock_type, product.stock_equivalent), (made, Decimal("0.7")))
 
-    def test_a_suggested_factor_finer_than_its_column_is_rounded_to_it(self):
+    def test_a_suggested_factor_finer_than_its_column_is_left_to_a_person(self):
         """0.25 g of a spice is 0.00025 kg: wider than stock_equivalent's four
-        decimals, which « Approuver » refuses - and the suggestion made again
-        was the same, so the product could never be approved."""
+        decimals, which « Approuver » refuses. Rounded to 0.0003, it stayed
+        sure, and « Approuver les sûres » booked every purchase 20 % over (0.05 g
+        made 0.0001, twice the quantity). A factor four decimals hold, or
+        nearly (0.0015), keeps its confidence."""
         spice = make_stock_type(name="Safran", unit=UnitChoices.KILOGRAM, category="Epicerie")
         neighbour = make_product(
             supplier=self.supplier, raw_name="SAFRAN 1G", stock_type=spice, stock_equivalent="0.001"
         )
         bought(neighbour)
-        product = make_product(supplier=self.supplier, raw_name="SAFRAN 0,25G")
-        bought(product)
-        made = suggest_for_product(product)
-        self.assertEqual(made["stock_type_name"], "Safran")
-        self.assertEqual(made["stock_equivalent"], "0.0003")
+        exact = make_product(supplier=self.supplier, raw_name="SAFRAN 1,5G")
+        bought(exact)
+        made = suggest_for_product(exact)
+        self.assertEqual((made["stock_equivalent"], made["confidence"]), ("0.0015", "high"))
+
+        for raw_name, shown in (("SAFRAN 0,25G", "0.00025"), ("SAFRAN 0,05G", "0.00005")):
+            with self.subTest(raw_name=raw_name):
+                product = make_product(supplier=self.supplier, raw_name=raw_name)
+                bought(product)
+                made = suggest_for_product(product)
+                self.assertEqual((made["stock_type_name"], made["stock_equivalent"]), ("Safran", ""))
+                self.assertEqual(made["confidence"], "low")
+                self.assertIn(f"1 produit = {shown} : plus fin que les 4 décimales d'un facteur", made["reasoning"])
+                product.ai_suggestion = made
+                product.save(update_fields=["ai_suggestion"])
+                self.client.post(self.url, {"confiance": "haute"})
+                product.refresh_from_db()
+                self.assertIsNone(product.stock_type)
 
     def test_a_suggested_factor_that_rounds_to_nothing_is_left_to_a_person(self):
         """0.04 g is 0.00004 kg, which four decimals make 0: refused by
