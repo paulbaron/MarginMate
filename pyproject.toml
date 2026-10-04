@@ -9,7 +9,6 @@ requires-python = ">=3.11,<3.12"
 # What the code imports (or names, like whitenoise in the settings); every
 # version, these and their own dependencies, is pinned in uv.lock.
 dependencies = [
-    "anthropic>=1.2.0",
     "asn1crypto>=1.5.1",
     "certifi>=2026.7.22",
     "cryptography>=50.0.1",
