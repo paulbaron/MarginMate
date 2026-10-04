@@ -429,6 +429,12 @@ class ReadDateTests(SimpleTestCase):
     def test_an_impossible_date_is_skipped_not_raised(self):
         self.assertIsNone(read_date("45/45/2026"))
 
+    def test_an_impossible_figure_does_not_hide_a_written_date(self):
+        """A code shaped like a date (« 45.67.12 ») printed above « Facture du
+        19 mai 2026 » is no date: the written one is the document's."""
+        self.assertEqual(read_date("Code 45.67.12\nFacture du 19 mai 2026"), date(2026, 5, 19))
+        self.assertEqual(read_date("Code 45.67.2012\nFacture du 19 mai 2026"), date(2026, 5, 19))
+
     def test_falls_back_to_the_hint(self):
         hint = read_date("01/02/2026")
         self.assertEqual(read_date("no date here", date_hint=hint), hint)

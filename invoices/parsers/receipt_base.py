@@ -493,26 +493,31 @@ def read_date(text: str, date_hint: date | None = None) -> date | None:
             return date(int(year), month, int(day))
         except ValueError:
             continue
-    for _start, day, month, year in figures:
-        try:
-            return date(year, month, day)
-        except ValueError:
-            continue
+    if figures:
+        return figures[0][1]
     return date_hint
 
 
-def _figure_dates(text: str) -> list[tuple[int, int, int, int]]:
-    """The dates printed in figures, in the order printed: (start, day,
-    month, year). A two-digit year past next year's is no date."""
-    found = []
+def _figure_dates(text: str) -> list[tuple[int, date]]:
+    """The dates printed in figures, in the order printed: (start, date).
+    A two-digit year past next year's is no date, nor is a day or month that
+    does not exist: a code shaped like one (« 45.67.12 ») must not hide the
+    written date below it."""
+    candidates = []
     for match in DATE_RE.finditer(text):
         day, month, year = (int(part) for part in match.groups())
-        found.append((match.start(), day, month, year))
+        candidates.append((match.start(), day, month, year))
     latest = timezone.localdate().year + 1
     for match in SHORT_DATE_RE.finditer(text):
         day, _separator, month, year = match.groups()
         if 2000 + int(year) <= latest:
-            found.append((match.start(), int(day), int(month), 2000 + int(year)))
+            candidates.append((match.start(), int(day), int(month), 2000 + int(year)))
+    found = []
+    for start, day, month, year in candidates:
+        try:
+            found.append((start, date(year, month, day)))
+        except ValueError:
+            continue
     return sorted(found)
 
 
