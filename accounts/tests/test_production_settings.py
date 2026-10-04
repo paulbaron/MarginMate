@@ -264,6 +264,46 @@ class DebugAndKeyTests(ChildTestCase):
         self.assertNotIn("accounts.E007", self.probe(DJANGO_DEBUG="True")["checks"])
 
 
+#: What a request's end (Django's close_old_connections, sent by the WSGI
+#: handler Waitress runs) leaves of each connection, under production's
+#: settings: the accounts one, and a tenant's made by accounts.tenancy.
+KEPT = r"""
+import json
+import sys
+import dotenv
+dotenv.load_dotenv = lambda *args, **kwargs: False
+import django
+django.setup()
+from django.db import close_old_connections, connections
+from accounts.tenancy import _wrapper_for
+
+accounts = connections["accounts"]
+accounts.ensure_connection()
+before = accounts.connection
+close_old_connections()
+tenant = _wrapper_for(sys.argv[1])
+print("REPORT" + json.dumps({
+    "accounts_kept": accounts.connection is not None and accounts.connection is before,
+    "accounts_health_checks": accounts.settings_dict["CONN_HEALTH_CHECKS"],
+    "tenant_max_age": tenant.settings_dict["CONN_MAX_AGE"],
+}))
+"""
+
+
+class ConnectionsTests(ChildTestCase):
+    def test_the_accounts_connection_outlives_a_request_and_a_tenant_s_does_not(self):
+        """Every request reads its session, login and membership in the
+        accounts file: closed at each request's end, the next one opened it
+        again - its PRAGMAs, and the -wal checkpointed, deleted and made
+        again, 1.5-3 ms a request on Windows. It holds no bar's rows; a
+        tenant's connection is still closed (the binding's, CLAUDE.md)."""
+        result = self.run_child(KEPT, str(self.folder / "espace.sqlite3"))
+        line = next((line for line in result.stdout.splitlines() if line.startswith("REPORT")), None)
+        self.assertIsNotNone(line, result.stderr[-3000:])
+        report = json.loads(line[len("REPORT") :])
+        self.assertEqual(report, {"accounts_kept": True, "accounts_health_checks": True, "tenant_max_age": 0})
+
+
 class HttpsTests(ChildTestCase):
     def test_off_by_default(self):
         report = self.probe()

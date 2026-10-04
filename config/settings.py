@@ -287,6 +287,16 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": Path(os.environ.get("MARGINMATE_ACCOUNTS_DB", "").strip() or BASE_DIR / "accounts.sqlite3"),
         "OPTIONS": ACCOUNTS_SQLITE_OPTIONS,
+        # Kept open between requests, one per server thread: every request
+        # reads its session, login and membership here, and closing it at
+        # each request's end made the next one run the PRAGMAs again - and,
+        # as the file's last connection, checkpoint, delete and recreate its
+        # -wal (1.5-3 ms a request on Windows, a fifth of a poll). It holds
+        # no bar's rows: a binding swaps `default` only (accounts.tenancy
+        # copies default's settings), so a tenant's stays closed after each
+        # request. Django still closes one left broken or in a transaction.
+        "CONN_MAX_AGE": 600,
+        "CONN_HEALTH_CHECKS": True,
     },
 }
 
