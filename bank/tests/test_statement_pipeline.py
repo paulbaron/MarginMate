@@ -180,3 +180,38 @@ class LazyReadingTests(SimpleTestCase):
         rules = rules_of(rule("Carte", "card_payment", r"^CB (?P<tiers>.+)$"))
         read = parse_statement(bnp(row(label="CB EPICERIE")), rules, SEEDED_FORMAT)
         self.assertEqual((read.lines[0].kind, read.lines[0].counterparty), ("CARD", "EPICERIE"))
+
+
+class SniffTests(SimpleTestCase):
+    """What a file plainly is, by its first bytes - never a guess at a CSV,
+    which has no mark of its own."""
+
+    def test_each_kind_is_told_by_its_marks(self):
+        from bank.tests import camt_files, ofx_files
+
+        for content, kind in (
+            (ofx_files.sgml(), "ofx"),
+            (ofx_files.xml(), "ofx"),
+            (b"\xef\xbb\xbf" + ofx_files.xml(), "ofx"),
+            (b"  \r\n<OFX>\n<SIGNONMSGSRSV1>", "ofx"),
+            (ofx_files.xml().decode().encode("utf-16"), "ofx"),
+            (camt_files.v02(), "camt053"),
+            (camt_files.v08(), "camt053"),
+            (camt_files.camt(declaration=False), "camt053"),
+            (camt_files.v02().replace(b"camt.053", b"camt.052"), "camt053"),
+            (b'<?xml version="1.0"?><Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"/>', "xml"),
+            (bnp(row()), None),
+            (b"", None),
+            (b"<b>Date</b>;Montant\n03/08/2026;-4,10\n", None),
+            ("Date;Libellé\n".encode("utf-16"), None),
+        ):
+            with self.subTest(content=content[:40]):
+                self.assertEqual(statements.sniff(content), kind)
+
+    def test_a_file_of_another_kind_is_refused_with_both_names(self):
+        from bank.tests import ofx_files
+
+        with self.assertRaises(statements.WrongFileType) as refused:
+            parse_statement(ofx_files.sgml(), rules_of(), SEEDED_FORMAT)
+        self.assertTrue(str(refused.exception).startswith("Ce fichier est un relevé OFX / QFX (Money), et le format"))
+        self.assertIsInstance(refused.exception, ValueError)

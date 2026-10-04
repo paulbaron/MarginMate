@@ -5,7 +5,7 @@ never kept. Inside the format's form, which posts multipart.
 <div class="form-grid">
     <div class="form-field form-field-file">
         <label for="id_fichier_essai">Tester sur un fichier</label>
-        <input type="file" name="fichier_essai" id="id_fichier_essai" accept=".csv,text/csv">
-        <p class="help">Un relevé exporté en CSV : lu avec le format ci-dessus, jamais gardé.</p>
+        <input type="file" name="fichier_essai" id="id_fichier_essai" accept="{{ statement_accept }}">
+        <p class="help">Un relevé exporté par la banque : lu avec le format ci-dessus, jamais gardé.</p>
     </div>
 </div>

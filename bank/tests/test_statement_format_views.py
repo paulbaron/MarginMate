@@ -35,6 +35,7 @@ from django.urls import reverse
 from bank import recognition, reconcile, statements, views
 from bank.forms import StatementFormatForm
 from bank.models import BankTransaction, StatementFormat
+from bank.tests import ofx_files
 from bank.tests.support import FORMAT_SEED, make_format
 from bank.tests.test_recognition_views import table_of, text_of
 from bank.tests.test_reconcile import card_row, debit_row, statement
@@ -610,9 +611,12 @@ class TesterTests(Page):
         self.assertIn("au plus par fichier", text)
         self.assertNotIn("premières lignes du fichier", response.content.decode())
 
-    def test_a_file_that_is_no_csv_is_refused_unread(self):
+    def test_a_file_that_is_no_statement_file_is_refused_unread(self):
         response = self.edit(seeded(), press=("action", "tester"), file=upload(bnp_file(), "releve.pdf"))
-        self.assertIn("releve.pdf : seuls les fichiers CSV sont acceptés.", text_of(response.content.decode()))
+        self.assertIn(
+            "releve.pdf : seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés.",
+            text_of(response.content.decode()),
+        )
         self.assertEqual(response.context["test"].rows, [])
 
     def test_long_files_are_cut_and_say_how_many_more(self):
@@ -909,6 +913,27 @@ class FileTypeTests(Page):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Type de fichier inconnu.", text_of(field_of(response.content.decode(), "file_type")))
         self.assertEqual(self.order(), [SEEDED])
+
+    def test_tester_reads_an_ofx_file_with_no_column_to_number(self):
+        fmt = make_format("Relevé OFX", **OFX_FIELDS)
+        response = self.edit(fmt, press=("action", "tester"), file=upload(ofx_files.sgml(), "releve.ofx"))
+        test = response.context["test"]
+        self.assertEqual((test.rows, test.refusal, test.count), ([], "", len(ofx_files.OPERATIONS)))
+        self.assertEqual(test.account, ofx_files.ACCOUNT)
+        html = response.content.decode()
+        self.assertNotIn("Premières lignes, colonnes numérotées", html)
+        self.assertIn("Ce que le format lit", html)
+
+    def test_tester_refuses_a_file_of_another_kind_in_the_import_s_words(self):
+        response = self.edit(seeded(), press=("action", "tester"), file=upload(ofx_files.xml(), "releve.csv"))
+        self.assertTrue(response.context["test"].refusal.startswith("Ce fichier est un relevé OFX / QFX (Money)"))
+
+    def test_both_file_inputs_offer_every_kind_of_statement_file(self):
+        for url in (self.url, self.format_url(seeded())):
+            with self.subTest(url=url):
+                self.assertIn(
+                    f'name="fichier_essai" id="id_fichier_essai" accept="{statements.ACCEPT_ATTRIBUTE}"', self.html(url)
+                )
 
     def test_the_form_s_own_errors_are_said_once(self):
         refusal = statements.FormatError("ailleurs", "Phrase d'essai.")

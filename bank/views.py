@@ -447,6 +447,8 @@ def bank_home(request):
             # The import card's formats, in their order: a choice when there
             # are several, the first being the import's default.
             "formats": list(StatementFormat.objects.order_by("position", "name").only("pk", "name")),
+            # What its file input offers: every kind of statement read.
+            "statement_accept": statements.ACCEPT_ATTRIBUTE,
         },
     )
 
@@ -1638,7 +1640,8 @@ NEW_FORMAT_ANCHOR = "nouveau-format"
 TEST_ROWS_SHOWN = 15
 TEST_LINES_SHOWN = 30
 NO_TEST_FILE = "Choisissez un fichier pour voir ce que le format en lit."
-CSV_ONLY = "seuls les fichiers CSV sont acceptés."
+#: A file not named as a statement is (`statements.ACCEPTED_EXTENSIONS`).
+UNSUPPORTED_FILE = "seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés."
 KEEP_ONE_FORMAT = "Gardez au moins un format : modifiez-le plutôt."
 UNKNOWN_FORMAT = "Format de relevé inconnu."
 
@@ -1798,22 +1801,25 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
     if upload is None:
         return FormatTest(problem=NO_TEST_FILE)
     test = FormatTest(upload.name)
-    if not upload.name.lower().endswith(".csv"):
-        test.problem = f"{upload.name} : {CSV_ONLY}"
+    if not upload.name.lower().endswith(statements.ACCEPTED_EXTENSIONS):
+        test.problem = f"{upload.name} : {UNSUPPORTED_FILE}"
         return test
     too_heavy = file_too_big(upload)
     if too_heavy:
         test.problem = too_heavy
         return test
     content = upload.read()
-    try:
-        # The rows as the reader splits them - decoded, the blank ones left
-        # out - so a column numbered here is the column the format names;
-        # the first ones only, never a list of every row.
-        shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN)
-    except ValueError as refusal:
-        test.refusal = str(refusal)
-        return test
+    shown = []
+    if form.layout.file_type == StatementFormat.FileType.CSV:
+        try:
+            # The rows as the reader splits them - decoded, the blank ones
+            # left out - so a column numbered here is the column the format
+            # names; the first ones only, never a list of every row. A file
+            # that says where each datum is has no column to number.
+            shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN)
+        except ValueError as refusal:
+            test.refusal = str(refusal)
+            return test
     widest = max((len(row) for row in shown), default=0)
     test.width = min(widest, statements.MAX_COLUMN)
     test.wider = widest > statements.MAX_COLUMN
@@ -1855,7 +1861,13 @@ def statement_formats(request):
     return render(
         request,
         "bank/statement_formats.html",
-        {"form": form, "test": test, "rows": _format_rows(), "example": FORMAT_EXAMPLE},
+        {
+            "form": form,
+            "test": test,
+            "rows": _format_rows(),
+            "example": FORMAT_EXAMPLE,
+            "statement_accept": statements.ACCEPT_ATTRIBUTE,
+        },
     )
 
 
@@ -1884,7 +1896,14 @@ def statement_format(request, pk):
         return render(
             request,
             "bank/statement_format.html",
-            {"fmt": fmt, "form": form, "test": test, "problem": _format_problem(fmt), "example": FORMAT_EXAMPLE},
+            {
+                "fmt": fmt,
+                "form": form,
+                "test": test,
+                "problem": _format_problem(fmt),
+                "example": FORMAT_EXAMPLE,
+                "statement_accept": statements.ACCEPT_ATTRIBUTE,
+            },
         )
     if action == DELETE:
         # Deleted, then counted, in one transaction: two tabs deleting the
@@ -1937,10 +1956,10 @@ def _import_statements(request):
     back = _back(request)
     uploads = request.FILES.getlist("files")
     if not uploads:
-        messages.error(request, "Choisissez au moins un relevé bancaire (fichier CSV).")
+        messages.error(request, "Choisissez au moins un relevé bancaire (CSV, OFX ou CAMT.053).")
         return redirect(back)
     # What an upload may weigh (security audit UPLOAD-1): the selection as a
-    # whole, then each file by its name - a bank's CSV is a few KB a month.
+    # whole, then each file by its name - a bank's export is a few KB a month.
     too_heavy = selection_too_big(uploads)
     if too_heavy:
         messages.error(request, f"{too_heavy} Aucun relevé n'a été importé.")
@@ -1954,8 +1973,8 @@ def _import_statements(request):
     # one refuses the others too, rather than being tried afresh on each.
     rules = recognition.load()
     for upload in uploads:
-        if not upload.name.lower().endswith(".csv"):
-            messages.error(request, f"{upload.name} : {CSV_ONLY}")
+        if not upload.name.lower().endswith(statements.ACCEPTED_EXTENSIONS):
+            messages.error(request, f"{upload.name} : {UNSUPPORTED_FILE}")
             continue
         if file_too_big(upload):
             messages.error(request, f"{file_too_big(upload)} Ce relevé n'a pas été importé.")

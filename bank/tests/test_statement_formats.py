@@ -410,6 +410,12 @@ class OracleTests(SimpleTestCase):
             with self.subTest(file=index, content=content[:160]):
                 self.assertEqual(new_outcome(content), as_the_seeded_format_says(old_outcome(content)))
 
+    def test_no_file_of_the_corpus_is_taken_for_another_kind(self):
+        """`statements.sniff` reads a CSV as nothing (it has no mark of its
+        own): the seeded format's path is untouched by the check that refuses
+        a file of another kind."""
+        self.assertEqual({statements.sniff(content) for content in self.corpus}, {None})
+
     def test_the_corpus_holds_every_shape_it_is_meant_to(self):
         """A corpus of files the two readers agree on because they read
         nothing would prove nothing."""

@@ -280,18 +280,7 @@ class RefusalTests(SimpleTestCase):
 
 #: Every sentence a refusal of an OFX file may begin with - the reader's own
 #: and the pipeline's.
-FRENCH = (
-    *ofx.REFUSALS,
-    "Date illisible dans le relevé",
-    "Montant illisible dans le relevé",
-    "Ce relevé contient plusieurs comptes",
-    "Ce relevé est en ",
-    "Ce relevé compte plus de",
-    "Ce relevé dépasse",
-    "Le numéro de compte lu fait plus de",
-    "Ce fichier n'est pas en ",
-    "Ce fichier est un ",
-)
+FRENCH = (*ofx.REFUSALS, *statements.REFUSALS)
 #: What a mutation writes into a file: the characters a tokenizer, a
 #: reference or a number reads.
 MUTATIONS = ("<", ">", "/", "&", "#", "x", ";", "0", "9", ".", ",", "-", "\x00", "\x85", "é", "퟿", "&#x", "<!--")

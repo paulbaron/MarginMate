@@ -298,17 +298,7 @@ class MemoryTests(SimpleTestCase):
         self.assertLess(time.perf_counter() - started, 20)
 
 
-FRENCH = (
-    *camt.REFUSALS,
-    "Date illisible dans le relevé",
-    "Montant illisible dans le relevé",
-    "Ce relevé contient plusieurs comptes",
-    "Ce relevé est en ",
-    "Ce relevé compte plus de",
-    "Ce relevé dépasse",
-    "Le numéro de compte lu fait plus de",
-    "Ce fichier est un ",
-)
+FRENCH = (*camt.REFUSALS, *statements.REFUSALS)
 MUTATIONS = ("<", ">", "/", "&", "#", ";", "0", "9", ".", "-", "\x00", "é", "<!--", "&#0;", "&lt;", "]]>", '"', "=")
 
 

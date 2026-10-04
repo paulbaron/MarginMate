@@ -123,6 +123,27 @@ WIDER_THAN_HEADER = (
 )
 
 
+#: How a file of another kind than its format's is refused
+#: (`_refuse_another_kind`).
+ANOTHER_KIND = "Ce fichier est un relevé"
+NOT_A_STATEMENT_XML = "Ce fichier XML n'est pas un relevé de compte"
+#: What a refusal of the pipeline itself begins with, whatever the kind of
+#: file - beside each reader's own (`ofx.REFUSALS`, `camt.REFUSALS`): the
+#: readers' mutation tests find nothing else.
+REFUSALS = (
+    "Date illisible dans le relevé",
+    "Montant illisible dans le relevé",
+    "Ce relevé contient plusieurs comptes",
+    "Ce relevé est en ",
+    "Ce relevé compte plus de",
+    "Ce relevé dépasse",
+    ACCOUNT_TOO_LONG,
+    "Ce fichier n'est pas en ",
+    ANOTHER_KIND,
+    NOT_A_STATEMENT_XML,
+)
+
+
 def too_many_operations() -> str:
     return f"Ce relevé compte plus de {group_thousands(MAX_OPERATIONS)} opérations : exportez une période plus courte."
 
@@ -157,6 +178,16 @@ def echoed(text) -> str:
 
 #: The byte order marks a single-byte encoding never begins with.
 UNICODE_MARKS = (codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+#: What a statement file is named - the import and « Tester » take these
+#: alone, and the file inputs offer them (`ACCEPT_ATTRIBUTE`). « .qfx » is
+#: Quicken's name for an OFX file; a CAMT.053 statement is an « .xml ».
+ACCEPTED_EXTENSIONS = (".csv", ".ofx", ".qfx", ".xml")
+ACCEPT_ATTRIBUTE = ",".join((*ACCEPTED_EXTENSIONS, "text/csv"))
+#: What `sniff` says a file is, beside the kinds of `StatementFormat`.
+OTHER_XML = "xml"
+#: How much of a file `sniff` reads.
+SNIFF_BYTES = 4096
+_CAMT_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:camt."
 
 #: The fields a refusal of `check_format` names - the form's own.
 FILE_TYPE = "file_type"
@@ -175,6 +206,11 @@ COLUMN_ROLES = {
     BANK_TYPE_COLUMN: "le type d'opération",
 }
 _LIST_SEPARATOR = re.compile(r"[\s,;]+")
+
+
+class WrongFileType(ValueError):
+    """A file whose content is plainly of another kind than its format
+    reads: said, never read with another format in silence."""
 
 
 class FormatError(ValueError):
@@ -459,10 +495,63 @@ def finish(account: str, lines: list[StatementLine], rules: recognition.Rules, n
     return Statement(account=account, lines=lines)
 
 
+def sniff(content: bytes) -> str | None:
+    """What the file plainly is, by its first `SNIFF_BYTES` (a byte order
+    mark aside): « ofx » for an OFX file (its SGML header, or `<OFX>`, or
+    XML declaring `<?OFX`), « camt053 » for a document in a camt namespace
+    (another camt message included: its reader then says which), `OTHER_XML`
+    for any other XML document - and None for anything else, a CSV among
+    them: a CSV has no mark of its own, so a file is never refused for not
+    looking like one."""
+    head = content[:SNIFF_BYTES]
+    if head.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        text = head.decode("utf-16", errors="ignore")
+    else:
+        # Every byte is a character: no decoding fails, and the markers
+        # looked for are ASCII in every encoding a statement may be in.
+        text = head.removeprefix(codecs.BOM_UTF8).decode("latin-1")
+    text = text.lstrip()
+    upper = text.upper()
+    if upper.startswith(("OFXHEADER", "<OFX>")):
+        return StatementFormat.FileType.OFX.value
+    if not text.startswith("<"):
+        return None
+    if upper.startswith("<?XML") and "<?OFX" in upper:
+        return StatementFormat.FileType.OFX.value
+    if _CAMT_NAMESPACE in text:
+        return StatementFormat.FileType.CAMT053.value
+    if upper.startswith("<?XML"):
+        return OTHER_XML
+    return None
+
+
+def _refuse_another_kind(content: bytes, layout: Layout) -> None:
+    """A file plainly of another kind than its format reads, refused in
+    French - the import and « Tester » alike - naming both kinds: never
+    read with another format in silence, which would put it in with another
+    account, label and fingerprint than the person chose."""
+    found = sniff(content)
+    if found is None or found == layout.file_type:
+        return
+    labels = StatementFormat.FileType
+    expected = labels(layout.file_type).label
+    if found == OTHER_XML:
+        if layout.file_type == labels.CAMT053:
+            return  # its own reader says what it is not
+        raise WrongFileType(f"{NOT_A_STATEMENT_XML} : le format « {layout.name} » lit les fichiers {expected}.")
+    said = labels(found).label
+    raise WrongFileType(
+        f"{ANOTHER_KIND} {said}, et le format « {layout.name} » lit les fichiers {expected} : "
+        f"choisissez un format {said} à l'import, ou ajoutez-en un sur « Format du relevé »."
+    )
+
+
 def _reading(content: bytes, layout: Layout):
     """The reader of `content` for `layout`: an object whose `lines()`
     yields `RawLine`s, whose `account` is final once they are all read, and
-    whose `no_operation` is the sentence a file of none is refused with."""
+    whose `no_operation` is the sentence a file of none is refused with -
+    once the file is not plainly of another kind (`_refuse_another_kind`)."""
+    _refuse_another_kind(content, layout)
     if layout.file_type == StatementFormat.FileType.CSV:
         return _CsvReading(content, layout)
     if layout.file_type == StatementFormat.FileType.OFX:
