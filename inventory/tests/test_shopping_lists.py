@@ -39,7 +39,6 @@ from accounts.tests.support import TenancyTestCase
 from inventory import shopping, shopping_lists
 from inventory.models import MovementKind, ShoppingList, ShoppingListItem, StockMovement, UnitChoices
 from inventory.shopping_lists import Figures, Finished
-from invoices.models import Supplier
 from tests.factories import make_invoice, make_invoice_line, make_movement, make_product, make_stock_type, make_supplier
 from tests.runner import TEST_TENANT_PK
 
