@@ -800,17 +800,42 @@ def index_links() -> tuple[int, int]:
     return len(missing), len(stale)
 
 
-def _opened_key(request) -> str:
-    return f"staff-signature-opened-{request.uuid}"
+#: What anyone holding the link makes the journal say as often as he likes -
+#: opening it, fetching a PDF, a code refused before any was compared - is
+#: logged once an hour per device and detail, and at most this many times an
+#: hour per kind and detail whatever the devices say. Once per SESSION held
+#: only for a browser keeping its cookie: a script without one wrote an event
+#: and a session row per hit, and the proof file, the owner's month page and
+#: both databases grew without end.
+REPEATED_EVENTS_PER_HOUR = 10
 
 
-def note_link_opened(request: SignatureRequest, session, *, ip=None, user_agent="", now=None) -> None:
-    """« Lien ouvert », once per session."""
-    key = _opened_key(request)
-    if session.get(key):
-        return
-    log_event(request, Kind.LINK_OPENED, at=now, ip=ip, user_agent=user_agent)
-    session[key] = True
+def _log_unless_repeated(request: SignatureRequest, kind: str, *, now=None, ip=None, user_agent="", detail=None):
+    """`log_event`, unless this event - kind, device, detail - was logged in
+    the hour before `now`, or `REPEATED_EVENTS_PER_HOUR` of this kind and
+    detail were. Checked in the transaction that appends it (IMMEDIATE in
+    production: two hits at once do not both find nothing) - with no upper
+    bound, since a hit that read the clock later may have logged first."""
+    now = _now(now)
+    ip, user_agent, detail = _clean_ip(ip), _clean_user_agent(user_agent), _clean_detail(detail)
+    with transaction.atomic():
+        devices = [
+            (seen_ip, seen_agent)
+            for seen_ip, seen_agent, seen_detail in SignatureEvent.objects.filter(
+                request=request, kind=kind, at__gt=now - timedelta(hours=1)
+            ).values_list("ip", "user_agent", "detail")
+            if (seen_detail or {}) == detail
+        ]
+        if len(devices) >= REPEATED_EVENTS_PER_HOUR or (ip, user_agent) in devices:
+            return None
+        return log_event(request, kind, at=now, ip=ip, user_agent=user_agent, detail=detail)
+
+
+def note_link_opened(request: SignatureRequest, *, ip=None, user_agent="", now=None) -> None:
+    """« Lien ouvert », once an hour per device (`_log_unless_repeated`).
+    Nothing is written in the session: a client that keeps no cookie would
+    leave a session row per hit."""
+    _log_unless_repeated(request, Kind.LINK_OPENED, now=now, ip=ip, user_agent=user_agent)
 
 
 # -- The one-time code ------------------------------------------------------------------------------------------
@@ -933,7 +958,8 @@ _RESERVATION_ROUNDS = 3
 def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, user_agent="") -> None:
     """Check the code the employee typed; on success remember it in his
     session for this request only and use the code up. Every refusal is a
-    `CodeError` and a `code_failed` event.
+    `CodeError` and a `code_failed` event - one an hour per device for a
+    refusal before any code was compared (`_log_unless_repeated`).
 
     **A try is reserved before the code is compared** (security audit
     SIGN-1): one conditional UPDATE - this very code, fewer than
@@ -948,18 +974,24 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
     request = _waiting(request, now)
     digits = "".join(str(typed or "").split())
 
-    def refuse(message, reason):
-        log_event(request, Kind.CODE_FAILED, at=now, ip=ip, user_agent=user_agent, detail={"reason": reason})
+    def refuse(message, reason, *, compared=True):
+        # A code compared is always an event; a refusal before any comparison
+        # can be posted in a loop, so it is said once an hour per device.
+        detail = {"reason": reason}
+        if compared:
+            log_event(request, Kind.CODE_FAILED, at=now, ip=ip, user_agent=user_agent, detail=detail)
+        else:
+            _log_unless_repeated(request, Kind.CODE_FAILED, now=now, ip=ip, user_agent=user_agent, detail=detail)
         raise CodeError(message)
 
     for _round in range(_RESERVATION_ROUNDS):
         request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method", "identification"])
         if not request.code_hash:
-            refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours")
+            refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours", compared=False)
         if now > request.code_sent_at + CODE_VALIDITY:
-            refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré")
+            refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré", compared=False)
         if request.code_attempts >= CODE_MAX_ATTEMPTS:
-            refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
+            refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais", compared=False)
         stored, method = request.code_hash, request.code_method
         with transaction.atomic():
             reserved = SignatureRequest.objects.filter(
@@ -968,7 +1000,7 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
         if reserved:
             break
     else:
-        refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
+        refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais", compared=False)
     # This try's number, or a later one when guesses arrived together: the
     # tries left are never said to be more than they are.
     attempts = SignatureRequest.objects.filter(pk=request.pk).values_list("code_attempts", flat=True).first() or 0
@@ -1255,6 +1287,15 @@ def record_download(request: SignatureRequest, name: str, *, now=None, ip=None, 
     if name not in private_files.FILE_NAMES:
         raise ValueError(f"Fichier inconnu : {name!r}")
     log_event(request, Kind.DOWNLOADED, at=now, ip=ip, user_agent=user_agent, detail={"file": name})
+
+
+def note_download(request: SignatureRequest, name: str, *, now=None, ip=None, user_agent="") -> None:
+    """« Document téléchargé » through the link: once an hour per device and
+    file (`_log_unless_repeated`) - a PDF viewer asks for the same file more
+    than once, and anyone holding the link as often as he likes."""
+    if name not in private_files.FILE_NAMES:
+        raise ValueError(f"Fichier inconnu : {name!r}")
+    _log_unless_repeated(request, Kind.DOWNLOADED, now=now, ip=ip, user_agent=user_agent, detail={"file": name})
 
 
 def verify_request(request: SignatureRequest, *, now=None, ip=None, user_agent="") -> signing.Verification:

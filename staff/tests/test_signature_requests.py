@@ -229,15 +229,25 @@ class LinkTests(RequestCase):
             requests_.absolute_link(path, lambda value: "http://testserver" + value), "http://testserver" + path
         )
 
-    def test_opening_is_logged_once_per_session(self):
+    def test_opening_is_logged_once_an_hour_per_device(self):
+        """Not once per session: a client that keeps no cookie - a script, a
+        link preview - wrote an event at every hit."""
         request, _token = self.create()
-        session = {}
         for _ in range(3):
-            requests_.note_link_opened(request, session, ip=IP, user_agent=PHONE)
-        requests_.note_link_opened(request, {}, ip=IP, user_agent=PHONE)
-        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 2)
+            requests_.note_link_opened(request, ip=IP, user_agent=PHONE, now=NOW)
+        requests_.note_link_opened(request, ip="198.51.100.4", user_agent=PHONE, now=NOW)
+        requests_.note_link_opened(request, ip=IP, user_agent=PHONE, now=NOW + dt.timedelta(minutes=61))
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 3)
         opened = request.events.filter(kind=Kind.LINK_OPENED).first()
         self.assertEqual((opened.ip, opened.user_agent), (IP, PHONE))
+
+    def test_ten_openings_an_hour_at_most_whatever_the_devices_say(self):
+        request, _token = self.create()
+        for number in range(30):
+            requests_.note_link_opened(request, ip=IP, user_agent=f"Robot/{number}", now=NOW)
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 10)
+        requests_.note_link_opened(request, ip=IP, user_agent="Robot/0", now=NOW + dt.timedelta(minutes=61))
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 11)
 
 
 class LockTests(RequestCase):
@@ -362,6 +372,27 @@ class CodeTests(RequestCase):
         self.assertIn("nouveau code", str(caught.exception))
         self.assertFalse(requests_.is_identified(self.session, request))
         self.assertEqual(self.kinds(request).count(Kind.CODE_FAILED), 6)
+
+    def test_a_refusal_before_any_comparison_is_logged_once_an_hour_per_device(self):
+        """Every code compared is an event; « aucun code en cours », posted
+        in a loop, was one each time too."""
+        request, _token = self.create()
+        for _ in range(20):
+            with self.assertRaises(requests_.CodeError) as caught:
+                requests_.check_code(request, "123456", self.session, now=NOW, ip=IP, user_agent=PHONE)
+            self.assertIn("Aucun code en cours", str(caught.exception))
+        failed = request.events.filter(kind=Kind.CODE_FAILED)
+        self.assertEqual([event.detail["reason"] for event in failed], ["aucun code en cours"])
+        code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW)
+        wrong = "000000" if code != "000000" else "111111"
+        for _ in range(7):
+            with self.assertRaises(requests_.CodeError):
+                requests_.check_code(request, wrong, self.session, now=NOW, ip=IP, user_agent=PHONE)
+        reasons = [event.detail["reason"] for event in request.events.filter(kind=Kind.CODE_FAILED)]
+        self.assertEqual(sum(reason.startswith("code erroné") for reason in reasons), 5)
+        # The fifth used the code up: the last two found none, said already.
+        self.assertEqual(reasons.count("aucun code en cours"), 1)
+        self.assertEqual(len(reasons), 6)
 
     def test_a_code_lasts_fifteen_minutes(self):
         request, _token = self.create()

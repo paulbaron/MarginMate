@@ -128,9 +128,13 @@ class ConcurrentCodeTests(TenancyTestCase):
         self.assertEqual(identified, [])
         self.assertLessEqual(len(compared), requests_.CODE_MAX_ATTEMPTS)
         reasons = self.failed_reasons()
-        # Every guess leaves its event; only five were ever looked at.
-        self.assertEqual(len(reasons), GUESSES)
-        self.assertLessEqual(sum(reason.startswith("code erroné") for reason in reasons), requests_.CODE_MAX_ATTEMPTS)
+        # Every guess compared leaves its event, and only five were; the
+        # others, refused before any comparison, are said once for this
+        # device (signature_requests._log_unless_repeated).
+        self.assertEqual(sum(reason.startswith("code erroné") for reason in reasons), len(compared))
+        refused = [reason for reason in reasons if not reason.startswith("code erroné")]
+        self.assertTrue(refused)
+        self.assertEqual(len(refused), len(set(refused)))
         with bound_tenant(self.tenant):
             request = SignatureRequest.objects.get(pk=self.sign_request.pk)
             self.assertEqual(request.code_attempts, requests_.CODE_MAX_ATTEMPTS)

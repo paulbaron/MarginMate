@@ -947,7 +947,7 @@ class VerifyAndDownloadTests(OwnerCase):
 class SectionTests(OwnerCase):
     def test_the_events_are_listed_in_words_with_the_chain_check(self):
         request, _token = self.create()
-        requests_.note_link_opened(request, {}, ip="203.0.113.7", user_agent="Mozilla/5.0 Essai")
+        requests_.note_link_opened(request, ip="203.0.113.7", user_agent="Mozilla/5.0 Essai")
         text = " ".join(self.text(self.page()).split())
         self.assertIn("Demande créée, document figé", text)
         self.assertIn("Lien ouvert", text)
@@ -1076,7 +1076,7 @@ class SignatureQueryCountTests(OwnerCase):
 
     def version(self):
         request, _token = self.create()
-        requests_.note_link_opened(request, {}, ip="203.0.113.7", user_agent="Mozilla/5.0 Essai")
+        requests_.note_link_opened(request, ip="203.0.113.7", user_agent="Mozilla/5.0 Essai")
         return request
 
     def test_a_month_with_several_versions(self):

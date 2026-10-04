@@ -192,7 +192,7 @@ class LinkTests(PublicCase):
                 answer = self.client.post(self.route(name, "inconnu"), {"csrfmiddlewaretoken": csrf, "code": "123456"})
                 self.assertPlainPage(answer, requests_.UNKNOWN_LINK, 404)
 
-    def test_opening_the_link_is_logged_once_per_session(self):
+    def test_opening_the_link_is_logged_once_an_hour_per_device(self):
         self.get()
         self.get()
         opened = self.request.events.filter(kind=Kind.LINK_OPENED)
@@ -200,6 +200,18 @@ class LinkTests(PublicCase):
         self.assertEqual((opened[0].ip, opened[0].user_agent), (IP, PHONE))
         Client(REMOTE_ADDR="198.51.100.4").get(self.url)
         self.assertEqual(opened.count(), 2)
+
+    def test_a_client_that_keeps_no_cookie_floods_neither_the_journal_nor_the_sessions(self):
+        """A script, a link preview, a mail scanner: each hit was an event
+        and a session row in the accounts database, for good."""
+        sessions = Session.objects.count()
+        for _ in range(15):
+            stranger = Client(REMOTE_ADDR=IP, HTTP_USER_AGENT=PHONE)
+            self.assertEqual(stranger.get(self.url).status_code, 200)
+            self.assertEqual(stranger.get(self.route("staff:sign_document")).status_code, 200)
+        self.assertEqual(self.kinds().count(Kind.LINK_OPENED), 1)
+        self.assertEqual(self.kinds().count(Kind.DOWNLOADED), 1)
+        self.assertEqual(Session.objects.count(), sessions)
 
 
 # -- What he reads ----------------------------------------------------------------------------------------------
