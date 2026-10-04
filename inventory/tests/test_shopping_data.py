@@ -7,7 +7,7 @@ What the page promises at that level, pinned on worked examples:
 * a purchase is dated by its movement's own `occurred_on`, else by its
   invoice's date, never by when it was classified; an undated invoice and
   one dated after today are left out; a return is kept apart;
-* the suppliers of charges and the AI pseudo-supplier are never offered,
+* the suppliers of charges and the removed AI reading's are never offered,
   while what was bought there still counts;
 * the till is read over the year up to its import's coverage, attributed
   once by the engine (`variance.attribute_sales`) and spread per day so
@@ -53,7 +53,6 @@ from inventory.shopping_data import (
 )
 from inventory.variance import attribute_sales, read_sales
 from invoices.models import GatherCoverage, Invoice
-from invoices.parsers import LLM_PARSER_KEY
 from recipes import auto_sales, sales_sources
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.models import (
@@ -236,9 +235,12 @@ class PurchaseScanTests(TestCase):
 
 class OfferedStoresTests(TestCase):
     def test_the_suppliers_of_charges_and_the_ai_pseudo_supplier_are_not_offered(self):
+        """The AI reading is gone (invoices/0038): its supplier, kept as an
+        ordinary one where something named it, is told by its code - its
+        reader key emptied."""
         shop = make_supplier(name="Grossiste exemple")
         charges = make_supplier(name="Loyer exemple", expenses_only=True)
-        reader = make_supplier(name="Analyse exemple", parser_key=LLM_PARSER_KEY)
+        reader = make_supplier(code="OTHER", name="Autre (analyse IA)")
         make_supplier(name="Fournisseur sans achat exemple")
         beer = article("Bière exemple", unit=UnitChoices.UNIT)
         bought(shop, beer, D1, "24")

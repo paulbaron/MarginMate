@@ -30,8 +30,10 @@ module's to set apart. At every supplier: a purchase at a supplier the page
 does not offer is still a purchase, and a visit.
 
 **Which stores are offered** (`offered_stores`): every supplier with a
-purchase, but the suppliers of charges (`expenses_only`) and the AI
-pseudo-supplier (`LLM_PARSER_KEY`).
+purchase, but the suppliers of charges (`expenses_only`) and the removed AI
+reading's supplier, which invoices/0038 kept where something named it (its
+code, `receipts.RETIRED_CODES`): a bucket of documents nobody recognised,
+no store anybody goes to.
 
 **The till: one attribution over a year, spread per day** (the design's
 « Option A »). The window W is (ref - TILL_WINDOW_DAYS, min(covered, ref)]:
@@ -73,7 +75,7 @@ from decimal import Decimal
 from django.db.models import Min, Q
 
 from invoices.models import Supplier
-from invoices.parsers import LLM_PARSER_KEY
+from invoices.receipts import RETIRED_CODES
 
 from . import shopping
 from .models import MovementKind, Product, ShoppingExclusion, StockMovement, StockType
@@ -173,14 +175,14 @@ def purchase_rows(today: date) -> list[shopping.PurchaseRow]:
 
 def offered_stores(purchases: Iterable[shopping.PurchaseRow]) -> list[shopping.StoreInfo]:
     """The suppliers the page offers: those with a purchase, but the
-    suppliers of charges and the AI pseudo-supplier."""
+    suppliers of charges and the removed AI reading's (RETIRED_CODES)."""
     bought_at = {row.store_id for row in purchases if row.qty is not None and row.qty > 0}
     return [
         shopping.StoreInfo(pk, name)
-        for pk, name, expenses_only, parser_key in Supplier.objects.order_by().values_list(
-            "id", "name", "expenses_only", "parser_key"
+        for pk, name, expenses_only, code in Supplier.objects.order_by().values_list(
+            "id", "name", "expenses_only", "code"
         )
-        if pk in bought_at and not expenses_only and parser_key != LLM_PARSER_KEY
+        if pk in bought_at and not expenses_only and code not in RETIRED_CODES
     ]
 
 

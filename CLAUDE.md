@@ -6287,8 +6287,9 @@ with it on, and `test_shopping_page.PageCostTests` the whole page):
   positive purchase at the store, on any article, excluded ones included.
   Today is history: a visit made this morning is the last one.
 - the stores offered: every supplier with a purchase, but the suppliers
-  of charges (`expenses_only`) and the AI pseudo-supplier; what was bought
-  at those still counts. « Autres enseignes » holds those under 3 visits in
+  of charges (`expenses_only`) and the removed AI reading's supplier, kept
+  by invoices/0038 where something named it and told by its code
+  (`receipts.RETIRED_CODES`); what was bought at those still counts. « Autres enseignes » holds those under 3 visits in
   the year.
 - **the till, only with « Tenir compte des ventes de la caisse » on** -
   off, not one sales table is read and the engine never runs. The design's
