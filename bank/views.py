@@ -1795,12 +1795,12 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
     content = upload.read()
     try:
         # The rows as the reader splits them - decoded, the blank ones left
-        # out - so a column numbered here is the column the format names.
-        rows = statements.rows(content, form.layout)
+        # out - so a column numbered here is the column the format names;
+        # the first ones only, never a list of every row.
+        shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN)
     except ValueError as refusal:
         test.refusal = str(refusal)
         return test
-    shown = rows[:TEST_ROWS_SHOWN]
     widest = max((len(row) for row in shown), default=0)
     test.width = min(widest, statements.MAX_COLUMN)
     test.wider = widest > statements.MAX_COLUMN
