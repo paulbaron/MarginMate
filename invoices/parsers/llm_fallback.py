@@ -80,6 +80,15 @@ def _to_decimal(value) -> Decimal:
     return number if number.is_finite() else Decimal("0")
 
 
+def _reads(value) -> bool:
+    """A figure as given, not missing nor « 12,50 » or « N/A », which
+    _to_decimal takes for 0."""
+    try:
+        return Decimal(str(value)).is_finite()
+    except (InvalidOperation, TypeError):
+        return False
+
+
 @register
 class LLMFallbackParser(InvoiceParser):
     supplier_code = "LLM"
@@ -151,7 +160,7 @@ class LLMFallbackParser(InvoiceParser):
                 continue
             count = _to_decimal(line.get("quantity"))
             total = _to_decimal(line.get("total_price_ht"))
-            if count == 0 or line.get("total_price_ht") is None:
+            if count == 0 or not _reads(line.get("total_price_ht")):
                 doubtful.append(name)
             lines.append(
                 ParsedLine(

@@ -98,6 +98,22 @@ class AIAnswerTests(SimpleTestCase):
         self.assertIn("2 ligne(s)", invoice.warnings[0])
         self.assertIn("VIN BLANC, BIERE", invoice.warnings[1])
 
+    def test_a_price_that_does_not_read_is_said(self):
+        """« 12,50 » or « N/A » read as 0: the line was filed at 0,00 € with
+        nothing said, like a missing price. A price of 0 given as 0 is one."""
+        invoice = self.read(
+            answer(
+                [
+                    {"name": "VIN BLANC", "quantity": 2, "total_price_ht": "12,50"},
+                    {"name": "BIERE", "quantity": 1, "total_price_ht": "N/A"},
+                    {"name": "GOBELETS", "quantity": 1, "total_price_ht": 0},
+                    {"name": "PAILLES", "quantity": 1, "total_price_ht": "0.00"},
+                ]
+            )
+        )
+        self.assertEqual(len(invoice.lines), 4)
+        self.assertEqual(invoice.warnings, ["Analyse IA : quantité ou prix illisible pour VIN BLANC, BIERE."])
+
     def test_a_date_that_is_no_text_falls_back_on_the_hint(self):
         invoice = self.read(answer([], invoice_date=20260904))
         self.assertIsNone(invoice.invoice_date)
