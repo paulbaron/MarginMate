@@ -38,11 +38,24 @@ them):
   byte the parser is handed is scanned, chunk by chunk with an overlap -
   a DOCTYPE after kilobytes of comments is still found.
 
+- **a member that would cost far more memory than its size**: every
+  element is dropped from the tree as soon as it is read, and what is held
+  at once is bounded - the nesting (`MAX_DEPTH`), the elements of the one
+  row, cell or string being read (`MAX_HELD`), the cells of a row (no more
+  than Excel has columns), the distinct names of elements and attributes
+  (`MAX_NAMES`: the parser keeps each one for good), a stretch with no
+  « > » (`MAX_STRETCH`: one start tag of a million attributes). Built
+  whole, one `<row>` of a few million empty cells - a 20 KB upload - took
+  hundreds of megabytes.
+
 And for a file uploaded by a person (`untrusted=True`, `check_untrusted`):
 the zip's own bounds - each member's uncompressed size, the total, the
 compression ratio past a few megabytes, the number of members - read from
 its directory before anything inflates (zipfile never inflates a member
-past the size its directory declares), and the shared strings' count.
+past the size its directory declares), and the shared strings' count. A
+caller reading columns by their header says which (`header_columns`): past
+the last of them nothing is read - rows padded to a cell at XFD, one after
+the other, took minutes.
 
 Every refusal is an `XlsxError` in French that names no path: the message
 may reach a page.
@@ -82,6 +95,19 @@ _ASCII_COMPATIBLE = frozenset(
 
 MEGABYTE = 1024 * 1024
 
+#: What a member may hold at once while it is read (the module's
+#: docstring). SpreadsheetML nests a few levels (worksheet > sheetData >
+#: row > c > is > r > rPr > ...); a row is at most 16 384 cells of a few
+#: elements each, a string a few runs; an export names a few dozen
+#: elements and attributes; a cell's text is 32 767 characters.
+MAX_DEPTH = 64
+MAX_HELD = 50_000
+MAX_NAMES = 2_000
+MAX_STRETCH = MEGABYTE
+#: What a refusal lists of a workbook's sheets: their names are the file's.
+SHEETS_SHOWN = 10
+SHEET_NAME_SHOWN = 40
+
 NOT_A_WORKBOOK = "Ce fichier n'est pas un classeur Excel (.xlsx) lisible."
 DOCTYPE_REFUSED = "Classeur refusé : il contient une déclaration XML (DOCTYPE ou ENTITY) qu'aucun export ne porte."
 ENCODING_REFUSED = "Classeur refusé : une de ses parties est dans un encodage qu'aucun export n'utilise."
@@ -89,6 +115,11 @@ COLUMN_REFUSED = "Classeur refusé : une cellule est au-delà de la dernière co
 TOO_MANY_SHEETS = f"Classeur refusé : plus de {MAX_SHEETS} feuilles."
 NO_SHEET = "Ce classeur n'a aucune feuille."
 ENCRYPTED = "Classeur refusé : il est protégé par un mot de passe ou compressé d'une façon inconnue."
+TOO_DEEP = "Classeur refusé : ses éléments s'imbriquent plus profondément que dans aucun export."
+TOO_DENSE = "Classeur refusé : une ligne, une cellule ou un texte y porte plus d'éléments qu'aucun export."
+ROW_TOO_WIDE = "Classeur refusé : une ligne porte plus de cellules qu'Excel n'a de colonnes (16 384)."
+TOO_MANY_NAMES = "Classeur refusé : il nomme plus d'éléments différents qu'aucun export."
+STRETCH_REFUSED = "Classeur refusé : une balise ou un texte y est plus long qu'aucun export n'en porte."
 
 
 class XlsxError(RuntimeError):
@@ -152,12 +183,14 @@ def _column_index(cell_ref: str) -> int | None:
 class _Guarded:
     """A member of the zip as the XML parser reads it, every chunk scanned
     first: the encoding at the start, then « <!DOCTYPE » and « <!ENTITY »
-    anywhere - across two chunks too (the overlap)."""
+    anywhere - across two chunks too (the overlap) - and how far it has run
+    without a « > » (`MAX_STRETCH`)."""
 
     def __init__(self, stream):
         self._stream = stream
         self._tail = b""
         self._started = False
+        self._stretch = 0
 
     def close(self) -> None:
         self._stream.close()
@@ -178,6 +211,19 @@ class _Guarded:
         if any(marker in scanned for marker in _FORBIDDEN):
             raise XlsxError(DOCTYPE_REFUSED)
         self._tail = scanned[-_OVERLAP:] if _OVERLAP else b""
+        # The stretch carried over from the chunks before, to this chunk's
+        # first « > », then from its last one on. One inside a chunk is
+        # shorter than the chunk the parser asks for (16 KB), far under the
+        # bound.
+        first = chunk.find(b">")
+        if first < 0:
+            self._stretch += len(chunk)
+        elif self._stretch + first > MAX_STRETCH:
+            raise XlsxError(STRETCH_REFUSED)
+        else:
+            self._stretch = len(chunk) - chunk.rfind(b">") - 1
+        if self._stretch > MAX_STRETCH:
+            raise XlsxError(STRETCH_REFUSED)
         return chunk
 
 
@@ -194,11 +240,14 @@ def _check_head(head: bytes) -> None:
 def _open_member(archive: zipfile.ZipFile, name: str) -> _Guarded:
     """One member, guarded. An encrypted member, or one compressed in a way
     zipfile cannot inflate, is this file's refusal - zipfile raises
-    RuntimeError and NotImplementedError for them."""
+    RuntimeError and NotImplementedError for them; a directory pointing
+    before the file's start, ValueError (« negative seek value »)."""
     try:
         return _Guarded(archive.open(name))
     except (RuntimeError, NotImplementedError):
         raise XlsxError(ENCRYPTED) from None
+    except ValueError:
+        raise XlsxError(NOT_A_WORKBOOK) from None
 
 
 @contextmanager
@@ -216,13 +265,74 @@ def _iterparse(archive: zipfile.ZipFile, name: str, events=("end",)):
 def _zip(source) -> zipfile.ZipFile:
     """The workbook's zip - a path or a seekable file object. Anything that
     is not a zip is refused in French: zipfile's own sentence may carry the
-    path."""
+    path. A directory claiming a zip version zipfile does not know raises
+    NotImplementedError: no workbook either."""
     if hasattr(source, "seek"):
         source.seek(0)
     try:
         return zipfile.ZipFile(source)
-    except (zipfile.BadZipFile, OSError, ValueError, EOFError):
+    except (zipfile.BadZipFile, OSError, ValueError, EOFError, NotImplementedError):
         raise XlsxError(NOT_A_WORKBOOK) from None
+
+
+def _elements(archive: zipfile.ZipFile, name: str):
+    """(event, element, parent) for every start and end of a member -
+    `parent` from the reading's own stack: the parser builds a chunk ahead
+    of the events, and a reader dropping what it has read must never ask
+    the tree. The nesting and the distinct names are bounded here
+    (`MAX_DEPTH`, `MAX_NAMES`); dropping is the caller's (`_kept`; a
+    sheet's rows have the same loop written out, `_rows`)."""
+    with _iterparse(archive, name, events=("start", "end")) as context:
+        stack: list = []
+        names: set = set()
+        for event, element in context:
+            if event == "start":
+                if len(stack) >= MAX_DEPTH:
+                    raise XlsxError(TOO_DEEP)
+                _named(names, element)
+                parent = stack[-1] if stack else None
+                stack.append(element)
+                yield event, element, parent
+            else:
+                stack.pop()
+                yield event, element, stack[-1] if stack else None
+
+
+def _named(names: set, element) -> None:
+    """Count the element's name and its attributes' among the member's:
+    the parser keeps each distinct one for good."""
+    if element.tag not in names:
+        names.add(element.tag)
+    for key in element.keys():  # noqa: SIM118 - an Element iterates its children; keys() are its attributes
+        if key not in names:
+            names.add(key)
+    if len(names) > MAX_NAMES:
+        raise XlsxError(TOO_MANY_NAMES)
+
+
+def _kept(archive: zipfile.ZipFile, name: str, tags: frozenset):
+    """Each element of `tags` in a member, whole, at its end - and nothing
+    else kept: every other element is dropped from its parent as soon as it
+    ends, and one of `tags` once it has been handed over. What one of them
+    holds is bounded (`MAX_HELD`): a string of a million runs is no
+    export's."""
+    unit = None
+    held = 0
+    for event, element, parent in _elements(archive, name):
+        if event == "start":
+            if unit is not None:
+                held += 1
+                if held > MAX_HELD:
+                    raise XlsxError(TOO_DENSE)
+            elif element.tag in tags:
+                unit, held = element, 0
+            continue
+        if element is unit:
+            yield element
+            unit = None
+        if unit is None and parent is not None:
+            # Every earlier sibling has ended too, and was read.
+            del parent[:]
 
 
 def check_untrusted(source, limits: Limits | None = None) -> None:
@@ -262,20 +372,16 @@ def _shared_strings(archive: zipfile.ZipFile, cap: int | None = None) -> list[st
     if "xl/sharedStrings.xml" not in archive.namelist():
         return []
     strings: list[str] = []
-    root = None
-    with _iterparse(archive, "xl/sharedStrings.xml", events=("start", "end")) as context:
-        for event, element in context:
-            if root is None:
-                root = element
-                continue
-            if event != "end" or element.tag != f"{MAIN_NS}si":
-                continue
-            strings.append("".join(t.text or "" for t in element.iter(f"{MAIN_NS}t")))
-            if cap is not None and len(strings) > cap:
-                raise XlsxError(f"Classeur refusé : plus de {cap} textes différents.")
-            element.clear()
-            root.clear()
+    for element in _kept(archive, "xl/sharedStrings.xml", _STRING_TAGS):
+        strings.append("".join(t.text or "" for t in element.iter(f"{MAIN_NS}t")))
+        if cap is not None and len(strings) > cap:
+            raise XlsxError(f"Classeur refusé : plus de {cap} textes différents.")
     return strings
+
+
+_STRING_TAGS = frozenset({f"{MAIN_NS}si"})
+_RELATION_TAGS = frozenset({f"{REL_NS}Relationship"})
+_WORKBOOK_TAGS = frozenset({f"{MAIN_NS}workbookPr", f"{MAIN_NS}sheet"})
 
 
 @dataclass(frozen=True)
@@ -293,27 +399,22 @@ def _workbook(archive: zipfile.ZipFile) -> _Workbook:
     agree often enough to look correct and then silently hand back the
     wrong sheet. Streamed, and at most MAX_SHEETS of them."""
     target_by_id: dict[str, str] = {}
-    with _iterparse(archive, "xl/_rels/workbook.xml.rels") as context:
-        for _event, element in context:
-            if element.tag == f"{REL_NS}Relationship":
-                target_by_id[element.get("Id")] = element.get("Target")
-                if len(target_by_id) > 4 * MAX_SHEETS:
-                    raise XlsxError(TOO_MANY_SHEETS)
-                element.clear()
+    for element in _kept(archive, "xl/_rels/workbook.xml.rels", _RELATION_TAGS):
+        target_by_id[element.get("Id")] = element.get("Target")
+        if len(target_by_id) > 4 * MAX_SHEETS:
+            raise XlsxError(TOO_MANY_SHEETS)
     paths: dict[str, str] = {}
     date1904 = False
-    with _iterparse(archive, "xl/workbook.xml") as context:
-        for _event, element in context:
-            if element.tag == f"{MAIN_NS}workbookPr":
-                date1904 = (element.get("date1904") or "").strip().lower() in ("1", "true")
-            elif element.tag == f"{MAIN_NS}sheet":
-                target = target_by_id.get(element.get(f"{DOC_REL_NS}id"))
-                if target:
-                    target = target.lstrip("/")
-                    paths[element.get("name")] = target if target.startswith("xl/") else f"xl/{target}"
-                if len(paths) > MAX_SHEETS:
-                    raise XlsxError(TOO_MANY_SHEETS)
-                element.clear()
+    for element in _kept(archive, "xl/workbook.xml", _WORKBOOK_TAGS):
+        if element.tag == f"{MAIN_NS}workbookPr":
+            date1904 = (element.get("date1904") or "").strip().lower() in ("1", "true")
+            continue
+        target = target_by_id.get(element.get(f"{DOC_REL_NS}id"))
+        if target:
+            target = target.lstrip("/")
+            paths[element.get("name")] = target if target.startswith("xl/") else f"xl/{target}"
+        if len(paths) > MAX_SHEETS:
+            raise XlsxError(TOO_MANY_SHEETS)
     return _Workbook(paths, date1904)
 
 
@@ -337,6 +438,7 @@ def read_sheet(
     sheet_name: str | None = None,
     *,
     max_columns: int | None = None,
+    header_columns=None,
     typed: bool = False,
     untrusted: bool = False,
     numbered: bool = False,
@@ -346,12 +448,14 @@ def read_sheet(
 
     Rows are padded to the width of their own last populated cell; a caller
     reading by column index must cope with a short row (see parse_rows).
-    `max_columns`: the cells past it are never read. `typed`: a cell the
-    workbook stores as a number comes back as a `Number`, one stored as a
-    date as a `Moment`. `untrusted`: an uploaded workbook - the zip's
-    bounds checked first, the string table capped. `numbered`: each row
-    comes as (its number as Excel shows it, its cells) - a refusal names
-    the row a person finds.
+    `max_columns`: the cells past it are never read. `header_columns`: the
+    titles a caller reads by its header - the first row is read whole, and
+    past the last of those it holds (stripped, as compared) no cell of the
+    rows below is read. `typed`: a cell the workbook stores as a number
+    comes back as a `Number`, one stored as a date as a `Moment`.
+    `untrusted`: an uploaded workbook - the zip's bounds checked first, the
+    string table capped. `numbered`: each row comes as (its number as Excel
+    shows it, its cells) - a refusal names the row a person finds.
     """
     limit = MAX_COLUMNS if max_columns is None else min(max_columns, MAX_COLUMNS)
     with _zip(source) as archive:
@@ -363,43 +467,111 @@ def read_sheet(
                 raise XlsxError(NO_SHEET)
             sheet_name = next(iter(paths))
         if sheet_name not in paths:
-            found = ", ".join(str(name) for name in paths) or "aucune"
-            raise XlsxError(f"Ce classeur n'a pas de feuille « {sheet_name} » (feuilles : {found}).")
+            raise XlsxError(f"Ce classeur n'a pas de feuille « {sheet_name} » (feuilles : {_sheets_said(paths)}).")
         if paths[sheet_name] not in archive.namelist():
             raise XlsxError(f"La feuille « {sheet_name} » manque dans ce classeur.")
         strings = _shared_strings(archive, UPLOAD_LIMITS.shared_strings if untrusted else None)
-        # Streamed, and each row dropped as soon as it has been yielded.
+        # Streamed, and each row dropped as soon as it has been read.
         # Reading the sheet with fromstring() built a DOM of the whole
         # thing: three years of line-by-line ticket data peaked at 1.3 GB,
         # which on a smaller machine is not slow but fatal.
-        with _iterparse(archive, paths[sheet_name], events=("start", "end")) as context:
-            _event, root = next(context)
-            number = 0
-            for event, element in context:
-                if event != "end" or element.tag != f"{MAIN_NS}row":
-                    continue
-                written = element.get("r") or ""
-                number = int(written) if written.isascii() and written.isdigit() and len(written) < 8 else number + 1
-                cells: dict[int, str] = {}
-                index = -1
-                for cell in element.findall(f"{MAIN_NS}c"):
-                    ref = cell.get("r")
-                    # A cell without its reference follows the one before
-                    # it (SpreadsheetML lets a writer leave `r` out).
-                    index = index + 1 if ref is None else _column_index(ref)
-                    if index is None:
-                        index = 0
-                    if index >= limit:
-                        continue
-                    cells[index] = _cell_text(cell, strings, typed)
+        for number, row in _rows(archive, paths[sheet_name], strings, limit, typed, header_columns):
+            yield (number, row) if numbered else row
+
+
+def _sheets_said(paths: dict) -> str:
+    """The sheets a workbook has, for a refusal: the first few, each cut."""
+    names = [str(name)[:SHEET_NAME_SHOWN] for name in list(paths)[:SHEETS_SHOWN]]
+    said = ", ".join(names) or "aucune"
+    return f"{said}…" if len(paths) > SHEETS_SHOWN else said
+
+
+def _header_width(header: list, titles) -> int:
+    """How many columns hold the `titles` a header row has: up to the last
+    one found (the first time each is found, as `list.index` finds it)."""
+    stripped = [str(cell).strip() for cell in header]
+    found = [stripped.index(title) for title in titles if title in stripped]
+    return max(found) + 1 if found else 0
+
+
+_ROW = f"{MAIN_NS}row"
+_CELL = f"{MAIN_NS}c"
+
+
+def _rows(archive: zipfile.ZipFile, path: str, strings: list[str], limit: int, typed: bool, header_columns=None):
+    """(number, cells) of each row of a sheet. A cell is read at its end
+    and dropped from its row at once; a row once read is dropped from the
+    sheet; anything outside a row as soon as it ends. While a row is open
+    it holds at most MAX_COLUMNS cells and MAX_HELD elements not yet read.
+    `header_columns`: `limit` narrowed once the first row is read.
+
+    `_elements`' loop, written out: this one runs for every cell of every
+    export, the owner's three years of lines included."""
+    first = True
+    row = None
+    number = 0
+    cells: dict[int, str] = {}
+    index = -1
+    count = 0
+    held = 0
+    stack: list = []
+    names: set = set()
+    with _iterparse(archive, path, events=("start", "end")) as context:
+        for event, element in context:
+            if event == "start":
+                if len(stack) >= MAX_DEPTH:
+                    raise XlsxError(TOO_DEEP)
+                tag = element.tag
+                if tag not in names:
+                    _named(names, element)
+                else:
+                    for key in element.keys():  # noqa: SIM118 - its attributes, not its children
+                        if key not in names:
+                            _named(names, element)
+                            break
+                if row is not None:
+                    held += 1
+                    if held > MAX_HELD:
+                        raise XlsxError(TOO_DENSE)
+                    if tag == _CELL and stack[-1] is row:
+                        count += 1
+                        if count > MAX_COLUMNS:
+                            raise XlsxError(ROW_TOO_WIDE)
+                elif tag == _ROW:
+                    row, cells, index, count, held = element, {}, -1, 0, 0
+                    written = element.get("r") or ""
+                    number = (
+                        int(written) if written.isascii() and written.isdigit() and len(written) < 8 else number + 1
+                    )
+                stack.append(element)
+                continue
+            stack.pop()
+            parent = stack[-1] if stack else None
+            if row is None:
+                if parent is not None:
+                    del parent[:]
+            elif element is row:
                 width = max(cells) + 1 if cells else 0
-                row = [cells.get(i, "") for i in range(width)]
-                # clear() empties the element; the parent still holds it, so
-                # the root has to be cleared too or the rows simply pile up
-                # there instead and nothing has been saved.
-                element.clear()
-                root.clear()
-                yield (number, row) if numbered else row
+                values = [cells.get(i, "") for i in range(width)]
+                row = None
+                if parent is not None:
+                    del parent[:]
+                if first and header_columns is not None:
+                    limit = min(limit, _header_width(values, header_columns))
+                first = False
+                yield number, values
+            elif parent is row and element.tag == _CELL:
+                ref = element.get("r")
+                # A cell without its reference follows the one before it
+                # (SpreadsheetML lets a writer leave `r` out).
+                index = index + 1 if ref is None else _column_index(ref)
+                if index is None:
+                    index = 0
+                if index < limit:
+                    cells[index] = _cell_text(element, strings, typed)
+                # Every earlier cell of the row has ended too, and was read.
+                del row[:]
+                held = 0
 
 
 def _cell_text(cell, strings: list[str], typed: bool = False) -> str:

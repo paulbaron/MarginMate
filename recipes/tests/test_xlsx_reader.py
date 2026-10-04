@@ -235,7 +235,9 @@ class DoctypeTests(SimpleTestCase):
         """In UTF-16 « <!DOCTYPE » is two bytes a letter: a byte grep misses
         it while the parser reads the mark and expands every entity."""
         text = '<?xml version="1.0" encoding="UTF-16"?>' + self.BOMB + "<worksheet/>"
-        said = self.refused({"xl/worksheets/sheet1.xml": "﻿".encode("utf-16-le") + text.encode("utf-16-le")})
+        said = self.refused(
+            {"xl/worksheets/sheet1.xml": "\N{ZERO WIDTH NO-BREAK SPACE}".encode("utf-16-le") + text.encode("utf-16-le")}
+        )
         self.assertIn("encodage", said)
 
     def test_utf_16_with_no_mark_is_refused_by_its_nul_bytes(self):
@@ -248,7 +250,7 @@ class DoctypeTests(SimpleTestCase):
     def test_a_utf_8_mark_and_an_ascii_compatible_declaration_read(self):
         row = '<row r="1"><c r="A1"><v>1</v></c></row>'
         for member in (
-            "﻿" + sheet_xml(row, prolog='<?xml version="1.0" encoding="utf-8"?>'),
+            "\N{ZERO WIDTH NO-BREAK SPACE}" + sheet_xml(row, prolog='<?xml version="1.0" encoding="utf-8"?>'),
             sheet_xml(row, prolog='<?xml version="1.0" encoding="ISO-8859-1"?>'),
         ):
             with self.subTest(member=member[:50]):
@@ -330,3 +332,171 @@ class NoPathTests(SimpleTestCase):
         rows.close()
         Path(path).unlink()
         self.assertFalse(Path(path).exists())
+
+
+class MemoryTests(SimpleTestCase):
+    """A member costing far more memory than its size: one `<row>` of a few
+    million empty cells - a 20 KB upload - was built whole before its end, a
+    string of a million runs too, and anything outside the rows piled up on
+    the root. Every element is dropped as soon as it is read now, and what a
+    member may hold at once is bounded. The bounds are patched small: never
+    a real bomb in a test."""
+
+    def sheet(self, rows_xml: str) -> bytes:
+        return build({"xl/worksheets/sheet1.xml": sheet_xml(rows_xml)})
+
+    def refused(self, content: bytes, **kwargs) -> str:
+        with self.assertRaises(XlsxError) as caught:
+            list(read_sheet(io.BytesIO(content), **kwargs))
+        return str(caught.exception)
+
+    def test_a_row_of_more_cells_than_excel_has_columns_is_refused(self):
+        """Every reference A1: no cell past XFD, and still no row."""
+        cells = '<c r="A1"/>' * (xlsx_reader.MAX_COLUMNS + 1)
+        said = self.refused(self.sheet(f'<row r="1">{cells}</row>'))
+        self.assertEqual(said, xlsx_reader.ROW_TOO_WIDE)
+
+    def test_a_row_of_as_many_cells_as_excel_has_columns_reads(self):
+        cells = "<c><v>1</v></c>" * xlsx_reader.MAX_COLUMNS
+        row = next(read_sheet(io.BytesIO(self.sheet(f'<row r="1">{cells}</row>'))))
+        self.assertEqual(len(row), xlsx_reader.MAX_COLUMNS)
+
+    def test_a_cell_or_a_row_holding_too_many_elements_is_refused(self):
+        runs = "<r><t>a</t></r>" * 30
+        with mock.patch.object(xlsx_reader, "MAX_HELD", 50):
+            said = self.refused(self.sheet(f'<row r="1"><c r="A1" t="inlineStr"><is>{runs}</is></c></row>'))
+            self.assertEqual(said, xlsx_reader.TOO_DENSE)
+            junk = "<x/>" * 60
+            self.assertEqual(self.refused(self.sheet(f'<row r="1">{junk}</row>')), xlsx_reader.TOO_DENSE)
+            # Read cell by cell, a row of many cells holds one at a time.
+            cells = "<c><v>1</v></c>" * 60
+            row = next(read_sheet(io.BytesIO(self.sheet(f'<row r="1">{cells}</row>'))))
+            self.assertEqual(len(row), 60)
+
+    def test_a_string_of_too_many_runs_is_refused(self):
+        runs = "<r><t>a</t></r>" * 30
+        strings = SHARED.replace("<si><t>Taux</t></si>", f"<si>{runs}</si>")
+        with mock.patch.object(xlsx_reader, "MAX_HELD", 50):
+            said = self.refused(build({"xl/sharedStrings.xml": strings}))
+        self.assertEqual(said, xlsx_reader.TOO_DENSE)
+
+    def test_elements_nested_past_any_export_are_refused(self):
+        deep = "<x>" * (xlsx_reader.MAX_DEPTH + 1) + "</x>" * (xlsx_reader.MAX_DEPTH + 1)
+        self.assertEqual(self.refused(self.sheet(deep)), xlsx_reader.TOO_DEEP)
+        self.assertEqual(self.refused(build(workbook=workbook_xml(deep))), xlsx_reader.TOO_DEEP)
+
+    def test_too_many_distinct_names_are_refused(self):
+        """The parser keeps every distinct name of element or attribute for
+        good: millions of them in one member is memory no row frees."""
+        names = "".join(f"<n{number}/>" for number in range(40))
+        attributes = "".join(f'<x a{number}="1"/>' for number in range(40))
+        with mock.patch.object(xlsx_reader, "MAX_NAMES", 30):
+            self.assertEqual(self.refused(self.sheet(names)), xlsx_reader.TOO_MANY_NAMES)
+            self.assertEqual(self.refused(self.sheet(attributes)), xlsx_reader.TOO_MANY_NAMES)
+            strings = SHARED.replace("<si><t>Taux</t></si>", f"<si><t>Taux</t></si>{names}")
+            self.assertEqual(self.refused(build({"xl/sharedStrings.xml": strings})), xlsx_reader.TOO_MANY_NAMES)
+            # The usual names of a sheet are far fewer.
+            self.assertEqual(len(list(read_sheet(io.BytesIO(build())))), 2)
+
+    def test_a_tag_or_a_text_longer_than_any_export_s_is_refused(self):
+        """One start tag of a million attributes inflates tenfold once
+        parsed; no export's cell holds more than 32 767 characters. The
+        stretch is measured across the parser's 16 KB chunks."""
+        long = "x" * 45_000
+        rows = "".join(f'<row r="{n}"><c r="A{n}"><v>{n}</v></c></row>' for n in range(1, 4000))
+        with mock.patch.object(xlsx_reader, "MAX_STRETCH", 20_000):
+            said = self.refused(self.sheet(f'<row r="1"><c r="A1" a="{long}"/></row>'))
+            self.assertEqual(said, xlsx_reader.STRETCH_REFUSED)
+            inline = f'<row r="1"><c r="A1" t="inlineStr"><is><t>{long}</t></is></c></row>'
+            self.assertEqual(self.refused(self.sheet(inline)), xlsx_reader.STRETCH_REFUSED)
+            # Carried to the next chunk's first « > », whatever follows it.
+            split = "<!--" + "y" * 28_000 + "--><x/>"
+            self.assertEqual(self.refused(self.sheet(split)), xlsx_reader.STRETCH_REFUSED)
+            # A long sheet of short tags reads.
+            self.assertEqual(len(list(read_sheet(io.BytesIO(self.sheet(rows))))), 3999)
+
+    def test_a_long_row_costs_one_cell_at_a_time(self):
+        """Measured: a row of 16 000 one-letter cells held about 10 MB built
+        whole, against half a megabyte read a cell at a time."""
+        import tracemalloc
+
+        cells = '<c t="inlineStr"><is><t>a</t></is></c>' * 16_000
+        content = self.sheet(f'<row r="1">{cells}</row>')
+        tracemalloc.start()
+        try:
+            rows = list(read_sheet(io.BytesIO(content), max_columns=5))
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(rows, [["a"] * 5])
+        self.assertLess(peak, 2_000_000)
+
+
+class HeaderColumnsTests(SimpleTestCase):
+    """A caller reading by its header says which titles (`header_columns`):
+    past the last of them, the rows below are never read - a row padded to a
+    cell at XFD, row after row, took minutes."""
+
+    def test_the_rows_below_are_read_no_wider_than_the_titles_named(self):
+        content = build(
+            {
+                "xl/worksheets/sheet1.xml": sheet_xml(
+                    '<row r="1"><c r="A1" t="inlineStr"><is><t>Jour</t></is></c>'
+                    '<c r="B1" t="inlineStr"><is><t> Nom </t></is></c>'
+                    '<c r="C1" t="inlineStr"><is><t>Autre</t></is></c></row>'
+                    '<row r="2"><c r="A2"><v>1</v></c><c r="B2"><v>2</v></c><c r="C2"><v>3</v></c>'
+                    '<c r="XFD2"><v>4</v></c></row>'
+                )
+            }
+        )
+        rows = list(read_sheet(io.BytesIO(content), header_columns=("Nom", "Jour", "Absent")))
+        self.assertEqual(rows, [["Jour", " Nom ", "Autre"], ["1", "2"]])
+
+    def test_a_header_naming_none_of_them_reads_nothing_below(self):
+        rows = list(read_sheet(io.BytesIO(build()), header_columns=("Absent",)))
+        self.assertEqual(rows[0], ["Date", "Montant", "Taux"])
+        self.assertEqual(rows[1:], [[]])
+
+
+class DamagedZipTests(SimpleTestCase):
+    """A zip damaged on the way: zipfile raises NotImplementedError for a
+    version it does not know and ValueError for a directory pointing before
+    the file's start - neither a zip error. Each was a 500 on « Tester » and
+    the fixed sentence in the job."""
+
+    def assert_no_workbook(self, content: bytes) -> None:
+        with self.assertRaises(XlsxError) as caught:
+            list(read_sheet(io.BytesIO(content)))
+        self.assertEqual(str(caught.exception), xlsx_reader.NOT_A_WORKBOOK)
+
+    def test_a_zip_version_nobody_knows_is_no_workbook(self):
+        content = bytearray(build())
+        directory = content.find(b"PK\x01\x02")
+        content[directory + 6] = 160  # « version needed to extract »: 16.0
+        self.assert_no_workbook(bytes(content))
+
+    def test_a_directory_pointing_before_the_file_is_no_workbook(self):
+        content = bytearray(build())
+        end = content.rfind(b"PK\x05\x06")
+        offset = int.from_bytes(content[end + 16 : end + 20], "little")
+        content[end + 16 : end + 20] = (offset + 100_000).to_bytes(4, "little")
+        self.assert_no_workbook(bytes(content))
+
+
+class SheetListTests(SimpleTestCase):
+    def test_an_unknown_sheet_lists_a_few_sheets_each_cut(self):
+        """A workbook may name a thousand sheets of any length: the refusal
+        reaches a job's log, which shows the first few."""
+        names = [f"Feuille {number} " + "x" * 200 for number in range(30)]
+        sheets = "".join(f'<sheet name="{name}" sheetId="{n}" r:id="rId1"/>' for n, name in enumerate(names, 1))
+        workbook = workbook_xml().replace(
+            '<sheet name="Ventes" sheetId="1" r:id="rId1"/><sheet name="Autre" sheetId="2" r:id="rId2"/>', sheets
+        )
+        with self.assertRaises(XlsxError) as caught:
+            list(read_sheet(io.BytesIO(build(workbook=workbook)), "Absente"))
+        said = str(caught.exception)
+        self.assertIn("Feuille 0 xxx", said)
+        self.assertIn("Feuille 9 xxx", said)
+        self.assertNotIn("Feuille 10 ", said)
+        self.assertNotIn("x" * 41, said)
+        self.assertTrue(said.endswith("…)."))
