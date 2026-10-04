@@ -54,6 +54,7 @@ from dataclasses import dataclass, field
 from django.db import transaction
 
 from . import recognition
+from .forms import CANONICAL
 from .models import OperationRule, StatementFormat
 
 Meaning = OperationRule.Meaning
@@ -66,22 +67,10 @@ def _migration(name: str):
     return importlib.import_module(f"bank.migrations.{name}")
 
 
-#: What a format of a kind that names no column stores (as
-#: `forms.CANONICAL`, which the page writes): the model's defaults.
-_NO_COLUMN = {
-    "encoding": StatementFormat.Encoding.AUTO.value,
-    "delimiter": StatementFormat.Delimiter.SEMICOLON.value,
-    "date_format": StatementFormat.DateFormat.DAY_MONTH_YEAR.value,
-    "decimal_mark": StatementFormat.DecimalMark.COMMA.value,
-    "date_column": None,
-    "label_columns": "",
-    "amount_column": None,
-    "debit_column": None,
-    "credit_column": None,
-    "value_date_column": None,
-    "bank_type_column": None,
-    "account_pattern": "",
-}
+#: What a format of a kind that names no column stores: what the page
+#: writes (`forms.CANONICAL`, one definition), its encoding the model's
+#: default.
+_NO_COLUMN = {"encoding": StatementFormat.Encoding.AUTO.value, **CANONICAL}
 
 
 @dataclass(frozen=True)

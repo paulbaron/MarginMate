@@ -1362,7 +1362,10 @@ class OldArchiveImportTests(TestCase):
 class SeededSectionsTests(TestCase):
     """`views.SEEDED_SECTIONS` is what the migrations install into every
     database, read off the real sections of a new one (the test database is
-    migrated like a new espace): a part missing from it is merged into a new
+    migrated like the owner's espace and the `_template`; a hosted espace is
+    also given the bank's OFX and CAMT.053 presets, `bank.presets.
+    set_up_new_espace` - bank/tests/test_presets.py, `NewEspaceTests`): a
+    part missing from it is merged into a new
     database, and the archive's edited copy of its installed rows stays a
     conflict nobody was told to replace; a part named there that installs
     nothing asks for « Remplacer » for no reason."""

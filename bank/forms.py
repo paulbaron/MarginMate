@@ -204,6 +204,8 @@ FORMAT_FIELDS = (
 
 #: Drawn first, whatever the kind of file.
 HEAD_FIELDS = ("name", "file_type", "encoding")
+#: What a stored format's « Type de fichier » says: it is drawn disabled.
+FILE_TYPE_FIXED = "Le type de fichier d'un format ne change pas : pour un autre type, ajoutez un nouveau format."
 #: A CSV's alone (`FileType.CSV`): drawn in a fieldset the page hides and
 #: disables for another kind of file (static/js/statement_format.js, and the
 #: server for the kind it draws) - a disabled field is never sent.
@@ -258,7 +260,9 @@ class StatementFormatForm(forms.ModelForm):
     A format of another kind than CSV names no column: the page sends none
     of a CSV's fields for it (their fieldset is disabled), so none is
     required of it, a refusal of one is not said, and `clean` stores
-    `CANONICAL` in every one - whatever a page without its script sent."""
+    `CANONICAL` in every one - whatever a page without its script sent. A
+    stored format's kind of file never changes: its menu is drawn disabled
+    (`FILE_TYPE_FIXED`) and nothing posted for it is read."""
 
     head_fields = HEAD_FIELDS
 
@@ -287,6 +291,8 @@ class StatementFormatForm(forms.ModelForm):
         help_texts = {
             "name": "Ex. « Banque Exemple (CSV) ».",
             "file_type": "CSV : vous indiquez les colonnes. OFX et CAMT.053 : le fichier dit où est chaque donnée.",
+            # A CAMT.053 file is read in the encoding its XML declares.
+            "encoding": "Pour un CSV ou un OFX : un relevé CAMT.053 dit le sien.",
             "label_columns": "Une colonne, ou plusieurs : « 4 » ou « 3, 4 ».",
             "account_pattern": (
                 "Facultatif. Cherché au-dessus des opérations ; (?P<compte>…) n'en garde qu'une partie."
@@ -325,14 +331,23 @@ class StatementFormatForm(forms.ModelForm):
         #: The format as `check_format` compiled it, once every field but
         #: the name passed - what « Tester » reads the file with.
         self.layout = None
-        #: The kind of file the page draws: the one posted when it is one
-        #: the model offers, else the stored one - a CSV's fields are drawn
-        #: hidden and disabled for another (statement_format.js follows the
-        #: menu from there).
+        #: The kind of file the page draws: a stored format's own - it never
+        #: changes (`FILE_TYPE_FIXED`) -, else the one posted when it is one
+        #: the model offers, else a CSV - a CSV's fields are drawn hidden and
+        #: disabled for another (statement_format.js follows the menu from
+        #: there).
         self.shown_file_type = self.instance.file_type or StatementFormat.FileType.CSV
-        posted = self.data.get(self.add_prefix("file_type")) if self.is_bound else None
-        if posted in StatementFormat.FileType.values:
-            self.shown_file_type = posted
+        if self.instance.pk is not None:
+            # Changed, a CSV's columns were written over with `CANONICAL`,
+            # and « Partir d'un modèle » keeps a name that is there: one
+            # wrong choice saved lost the owner's layout for good (review,
+            # 04/10/2026). Disabled: what is posted for it is never read.
+            self.fields["file_type"].disabled = True
+            self.fields["file_type"].help_text = FILE_TYPE_FIXED
+        else:
+            posted = self.data.get(self.add_prefix("file_type")) if self.is_bound else None
+            if posted in StatementFormat.FileType.values:
+                self.shown_file_type = posted
         for name in CSV_REQUIRED:
             self.fields[name].required = self.shown_file_type == StatementFormat.FileType.CSV
         # Not sent (a page drawn before the kind of file existed, a request

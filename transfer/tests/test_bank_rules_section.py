@@ -30,6 +30,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from bank import recognition
+from bank.forms import CANONICAL
 from bank.models import BankTransaction, IgnoreRule, OperationRule, StatementFormat
 from returnables.tests.test_patterns import NeverCompile
 from transfer import archive, registry
@@ -1694,6 +1695,38 @@ class FileTypeTests(RulesData, TestCase):
                 self.assertEqual(
                     (ofx.file_type, ofx.date_column, ofx.label_columns, ofx.amount_column), ("ofx", None, "", None)
                 )
+
+    def test_a_csv_s_fields_said_for_an_ofx_format_are_stored_as_the_page_stores_them(self):
+        """The model's check reads none of a CSV's fields for an OFX format,
+        so an edited archive's columns and account pattern were stored as
+        said. Stored as « Format du relevé » stores them (`CANONICAL`); the
+        same format here is « inchangé »."""
+        junk = {
+            "delimiter": ",",
+            "date_format": "yyyy-mm-dd",
+            "decimal_mark": ".",
+            "date_column": 3,
+            "label_columns": "4, 5",
+            "amount_column": 6,
+            "account_pattern": r"IBAN (?P<compte>.*)",
+        }
+        make_statement_format("Relevé OFX", **OFX_LAYOUT)
+
+        def with_junk(payload):
+            next(item for item in payload["statement_formats"] if item["name"] == "Relevé OFX").update(junk)
+            return payload
+
+        merging = self.forged(with_junk)
+        run = import_archive(merging, MERGE)
+        report = rules_report(run)
+        self.assertEqual((tally(run, FORMATS).unchanged, report.conflicts, report.skipped), (3, [], []))
+        created = self.forged(with_junk)
+        StatementFormat.objects.filter(name="Relevé OFX").delete()
+        run = import_archive(created, MERGE)
+        self.assertEqual(tally(run, FORMATS).created, 1)
+        ofx = StatementFormat.objects.get(name="Relevé OFX")
+        self.assertEqual({name: getattr(ofx, name) for name in CANONICAL}, CANONICAL)
+        self.assertEqual(ofx.file_type, "ofx")
 
     def test_an_archive_written_before_0009_merges_into_the_same_csv_formats_as_unchanged(self):
         run = import_archive(self.forged(self.as_before_0009), MERGE)

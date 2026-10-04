@@ -449,6 +449,9 @@ def bank_home(request):
             "formats": list(StatementFormat.objects.order_by("position", "name").only("pk", "name")),
             # What its file input offers: every kind of statement read.
             "statement_accept": statements.ACCEPT_ATTRIBUTE,
+            # The empty state names the presets offered - no bank written
+            # in the template.
+            "preset_titles": ", ".join(preset.title for preset in presets.PRESETS),
         },
     )
 
@@ -1869,13 +1872,20 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
         return test
     content = upload.read()
     shown = []
+    text = None
     if form.layout.file_type == StatementFormat.FileType.CSV:
         try:
+            # A file plainly of another kind is refused before a row of it is
+            # numbered as a CSV's (`refuse_another_kind`, as the import says).
+            statements.refuse_another_kind(content, form.layout)
             # The rows as the reader splits them - decoded, the blank ones
             # left out - so a column numbered here is the column the format
-            # names; the first ones only, never a list of every row. A file
-            # that says where each datum is has no column to number.
-            shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN)
+            # names; the first ones only, never a list of every row. The
+            # text checked once, for both: the file is split twice, never
+            # three times. A file that says where each datum is has no
+            # column to number.
+            text = statements.csv_text(content, form.layout)
+            shown = statements.rows(content, form.layout, limit=TEST_ROWS_SHOWN, text=text)
         except ValueError as refusal:
             test.refusal = str(refusal)
             return test
@@ -1884,7 +1894,7 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
     test.wider = widest > statements.MAX_COLUMN
     test.rows = [(row + [""] * test.width)[: test.width] for row in shown]
     try:
-        statement = statements.parse_statement(content, recognition.load(), form.layout)
+        statement = statements.parse_statement(content, recognition.load(), form.layout, text=text)
     except ValueError as refusal:
         test.refusal = str(refusal)
         return test

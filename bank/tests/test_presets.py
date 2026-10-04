@@ -259,7 +259,14 @@ class PageTests(TestCase):
 
     def test_banque_s_empty_state_and_recognition_lead_to_the_presets(self):
         target = f"{self.url}#modeles"
-        self.assertIn(f'<a href="{target}">Partir d\'un modèle</a>', self.html(reverse("bank:bank_home")))
+        home = self.html(reverse("bank:bank_home"))
+        self.assertIn(f'<a href="{target}">Partir d\'un modèle</a>', home)
+        # The presets named as `PRESETS` titles them - no bank written in
+        # the template.
+        titles = ", ".join(preset.title for preset in presets.PRESETS)
+        self.assertIn(f"Partir d'un modèle</a> ({titles}).", home)
+        with mock.patch.object(presets, "PRESETS", presets.PRESETS[:1]):
+            self.assertIn("Partir d'un modèle</a> (Relevé OFX).", self.html(reverse("bank:bank_home")))
         self.assertIn(f'<a href="{target}">Ajouter les règles d\'un modèle</a>', self.html(reverse("bank:recognition")))
         StatementFormat.objects.all().delete()
         self.assertIn('<a href="#modeles">partez d\'un modèle</a>', self.html())

@@ -32,6 +32,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from bank import forms as forms_module
 from bank import recognition, reconcile, statements, views
 from bank.forms import StatementFormatForm
 from bank.models import BankTransaction, StatementFormat
@@ -894,18 +895,35 @@ class FileTypeTests(Page):
         response = self.edit(fmt, press=("action", "tester"))
         self.assertEqual(response.context["test"].problem, views.NO_TEST_FILE)
 
-    def test_turned_into_a_csv_it_asks_for_its_columns(self):
-        fmt = make_format("Relevé OFX", **OFX_FIELDS)
-        # Without the script: the fieldset stays as the server drew it, and
-        # nothing of it is sent.
-        response = self.edit(fmt, file_type="csv")
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode()
-        self.assertIn("Indiquez une colonne.", text_of(field_of(html, "date_column")))
-        fmt.refresh_from_db()
-        self.assertEqual(fmt.file_type, "ofx")
-        # Drawn again as the kind chosen: its columns shown, to be typed.
-        self.assertIn('<fieldset class="format-columns" data-file-types="csv">', html)
+    def test_a_stored_format_s_kind_of_file_never_changes(self):
+        """Changed, a CSV's columns were written over with `CANONICAL`, and
+        « Partir d'un modèle » keeps a name that is there: one wrong choice
+        saved on the owner's own format lost his layout for good (review,
+        04/10/2026). The menu is drawn disabled, saying why; a value posted
+        for it all the same is not read."""
+        bnp = seeded()
+        before = self.stored()
+        form = self.edit_form(bnp)
+        self.assertTrue(form.control("file_type").disabled)
+        self.assertIn(forms_module.FILE_TYPE_FIXED, text_of(field_of(self.html(self.format_url(bnp)), "file_type")))
+        # The new format's menu is a choice.
+        self.assertFalse(self.new_form().control("file_type").disabled)
+        # Posted by hand anyway: the format stays a CSV, its columns kept.
+        data = as_post(form.submission(press=("action", "enregistrer")))
+        data["file_type"] = ["ofx"]
+        response = self.client.post(self.format_url(bnp), data, follow=True)
+        self.assertEqual(self.messages_of(response), [f"Format « {SEEDED} » enregistré."])
+        self.assertEqual(self.stored(), before)
+        bnp.refresh_from_db()
+        self.assertEqual((bnp.file_type, bnp.date_column, bnp.label_columns), ("csv", 1, "4"))
+        # An OFX format stays one, its CSV's fields never asked for.
+        ofx_format = make_format("Relevé OFX", **OFX_FIELDS)
+        data = as_post(self.edit_form(ofx_format).submission(press=("action", "enregistrer")))
+        data["file_type"] = ["csv"]
+        response = self.client.post(self.format_url(ofx_format), data, follow=True)
+        self.assertEqual(self.messages_of(response), ["Format « Relevé OFX » enregistré."])
+        ofx_format.refresh_from_db()
+        self.assertEqual((ofx_format.file_type, ofx_format.date_column), ("ofx", None))
 
     def test_an_unknown_kind_of_file_is_refused_on_its_field(self):
         form = self.new_form()
@@ -927,8 +945,23 @@ class FileTypeTests(Page):
         self.assertIn("Ce que le format lit", html)
 
     def test_tester_refuses_a_file_of_another_kind_in_the_import_s_words(self):
+        """Before a row of it is numbered: an OFX file's lines drawn as a
+        CSV's columns above « this is no CSV » said two things at once."""
         response = self.edit(seeded(), press=("action", "tester"), file=upload(ofx_files.xml(), "releve.csv"))
-        self.assertTrue(response.context["test"].refusal.startswith("Ce fichier est un relevé OFX / QFX (Money)"))
+        test = response.context["test"]
+        self.assertTrue(test.refusal.startswith("Ce fichier est un relevé OFX / QFX (Money)"))
+        self.assertEqual(test.rows, [])
+        self.assertNotIn("Premières lignes, colonnes numérotées", response.content.decode())
+
+    def test_tester_reads_a_csv_s_text_once_for_its_rows_and_its_operations(self):
+        """Checked whole once (`csv_text`), then handed to both: the rows
+        numbered and the operations read - never split a third time."""
+        with mock.patch.object(statements, "csv_text", wraps=statements.csv_text) as checked:
+            response = self.edit(seeded(), press=("action", "tester"), file=upload(bnp_file()))
+        test = response.context["test"]
+        self.assertEqual((test.refusal, test.count), ("", 2))
+        self.assertTrue(test.rows)
+        self.assertEqual(checked.call_count, 1)
 
     def test_both_file_inputs_offer_every_kind_of_statement_file(self):
         for url in (self.url, self.format_url(seeded())):

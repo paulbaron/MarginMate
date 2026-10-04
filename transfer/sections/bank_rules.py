@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 
+from bank.forms import CANONICAL
 from bank.models import IgnoreRule, OperationRule, StatementFormat
 from bank.recognition import PATTERN_LABEL, name_key
 from transfer import codec, registry
@@ -90,6 +91,11 @@ FORMAT_REQUIRED = ("label_columns",)
 # « Remplacer » would write that CSV's columns onto an OFX format of the
 # same name here, which stays OFX.
 FORMAT_FILE_TYPE_BEFORE_0009 = StatementFormat.FileType.CSV.value
+# The kinds of file whose format names no column: what an archive says in a
+# CSV's fields for one is not read, and is stored as « Format du relevé »
+# stores it (`bank.forms.CANONICAL`) - never as said, which the model's
+# check, skipping those fields for such a kind, let through.
+NO_COLUMN_FILE_TYPES = frozenset(StatementFormat.FileType.values) - {StatementFormat.FileType.CSV.value}
 # The recognition rules like the formats: the name is the key and is
 # compared, the position too - the first rule of its kind that finds its
 # pattern decides.
@@ -337,7 +343,9 @@ class BankRulesSection(Section):
         or replaced: an archive may say any column and any account pattern.
         An archive saying nothing of them (written before bank/0007) leaves
         them alone; a format saying no kind of file (written before
-        bank/0009) is a CSV, as every format was then."""
+        bank/0009) is a CSV, as every format was then, and one of a kind
+        that names no column has a CSV's fields as the page stores them
+        (`NO_COLUMN_FILE_TYPES`), whatever the archive says there."""
         if self._formats is None:
             return
         existing: dict[str, StatementFormat] = {}
@@ -348,6 +356,9 @@ class BankRulesSection(Section):
             codec.note_unknown(report, record, FORMAT_FIELDS, where="formats de relevé › ")
             if "file_type" not in record:
                 record = {**record, "file_type": FORMAT_FILE_TYPE_BEFORE_0009}
+            file_type = record.get("file_type")
+            if isinstance(file_type, str) and file_type in NO_COLUMN_FILE_TYPES:
+                record = {**record, **CANONICAL}
             name = record.get("name")
             key = name_key(name) if isinstance(name, str) else ""
             if not key:
