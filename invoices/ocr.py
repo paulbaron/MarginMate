@@ -316,6 +316,7 @@ IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} mi
 TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères, traits ou images sur une page."
 TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
 TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
+TOO_MANY_CODES = "Document trop chargé pour être lu : ses polices déclarent plus de {limit} caractères."
 
 
 class DocumentTooBig(ValueError):
@@ -763,8 +764,8 @@ def bounded_reading():
     """Around a reader walking `pdf_pages`: its decodes share
     MAX_INFLATE_TOTAL (returnables.reading.inflate_budget - should a stream
     escape `_weigh_contents`), what it runs MAX_RUN_TOTAL, and what pdfminer
-    stopped (those budgets, a page past reading.MAX_PAGE_GLYPHS glyphs) is
-    DocumentTooBig, said on the
+    stopped (those budgets, a page past reading.MAX_PAGE_GLYPHS glyphs, fonts
+    mapping past reading.MAX_CMAP_CODES codes) is DocumentTooBig, said on the
     file's line - not the PdfminerException pdfplumber wraps it in, which a
     reader's caller takes for a broken file. Entered by the caller, not
     inside `pdf_pages`: the page is read in the caller's loop, never in the
@@ -784,6 +785,9 @@ def bounded_reading():
                 raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
             if reading.run_refused(error):
                 raise DocumentTooBig(TOO_LONG_CONTENT.format(weight=weight(MAX_RUN_TOTAL))) from None
+            if reading.codes_refused(error):
+                limit = group_thousands(reading.MAX_CMAP_CODES)
+                raise DocumentTooBig(TOO_MANY_CODES.format(limit=limit)) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             raise

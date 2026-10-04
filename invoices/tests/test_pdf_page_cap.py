@@ -759,3 +759,49 @@ class DrawnContentTests(TestCase):
         from invoices.parsers import llm_fallback
 
         self.assertEqual(llm_fallback._extract_text(self.path).count("REPRISE VIDE"), 1)
+
+
+class TooManyCodesTests(TestCase):
+    """pdfminer expands a font's ToUnicode ranges code by code: an 872-byte
+    file took 360 MB in the text layer. Every Achats reader stops a
+    document's fonts at `returnables.reading.MAX_CMAP_CODES` codes and says
+    it on the file's line. Machine safety: the cap is patched down to
+    1 000, the font maps 5 000."""
+
+    def setUp(self):
+        from returnables.tests.test_reading import bfrange, mapping_codes
+
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "polices.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(mapping_codes(bfrange(0, 5_000)))
+        patch = mock.patch.object(reading, "MAX_CMAP_CODES", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        from invoices.parsers import llm_fallback
+
+        readers = {
+            "text_layer_pages": ocr.text_layer_pages,
+            "InvoiceParser.parse": Recorder().parse,
+            "llm_fallback": llm_fallback._extract_text,
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(
+                str(refused.exception),
+                "Document trop chargé pour être lu : ses polices déclarent plus de 1\N{NO-BREAK SPACE}000 caractères.",
+            )
+
+    def test_the_one_import_files_nothing(self):
+        with mock.patch("invoices.receipts.page_images", never("page_images")):
+            with self.assertRaises(ocr.DocumentTooBig):
+                import_document(self.path, display_filename="polices.pdf")
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_within_the_cap_the_document_reads(self):
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 6_000):
+            self.assertEqual(ocr.text_layer_pages(self.path), [None])

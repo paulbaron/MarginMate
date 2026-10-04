@@ -10,14 +10,15 @@ class ReturnablesConfig(AppConfig):
     verbose_name = "Consignes"
 
     def ready(self):
-        # pdfminer's decoders, what its interpreter runs and the glyphs a
-        # page draws, bounded for the whole process from the start
-        # (reading.bound_pdf_decoding, bound_pdf_interpreting,
-        # bound_pdf_glyphs), not from the first import of the returnables
-        # code: a management command reading Achats' PDFs gets the same
-        # bounds as the web process.
+        # pdfminer's decoders, what its interpreter runs, the glyphs a page
+        # draws and the codes a font maps, bounded for the whole process
+        # from the start (reading.bound_pdf_decoding, bound_pdf_interpreting,
+        # bound_pdf_glyphs, bound_pdf_cmaps), not from the first import of
+        # the returnables code: a management command reading Achats' PDFs
+        # gets the same bounds as the web process.
         from returnables import reading
 
         reading.bound_pdf_decoding()
         reading.bound_pdf_interpreting()
         reading.bound_pdf_glyphs()
+        reading.bound_pdf_cmaps()

@@ -1070,3 +1070,217 @@ class InterpretedContentBoundTests(SimpleTestCase):
         8 MB of path operators held a thread a minute and a half."""
         self.assertEqual(reading.MAX_INFLATE_TOTAL, 4 * 1024 * 1024)
         self.assertLess(reading.MAX_INFLATE_TOTAL, reading.MAX_INFLATE_STAGE)
+
+
+def mapping_codes(*ranges: bytes, fonts: int = 1) -> bytes:
+    """A one-page PDF printing DRAWN with `fonts` fonts, each with a ToUnicode
+    map holding `ranges` (« 1 beginbfrange <00000000> <001FFFFF> <0041>
+    endbfrange » makes pdfminer an entry for each of two million codes)."""
+    cmap = b"/CIDInit /ProcSet findresource begin begincmap\n" + b"\n".join(ranges) + b"\nendcmap end\n"
+    names = b" ".join(f"/F{index + 1} {5 + 2 * index} 0 R".encode() for index in range(fonts))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << "
+        + names
+        + b" >> >> >>",
+        b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+    ]
+    for index in range(fonts):
+        objects += [
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode "
+            + str(6 + 2 * index).encode()
+            + b" 0 R >>",
+            b"<< /Length " + str(len(cmap)).encode() + b" >>\nstream\n" + cmap + b"\nendstream",
+        ]
+    return pdf_of_objects(objects)
+
+
+def format_2_reading_again(ranges: int, codes: int) -> bytes:
+    """A TrueType cmap subtable of format 2 whose `ranges` sub-headers all
+    point at the same `codes` glyph numbers: pdfminer reads them again for
+    each - `ranges` x `codes` codes from a few hundred bytes."""
+    import struct
+
+    keys = [0] * 256
+    keys[1] = 8 * (ranges - 1)
+    headers_at = 6 + 512
+    glyphs_at = headers_at + 8 * ranges
+    headers = b"".join(
+        struct.pack(">HHhH", 0, codes, 0, glyphs_at - (headers_at + 8 * index + 6)) for index in range(ranges)
+    )
+    return (
+        struct.pack(">HHH", 2, 0, 0) + struct.pack(">256H", *keys) + headers + struct.pack(f">{codes}H", *[1] * codes)
+    )
+
+
+def cid_widths(key: bytes, widths: bytes) -> bytes:
+    """A one-page PDF whose one font is a CID font declaring `widths` as its
+    /W (or /W2, written vertically): « 0 2000000 500 » is an entry for each
+    of two million codes."""
+    writing = b"V" if key == b"W2" else b"H"
+    content = b"BT /F1 10 Tf 40 700 Td <0001> Tj ET\n"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Essai /Encoding /Identity-"
+            + writing
+            + b" /DescendantFonts [6 0 R] >>",
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Essai "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            b"/FontDescriptor << /FontBBox [0 0 1000 1000] >> /" + key + b" " + widths + b" >>",
+        ]
+    )
+
+
+def bfrange(first: int, last: int) -> bytes:
+    return f"1 beginbfrange <{first:08X}> <{last:08X}> <0000> endbfrange".encode()
+
+
+def truetype_mapping(first: int, last: int, subtable: bytes = b"") -> bytes:
+    """A one-page PDF whose one font is an embedded TrueType font with no
+    ToUnicode: pdfminer reads its cmap instead - one format 12 group,
+    codes `first` to `last`, each made an entry (or `subtable`)."""
+    import struct
+
+    group = subtable or struct.pack(">HHIIIIII", 12, 0, 28, 0, 1, first, last, 1)
+    cmap = struct.pack(">HHHHI", 0, 1, 3, 10, 12) + group
+    font = struct.pack(">IHHHH", 0x00010000, 1, 16, 0, 0) + struct.pack(">4sIII", b"cmap", 0, 28, len(cmap)) + cmap
+    content = b"BT /F1 10 Tf 40 700 Td <0001> Tj ET\n"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Essai /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+            (
+                b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Essai "
+                b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 7 0 R >>"
+            ),
+            (
+                b"<< /Type /FontDescriptor /FontName /Essai /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 "
+                b"/Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>"
+            ),
+            b"<< /Length " + str(len(font)).encode() + b" >>\nstream\n" + font + b"\nendstream",
+        ]
+    )
+
+
+class CMapBoundTests(SimpleTestCase):
+    """pdfminer expands a font's ToUnicode ranges code by code, an entry of
+    about 120 bytes each: « <00000000> <001FFFFF> <0041> » in an 872-byte
+    file took 360 MB in Achats' text layer, and <FFFFFFFF> means four
+    billion. A TrueType font's cmap, read when a font has no ToUnicode, the
+    same. Every pdfminer reader now stops a reading's fonts at
+    MAX_CMAP_CODES codes, before the next is made. MACHINE SAFETY: the cap
+    is patched DOWN; nothing here maps more than a few thousand codes."""
+
+    def mapped(self, content: bytes, reader=pdf_text) -> list:
+        """The codes mapped while `reader` reads `content`, and what it gave."""
+        from pdfminer.cmapdb import FileUnicodeMap
+
+        made, add = [], FileUnicodeMap.add_cid2unichr
+
+        def counted(cmap, cid, code):
+            add(cmap, cid, code)
+            made.append(cid)
+
+        counted.code_bound = True
+        with mock.patch.object(FileUnicodeMap, "add_cid2unichr", counted):
+            try:
+                return [len(made), reader(content)]
+            except Exception as error:  # noqa: BLE001 - what the reader raised is the result
+                return [len(made), error]
+
+    def test_a_range_past_the_cap_is_too_long_before_its_codes_are_made(self):
+        bomb = mapping_codes(bfrange(0, 0x1FFFFF))
+        self.assertLess(len(bomb), 1_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            made, said = self.mapped(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertEqual(made, 1_000)
+        self.assertEqual(reading.MAX_CMAP_CODES, 200_000)
+
+    def test_every_form_of_range_counts(self):
+        """begincidrange too, and a range's array form."""
+        cidrange = b"1 begincidrange <0000> <0FFF> 1 endcidrange"
+        array = b"1 beginbfrange <0000> <05DB> [" + b"<0041> " * 1_500 + b"] endbfrange"
+        for content in (mapping_codes(cidrange), mapping_codes(array)):
+            with self.subTest(size=len(content)):
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(content)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                # Within it, read - as the map says: its codes are not text.
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 5_000):
+                    self.assertEqual(len(pdf_text(content)), len("REPRISE VIDE"))
+
+    def test_within_the_cap_the_document_reads(self):
+        self.assertEqual(pdf_text(mapping_codes(bfrange(0, 900))), "REPRISE VIDE")
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(mapping_codes(bfrange(0, 900))), "REPRISE VIDE")
+
+    def test_the_cap_is_the_document_s_every_font_together(self):
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(mapping_codes(bfrange(0, 599))), "REPRISE VIDE")
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(mapping_codes(bfrange(0, 599), fonts=2))
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+
+    def test_a_truetype_font_s_own_map_counts_too(self):
+        bomb = truetype_mapping(0, 5_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 12_000):
+            # Counted as read, and again as mapped.
+            self.assertTrue(pdf_text(bomb))
+
+    def test_a_truetype_map_read_again_counts_each_time(self):
+        """Format 2 (and 4) may point every range at the same bytes."""
+        bomb = truetype_mapping(0, 0, format_2_reading_again(20, 100))
+        self.assertLess(len(bomb), 3_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+            pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 3_000):
+            self.assertTrue(pdf_text(bomb))
+
+    def test_a_cid_font_s_widths_count_before_they_are_made(self):
+        """/W « 0 2000000 500 », in 809 bytes, took 160 MB; /W2 the same."""
+        for key, widths in (
+            (b"W", b"[0 5000 500]"),
+            (b"W", b"[0 [" + b"500 " * 900 + b"] 2000 2500 500]"),
+            (b"W2", b"[0 5000 1000 500 880]"),
+        ):
+            with self.subTest(key=key, size=len(widths)):
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(cid_widths(key, widths))
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        self.assertEqual(pdf_text(cid_widths(b"W", b"[0 900 500 1000 [500 600]]")), "(cid:1)")
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(cid_widths(b"W", b"[0 900 500 1000 [500 600]]")), "(cid:1)")
+
+    def test_a_map_read_outside_any_reading_is_bounded_alone(self):
+        """pdfplumber opened with no reading under way (no inflate_budget):
+        each map is held to the cap by itself."""
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            with (
+                self.assertRaises(Exception) as caught,
+                pdfplumber.open(io.BytesIO(mapping_codes(bfrange(0, 5_000)))) as pdf,
+            ):
+                pdf.pages[0].extract_words()
+            self.assertTrue(reading.codes_refused(caught.exception), repr(caught.exception))
+            with pdfplumber.open(io.BytesIO(mapping_codes(bfrange(0, 599), fonts=2))) as pdf:
+                self.assertEqual(pdf.pages[0].extract_text(), "REPRISE VIDE")

@@ -23,8 +23,13 @@
   « A » - a 1 KB file - took 1,4 GB; a path's every point is kept as well,
   and a figure for every image or form drawn. A page stops at
   MAX_PAGE_GLYPHS glyphs, segments and figures (`GlyphLimit`): the slip is
-  « trop long », Achats' reader DocumentTooBig. Not bounded: what a font's
-  ToUnicode map declares (a range is expanded code by code).
+  « trop long », Achats' reader DocumentTooBig.
+- **And the codes a font's maps declare** (`bound_pdf_cmaps`, process-wide):
+  pdfminer expands a ToUnicode range code by code, and a TrueType font's
+  cmap and a CID font's widths the same, so « <00000000> <001FFFFF> <0041> »
+  in an 872-byte file took 360 MB. One reading's fonts together declare MAX_CMAP_CODES at most
+  (`CMapLimit`, an InflateLimit): the slip is « trop long », Achats' reader
+  DocumentTooBig.
 - `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
   lines, what could not be read, the delivery date, the number, the
   delivery-note references, « annule et remplace », the printed total, the
@@ -100,6 +105,13 @@ MAX_INFLATE_TOTAL = 4 * 1024 * 1024
 #: (bound_pdf_glyphs): the densest page of 1 374 real invoices (Metro's)
 #: draws 6 617 glyphs, the most segments one page paints are 4 634 (Free's).
 MAX_PAGE_GLYPHS = 30_000
+#: The codes the fonts of one reading may map (bound_pdf_cmaps): every code a
+#: ToUnicode map's ranges and characters declare, a TrueType font's cmap
+#: when pdfminer reads that instead, and a CID font's widths - about 120
+#: bytes kept each (an 817-byte file mapping two million codes, or four
+#: billion, is refused in 0,4 s, 33 MB). Three fonts mapping every 2-byte
+#: code fit; the most of 1 374 real invoices is 1 416, in one reading.
+MAX_CMAP_CODES = 200_000
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
 SHOWN_LINE_CHARS = 120
@@ -246,10 +258,16 @@ class RunLimit(InflateLimit):
     """What pdfminer's interpreter runs, past the reading's run budget."""
 
 
+class CMapLimit(InflateLimit):
+    """The codes a reading's fonts map, past MAX_CMAP_CODES."""
+
+
 #: [bytes left] of the reading under way in this thread (pdf_text), or None.
 _BUDGET: ContextVar[list | None] = ContextVar("returnables_inflate_budget", default=None)
 #: [bytes left] the interpreter may still run in that reading, or None.
 _RUN: ContextVar[list | None] = ContextVar("returnables_run_budget", default=None)
+#: [codes left] the fonts of that reading may still map, or None.
+_CODES: ContextVar[list | None] = ContextVar("returnables_cmap_codes", default=None)
 
 
 @contextmanager
@@ -257,13 +275,16 @@ def inflate_budget(total: int, run: int | None = None):
     """Every pdfminer decode inside - in this thread - shares `total` bytes:
     the streams of one document together (a page may list hundreds); what
     the interpreter runs has `run` bytes (`total` when None), a stream
-    counted each time it is run (`bound_pdf_interpreting`). Yields the
-    budget, [bytes left]: -1 once a decode, or a run, was refused."""
+    counted each time it is run (`bound_pdf_interpreting`); its fonts' maps
+    MAX_CMAP_CODES codes (`bound_pdf_cmaps`). Yields the budget, [bytes
+    left]: -1 once a decode, or a run, was refused."""
     budget = [total]
     token, run_token = _BUDGET.set(budget), _RUN.set([total if run is None else run])
+    codes_token = _CODES.set([MAX_CMAP_CODES])
     try:
         yield budget
     finally:
+        _CODES.reset(codes_token)
         _RUN.reset(run_token)
         _BUDGET.reset(token)
 
@@ -277,6 +298,11 @@ def inflate_refused(error: BaseException | None) -> bool:
 def run_refused(error: BaseException | None) -> bool:
     """Whether RunLimit is behind `error` (inflate_refused says so too)."""
     return _behind(error, RunLimit)
+
+
+def codes_refused(error: BaseException | None) -> bool:
+    """Whether CMapLimit is behind `error` (inflate_refused says so too)."""
+    return _behind(error, CMapLimit)
 
 
 def _behind(error: BaseException | None, kind: type) -> bool:
@@ -528,6 +554,101 @@ def bound_pdf_glyphs() -> None:
 bound_pdf_glyphs()
 
 
+def bound_pdf_cmaps() -> None:
+    """Count every code pdfminer maps for a font, for the whole process
+    (idempotent), and stop past MAX_CMAP_CODES (`CMapLimit`) BEFORE the next
+    one is made: a ToUnicode range (beginbfrange, begincidrange, and a
+    range's array form) is expanded code by code - « <00000000> <001FFFFF>
+    <0041> », in an 872-byte file, took 360 MB, and <FFFFFFFF> means four
+    billion - and so is a TrueType font's cmap (every format, read when a
+    font names no ToUnicode: counted as read, and again as mapped; format 2
+    and 4 may read the same bytes again for every range) and a CID font's
+    widths (/W « 0 2000000 500 », in 809 bytes, took 160 MB; /W2 the same:
+    counted before they are expanded). Counted for the reading under way
+    (`inflate_budget`), every font of the document together, as a font
+    named inline is read again on every page; with no reading, for the map
+    alone."""
+    from pdfminer import pdffont
+    from pdfminer.cmapdb import FileUnicodeMap
+
+    if not getattr(FileUnicodeMap.add_cid2unichr, "code_bound", False):
+        FileUnicodeMap.add_cid2unichr = _bounded_add_cid2unichr(FileUnicodeMap.add_cid2unichr)
+    for name in dir(pdffont.TrueTypeFont):
+        parse = getattr(pdffont.TrueTypeFont, name)
+        if name.startswith("parse_cmap_format_") and not getattr(parse, "code_bound", False):
+            setattr(pdffont.TrueTypeFont, name, _bounded_cmap_format(parse))
+    for name, numbers in (("get_widths", 3), ("get_widths2", 5)):
+        if not getattr(getattr(pdffont, name), "code_bound", False):
+            setattr(pdffont, name, _bounded_widths(getattr(pdffont, name), numbers))
+
+
+def _count_code(holder, codes: int = 1) -> None:
+    left = _CODES.get()
+    if left is None:
+        left = holder.__dict__.setdefault("_codes_left", [MAX_CMAP_CODES]) if holder is not None else [MAX_CMAP_CODES]
+    left[0] -= codes
+    if left[0] < 0:
+        raise CMapLimit("trop de codes dans les polices")
+
+
+def _bounded_add_cid2unichr(add_cid2unichr):
+    def bounded(self, cid, code):
+        _count_code(self)
+        return add_cid2unichr(self, cid, code)
+
+    bounded.code_bound = True
+    return bounded
+
+
+class _CountedCodes(dict):
+    """A TrueType cmap's codes, counted as pdfminer sets them."""
+
+    def __setitem__(self, code, gid):
+        _count_code(self)
+        super().__setitem__(code, gid)
+
+
+def _bounded_cmap_format(parse):
+    def bounded(self, fp, char2gid):
+        codes = _CountedCodes()
+        parse(self, fp, codes)
+        char2gid.update(codes)
+
+    bounded.code_bound = True
+    return bounded
+
+
+def _bounded_widths(get_widths, numbers: int):
+    """`get_widths` (or `get_widths2`, whose ranges are `numbers` long),
+    charged first with the codes its ranges and arrays declare, as it reads
+    them: « first last width... », « first [width...] »."""
+    from pdfminer.pdftypes import resolve1
+
+    def bounded(seq):
+        seq = list(seq)
+        declared, pending = 0, []
+        for value in seq:
+            value = resolve1(value)
+            if isinstance(value, list):
+                declared += len(value) if pending else 0
+                pending = []
+            elif isinstance(value, (int, float)):
+                pending.append(value)
+                if len(pending) == numbers:
+                    first, last = pending[:2]
+                    if isinstance(first, int) and isinstance(last, int):
+                        declared += max(0, last - first + 1)
+                    pending = []
+        _count_code(None, declared)
+        return get_widths(seq)
+
+    bounded.code_bound = True
+    return bounded
+
+
+bound_pdf_cmaps()
+
+
 # -- The PDF --------------------------------------------------------------------------------------------------------
 
 
@@ -535,6 +656,7 @@ def pdf_text(content: bytes) -> str:
     """The text layer of a slip's PDF, pages joined by a newline - or
     SlipError: over 5 MB, over 5 pages or 200 000 characters (checked while
     extracting, page by page), a page drawing over MAX_PAGE_GLYPHS glyphs,
+    fonts mapping over MAX_CMAP_CODES codes,
     streams inflating past MAX_INFLATE_STAGE or, together - or run by the
     interpreter, as often as it runs them -, past MAX_INFLATE_TOTAL (« trop
     long »), no text at all (a scan),
@@ -549,6 +671,7 @@ def pdf_text(content: bytes) -> str:
     bound_pdf_decoding()
     bound_pdf_interpreting()
     bound_pdf_glyphs()
+    bound_pdf_cmaps()
     texts, budget = [], None
     try:
         with inflate_budget(MAX_INFLATE_TOTAL) as budget:
@@ -566,7 +689,8 @@ def pdf_text(content: bytes) -> str:
         raise
     except Exception as error:  # noqa: BLE001 - pdfminer's zoo of errors is a French refusal, never a 500
         # However pdfplumber wrapped it (PdfminerException), a decode past
-        # its bound left the budget refused; a page past MAX_PAGE_GLYPHS too.
+        # its bound left the budget refused; a page past MAX_PAGE_GLYPHS too,
+        # and fonts past MAX_CMAP_CODES (an InflateLimit).
         if (budget is not None and budget[0] < 0) or inflate_refused(error) or glyphs_refused(error):
             raise SlipError(TOO_LONG) from None
         raise SlipError(NOT_A_PDF) from None
