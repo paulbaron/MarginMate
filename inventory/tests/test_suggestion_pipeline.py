@@ -243,6 +243,83 @@ class SuggestionOrderTests(TestCase):
         self.assertEqual(apply_rules_to_pending_products(), Counter())
 
 
+class BarSpecificRulesTests(TestCase):
+    """A few rules name an article of the original bar's own catalogue
+    (« Bière Du Moment » for any Corona or Brooklyn, « Fût Felsgold »…): in
+    an espace without that article, « Approuver les suggestions » made one of
+    them for every match. Such a rule answers only where its article exists -
+    looked up as the suggestion's article is (`_resolve_stock_type_match`) -
+    and otherwise the next source does. The generic rules are unchanged."""
+
+    #: A raw name each bar-specific rule matches, and the article it names.
+    SAMPLES = {
+        "CORONA EXTRA 35.5CL": "Bière Du Moment",
+        "FUT 20L FELSGOLD": "Fût Felsgold",
+        "PALETTE EUROPE": "Palette Livraison",
+        "LIMONCELLO TESTBRAND 70CL": "Limoncel",
+        "BLOC FG TESTBRAND 500G": "Foie Gras",
+    }
+
+    def setUp(self):
+        self.supplier = make_supplier(code="GROSSISTE_X", name="Grossiste Exemple")
+
+    def suggestion(self, raw_name):
+        pending = make_product(supplier=self.supplier, raw_name=raw_name)
+        bought(pending)
+        return suggest_for_product(pending)
+
+    def test_they_are_the_ones_flagged(self):
+        from inventory.product_matching_rules import RULES
+
+        flagged = [rule for rule in RULES if rule.bar_specific]
+        self.assertEqual(sorted(rule.stock_type_name for rule in flagged), sorted(self.SAMPLES.values()))
+        for rule in flagged:
+            with self.subTest(article=rule.stock_type_name):
+                # A fixed name - the gate looks that very article up.
+                self.assertEqual(rule.pattern.groups, 0)
+
+    def test_without_its_article_the_next_source_answers(self):
+        suggestions = {raw_name: self.suggestion(raw_name) for raw_name in self.SAMPLES}
+        for raw_name, article in self.SAMPLES.items():
+            with self.subTest(raw_name=raw_name):
+                self.assertNotEqual(suggestions[raw_name]["source"], "rule")
+                self.assertNotEqual(suggestions[raw_name]["stock_type_name"].casefold(), article.casefold())
+        corona = suggestions["CORONA EXTRA 35.5CL"]
+        self.assertEqual((corona["source"], corona["stock_type_name"]), ("fallback", "Corona extra"))
+
+    def test_with_its_article_it_answers_as_before(self):
+        for raw_name, article in self.SAMPLES.items():
+            with self.subTest(raw_name=raw_name):
+                existing = make_stock_type(name=article)
+                suggestion = self.suggestion(raw_name)
+                self.assertEqual(suggestion["source"], "rule")
+                self.assertEqual(suggestion["matched_stock_type_id"], existing.pk)
+                self.assertFalse(suggestion["is_new_stock_type"])
+
+    def test_the_article_is_looked_up_as_the_suggestion_resolves_it(self):
+        """Case aside, as the database compares it: « bière du moment »
+        is the article, « BIÈRE DU MOMENT » is not (SQLite folds the case of
+        ASCII letters only) - and a rule answering there proposed a new
+        article beside it."""
+        make_stock_type(name="BIÈRE DU MOMENT")
+        self.assertEqual(self.suggestion("CORONA EXTRA 35.5CL")["source"], "fallback")
+        kept = make_stock_type(name="bière du moment")
+        suggestion = self.suggestion("BROOKLYN LAGER 33CL")
+        self.assertEqual((suggestion["source"], suggestion["matched_stock_type_id"]), ("rule", kept.pk))
+
+    def test_a_rule_further_down_answers_in_its_place(self):
+        from inventory.product_matching_rules import match_stock_type
+
+        self.assertEqual(match_stock_type("CORONA BITTER 20CL").stock_type_name, "Bitter")
+        make_stock_type(name="Bière du moment")
+        self.assertEqual(match_stock_type("CORONA BITTER 20CL").stock_type_name, "Bière Du Moment")
+
+    def test_the_generic_rules_need_no_article(self):
+        suggestion = self.suggestion("VODKA TESTBRAND 70CL")
+        self.assertEqual((suggestion["source"], suggestion["stock_type_name"]), ("rule", "Vodka"))
+        self.assertTrue(suggestion["is_new_stock_type"])
+
+
 class LineAgainstCopiedFactorTests(TestCase):
     """The neighbour's factor is copied for the same pack - unless the
     product's OWN invoice line says otherwise. A right article at a wrong

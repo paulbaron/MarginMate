@@ -2480,6 +2480,20 @@ suggestions » still takes everything; « Approuver les sûres » takes the
 - `least_confident` answers "low" for an unknown level - nothing unmeasured
   is ever approved in bulk. A rule's reasoning names the word matched and
   the article, in French, never the regex.
+- **A rule naming the original bar's own article answers only where that
+  article exists** (`MatchRule.bar_specific`, 04/10/2026): « Bière Du
+  Moment » for any Corona or Brooklyn, « Fût Felsgold », « Palette
+  Livraison », « Limoncel », « Foie Gras » under « Consommables ». A new bar
+  has no articles, so « Approuver les suggestions » made one of those names
+  for every match. Checked with THE lookup the suggestion is resolved with
+  (`existing_article`: `_normalize_casing`, then `name__iexact` - SQLite
+  folds ASCII case only), memoised per pass (`SuggestionContext.has_article`);
+  otherwise the next rule, or the raw name, answers. A bar-specific rule
+  names a fixed article (no capture group). The generic rules (Vodka, Gin,
+  Tonic, Sirop…, « Casier verre ») are unchanged, and so is the owner's
+  espace wherever those articles exist; one he renamed now falls through to
+  the raw name (the fingerprint holds every article's name, so a stored
+  suggestion is remade).
 - **The benchmark and its counts stay out of the repository** (strict
   leave-one-out: the index rebuilt WITHOUT the judged product, its words out
   of the category classifier; the scratchpad's `loo_pipeline.py` and
