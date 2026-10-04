@@ -33,6 +33,7 @@ from common import DateRange
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.menu import _window_label
 from recipes.models import RecipeSale, SaleDocument
+from recipes.tests.till_support import LADDITION_ACCOUNT
 from tests.factories import make_recipe
 
 WINDOW = {"du": "2026-02-01", "au": "2026-02-28"}
@@ -283,6 +284,7 @@ class SalesByOriginWindowTests(TestCase):
         self.assertNotIn("ignorent la recherche", page)
 
 
+@LADDITION_ACCOUNT
 class ImportCardIsNotTheWindowTests(TestCase):
     """The import card's « Du … au … » is the period to FETCH from the till.
 

@@ -15,6 +15,8 @@ said on its field (`till_file.check_format`, through the form).
 from __future__ import annotations
 
 import io
+import threading
+import uuid
 from dataclasses import dataclass, field
 
 from django.contrib import messages
@@ -25,6 +27,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.text import capfirst
 
+from accounts.tenancy import bound
 from common import file_too_big, read_date
 
 from .forms import TillFormatForm
@@ -332,3 +335,81 @@ def till_format(request, pk):
         "recipes/till_format.html",
         {"fmt": fmt, "form": form, "test": test, "problem": format_problem(fmt)},
     )
+
+
+# -- the upload on « Ventes » ----------------------------------------------------------
+
+#: The upload's fields - the page's HTTP interface.
+UPLOAD_FILE = "fichier"
+UPLOAD_FORMAT = "format"
+UPLOAD_DAY = "jour"
+CHOOSE_A_FILE = "Choisissez un fichier."
+ALREADY_RUNNING = "Une récupération est déjà en cours."
+DAY_UNREAD = "Jour des ventes illisible."
+DAY_NEEDED = "Indiquez le jour des ventes : ce format n'a pas de colonne du jour."
+
+
+def _uploader(request) -> str:
+    user = request.user
+    return (user.get_full_name() or user.first_name or user.get_username() or "").strip()
+
+
+def upload_sales_file(request):
+    """« Importer un fichier de la caisse » (POST): the file checked - its
+    weight, its kind, its choice (L'Addition's export or a format, which
+    must pass the check) and its day - then staged under the espace's
+    imports/ and read by a job, like the fetch: the same status card, cancel
+    and « Données » busy check. Nothing is kept here: the job moves a file
+    read whole into place, and deletes a refused one."""
+    from .menu import sales_list_url
+    from .models import SalesImportJob
+    from .pos.connectors import resolve
+    from .tasks import import_till_file_task, staged_uploads_dir
+
+    back = redirect(sales_list_url(request))
+    if request.method != "POST":
+        return back
+    upload = request.FILES.get(UPLOAD_FILE)
+    if upload is None:
+        messages.error(request, CHOOSE_A_FILE)
+        return back
+    too_heavy = file_too_big(upload)
+    if too_heavy:
+        messages.error(request, too_heavy)
+        return back
+    try:
+        choice = resolve(request.POST.get(UPLOAD_FORMAT, ""), upload.name)
+    except till_file.TillFileError as refusal:
+        messages.error(request, str(refusal))
+        return back
+    posted_day = (request.POST.get(UPLOAD_DAY) or "").strip()
+    day = read_date(posted_day) if posted_day else None
+    if posted_day and day is None:
+        messages.error(request, DAY_UNREAD)
+        return back
+    reads_a_day = choice.laddition or choice.layout.has(till_file.DAY)
+    if day is not None and reads_a_day:
+        messages.error(request, till_file.DAY_GIVEN_TWICE)
+        return back
+    if day is None and not reads_a_day:
+        messages.error(request, DAY_NEEDED)
+        return back
+    # A dead run is reaped first, or one killed thread locks the page out.
+    SalesImportJob.reap_stale()
+    if SalesImportJob.objects.filter(
+        status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
+    ).exists():
+        messages.error(request, ALREADY_RUNNING)
+        return back
+    staged = staged_uploads_dir() / f"{uuid.uuid4().hex}.part"
+    with open(staged, "wb") as handle:
+        handle.writelines(upload.chunks())
+    job = SalesImportJob.objects.create()
+    # bound(): the thread works for this request's tenant - its job row, its
+    # sales, its folders - and closes its connections when it ends.
+    threading.Thread(
+        target=bound(import_till_file_task),
+        args=(job.id, str(staged), request.POST.get(UPLOAD_FORMAT, ""), upload.name, day, _uploader(request)),
+        daemon=True,
+    ).start()
+    return back

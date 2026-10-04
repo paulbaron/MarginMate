@@ -35,6 +35,7 @@ from recipes.models import PosProduct, PosProductDailyQuantity, SalesImportJob
 from recipes.pos import laddition_session as session_module
 from recipes.tasks import import_laddition_sales_task
 from recipes.tests.test_pos_revenue import HEADER, line, write_workbook
+from recipes.tests.till_support import LADDITION_ACCOUNT
 
 JUNE = {"start_date": "2026-06-01", "end_date": "2026-06-30"}
 
@@ -68,12 +69,14 @@ class SalesTabTests(TwoTenantsTestCase):
         self.assertNotIn("LADDITION_EMAIL", page)
         self.assertNotIn(".env", page)
 
+    @LADDITION_ACCOUNT
     def test_the_owner_s_tenant_keeps_the_form(self):
         page = self.tab(self.user_a)
         self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("à configurer", page)
 
 
+@LADDITION_ACCOUNT
 class TriggerTests(TwoTenantsTestCase):
     """The POST that starts the import."""
 

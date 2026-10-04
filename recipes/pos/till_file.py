@@ -749,6 +749,8 @@ def read(source, layout: Layout, *, file_name: str, day: date | None = None, lim
         _close(rows)
     if not reading.rows_read:
         raise TillFileError(NOTHING_READ)
+    # What was passed over, as L'Addition's reader counts it: said in the log.
+    reading.export.skipped = reading.rows_without_day + reading.rows_without_product + reading.rows_without_payment
     return reading
 
 

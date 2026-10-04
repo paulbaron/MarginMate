@@ -239,6 +239,9 @@ VIEW_AREAS = {
     # an employee could rewrite them (recipes/till_views.py).
     "recipes:till_formats": OWNER_ONLY,
     "recipes:till_format": OWNER_ONLY,
+    # An uploaded file writes the till's sales AND payments, which nothing
+    # tells from the till's own: an employee could hide a shortfall.
+    "recipes:upload_sales_file": OWNER_ONLY,
     # A stored file: by the folder it resolves to (`areas_of_file`).
     "accounts:media": EVERYONE,
     # Pages of every login: « Aucune page ouverte », and the password asked

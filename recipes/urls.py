@@ -22,6 +22,7 @@ urlpatterns = [
     path("caisse/ventes/<int:pk>/delete/", views.sales_delete, name="sales_delete"),
     path("caisse/import/", views.sales_import, name="sales_import"),
     path("caisse/import/run/", views.trigger_sales_import, name="trigger_sales_import"),
+    path("caisse/import/fichier/", till_views.upload_sales_file, name="upload_sales_file"),
     path("caisse/import/<int:job_id>/status/", views.sales_import_status, name="sales_import_status"),
     path("caisse/import/<int:job_id>/cancel/", views.cancel_sales_import, name="cancel_sales_import"),
     path("caisse/formats/", till_views.till_formats, name="till_formats"),
