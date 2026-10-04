@@ -487,6 +487,19 @@ class StalePageTests(LinkPage, TestCase):
                 self.act(self.debit, "unlink", **posted)
                 self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0003"})
 
+    def test_an_unlink_showing_nothing_on_a_line_paying_nothing_changes_nothing(self):
+        """A page drawn before the rows carried what they showed, whose line
+        another tab has since unlinked: nothing to take off, and the line is
+        not turned « settled by hand » (out of the automatic pass) by it."""
+        self.act(self.debit, "link", invoice=[self.third.pk])
+        self.act(self.debit, "unlink", **self.drawn_unlink(self.debit))
+        self.debit.settled_by_hand = False
+        self.debit.save(update_fields=["settled_by_hand"])
+        answer = self.act(self.debit, "unlink")
+        self.debit.refresh_from_db()
+        self.assertFalse(self.debit.settled_by_hand)
+        self.assertContains(self.client.get(answer.url), "changé entre-temps")
+
 
 class DeletedDocumentTests(LinkPage, TestCase):
     def test_a_document_deleted_while_linked_leaves_the_others_and_the_gap(self):

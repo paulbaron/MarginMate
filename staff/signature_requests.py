@@ -821,8 +821,9 @@ REPEATED_EVENTS_PER_HOUR = 10
 #: And at most this many of a kind and detail in a request's whole life: ten
 #: an hour from a script changing its device at every hit were still
 #: ~10 000 hash-chained events over a link's fortnight, and each « Nouveau
-#: lien » or countersignature gives it another. An employee opening his
-#: link once an hour stays far below it.
+#: lien » or countersignature gives it another. An employee opens his link a
+#: handful of times; past the cap, nothing more of that kind is journaled for
+#: the request.
 REPEATED_EVENTS_PER_REQUEST = 200
 
 

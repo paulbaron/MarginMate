@@ -752,9 +752,12 @@ def _unlink_as_shown(line: BankTransaction, shown: set) -> bool:
     The page may be older than a link another tab or « Propositions » made:
     the stale click then took off an invoice the reader never saw on that
     row. Checked in the unlink's own (IMMEDIATE) transaction, like
-    `_unless_linked`.
+    `_unless_linked`. A row is only drawn with « Délier » when it pays
+    something, so nothing shown is a page from before the rows said what they
+    showed (or a crafted POST): refused too, even on a line paying nothing,
+    which `reconcile.unlink` would otherwise turn « settled by hand ».
     """
-    if set(line.payments.values_list("invoice_id", flat=True)) != shown:
+    if not shown or set(line.payments.values_list("invoice_id", flat=True)) != shown:
         return False
     reconcile.unlink(line)
     return True
