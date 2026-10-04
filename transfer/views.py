@@ -116,7 +116,7 @@ TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
 #: archive's settings. A new hosted espace holds only some of them - not the
 #: original bar's UBA, SABBH and WINGSENG (invoices.seeds) - and is new too.
-#: Not OTHER, the AI reading's « Autre (analyse IA) »: invoices/0037 removed
+#: Not OTHER, the AI reading's « Autre (analyse IA) »: invoices/0038 removed
 #: it where nothing named it, and kept it as a supplier of the bar's own
 #: where something did.
 SEEDED_SUPPLIERS = {"METRO", "UBA", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}

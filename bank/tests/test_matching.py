@@ -79,7 +79,7 @@ class NamingTests(SimpleTestCase):
     def test_generic_words_name_nobody(self):
         """ "SCEA", "FILS" and "PARIS" are in half the payees on a statement;
         « Autre (analyse IA) » is the name an espace may keep for the removed
-        AI reading's supplier (invoices/0037)."""
+        AI reading's supplier (invoices/0038)."""
         self.assertEqual(supplier_words("Autre (analyse IA)", "OTHER"), frozenset())
         self.assertEqual(supplier_words("SCEA Plou & Fils"), frozenset({"PLOU"}))
 

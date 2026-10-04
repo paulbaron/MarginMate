@@ -20,9 +20,9 @@ An import writes the archive's state; it is not an act in a supplier's
 history: no `SupplierChange` is recorded (§6.6).
 
 An archive written before 04/10/2026 carries the AI reading's pseudo-supplier
-(`RETIRED_AI_CODE`, `RETIRED_AI_READER`), which invoices/0037 removed with the
+(`RETIRED_AI_CODE`, `RETIRED_AI_READER`), which invoices/0038 removed with the
 reading: it is never created again as such, and its reader key is never
-written (`_retired_ai`). Where 0037 kept it here - something named it - the
+written (`_retired_ai`). Where 0038 kept it here - something named it - the
 record is that supplier's, read as an ordinary one's. Where it is gone, it
 comes back as an ordinary supplier only when this run imports something
 filed under it (`_filed_under_by_this_run`), else it is left out, said. No
@@ -372,7 +372,7 @@ class SuppliersSection(Section):
                     block(ctx, code)
                 continue
             if _retired_ai(record):
-                # Kept here by 0037 (something named it), it is that
+                # Kept here by 0038 (something named it), it is that
                 # supplier, ordinary: matched by its code like any other -
                 # left out, « Remplacer » would have pruned it, and the rows
                 # naming it with it.

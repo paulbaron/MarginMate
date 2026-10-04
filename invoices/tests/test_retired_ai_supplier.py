@@ -1,10 +1,11 @@
-"""invoices/0037: the AI reading is gone (04/10/2026), and so is its
+"""invoices/0038: the AI reading is gone (04/10/2026), and so is its
 pseudo-supplier « Autre (analyse IA) » - code OTHER, reader key LLM, seeded by
 invoices/0002 - wherever nothing names it. Where something does - a document,
 a product, a payee name learnt, a known price, a line of its history, a slip
-format, a pickup, another supplier's history - it stays as an ordinary
-supplier, its name and every row naming it as they are. No other supplier is
-touched, and going back changes nothing.
+format, a pickup, another supplier's history, an article left out of its
+shopping list - it stays as an ordinary supplier, its name and every row
+naming it as they are. No other supplier is touched, and going back changes
+nothing.
 
 Run the way the repository runs a data migration: its function, on the
 models as they stand (`django.apps.apps`). Data invented."""
@@ -20,19 +21,20 @@ from django.db.models import ForeignObjectRel
 from django.test import TestCase
 
 from bank.models import CounterpartyAlias
+from inventory.models import ShoppingExclusion
 from invoices.models import InvoiceType, ShopItemPrice, Supplier, SupplierChange
 from returnables.models import Pickup
 from returnables.tests.support import make_format
-from tests.factories import make_invoice, make_product, make_supplier
+from tests.factories import make_invoice, make_product, make_stock_type, make_supplier
 
-MIGRATION = importlib.import_module("invoices.migrations.0037_retire_ai_reading_supplier")
+MIGRATION = importlib.import_module("invoices.migrations.0038_retire_ai_reading_supplier")
 SEED = importlib.import_module("invoices.migrations.0002_seed_suppliers")
-NODE = ("invoices", "0037_retire_ai_reading_supplier")
-#: Every (model, field) pointing at Supplier when 0037 was written
+NODE = ("invoices", "0038_retire_ai_reading_supplier")
+#: Every (model, field) pointing at Supplier when 0038 was written
 #: (04/10/2026) - CASCADE, SET_NULL and PROTECT alike, the hidden
 #: SupplierChange.other_supplier included. A literal, never the live model:
 #: see `MigrationShapeTests`.
-RELATIONS_AT_0037 = {
+RELATIONS_AT_0038 = {
     ("inventory.product", "supplier"),
     ("invoices.supplierchange", "supplier"),
     ("invoices.supplierchange", "other_supplier"),
@@ -42,6 +44,8 @@ RELATIONS_AT_0037 = {
     ("bank.counterpartyalias", "supplier"),
     ("returnables.slipformat", "supplier"),
     ("returnables.pickup", "supplier"),
+    # GitHub's main, merged before 0038 shipped (inventory 0021).
+    ("inventory.shoppingexclusion", "supplier"),
 }
 
 
@@ -67,7 +71,7 @@ def relations_to(model) -> set[tuple[str, str]]:
 class NewDatabaseTests(TestCase):
     def test_a_database_migrated_from_scratch_holds_no_ai_supplier(self):
         """The test database is migrated as the _template and every new
-        espace are: 0002 seeds it, 0037 takes it away - nothing names it."""
+        espace are: 0002 seeds it, 0038 takes it away - nothing names it."""
         self.assertFalse(Supplier.objects.filter(code="OTHER").exists())
         self.assertFalse(Supplier.objects.filter(parser_key="LLM").exists())
         self.assertTrue(Supplier.objects.filter(code__in=["METRO", "UBA"]).count() == 2)
@@ -119,6 +123,10 @@ class RetireTests(TestCase):
             ),
             "un format de bon": lambda: make_format(name="Format essai", supplier=self.ai),
             "une reprise": lambda: Pickup.objects.create(date=date(2026, 9, 1), supplier=self.ai),
+            # « Pas ici » on « Prévoir les courses » (GitHub's main, inventory 0021): a CASCADE.
+            "un article écarté de ses courses": lambda: ShoppingExclusion.objects.create(
+                stock_type=make_stock_type(name="Article essai"), supplier=self.ai
+            ),
         }
         for what, make in makers.items():
             with self.subTest(what=what):
@@ -164,15 +172,15 @@ class MigrationShapeTests(TestCase):
 
     def test_the_model_it_walks_knows_every_relation_to_a_supplier_of_its_day(self):
         """What the migration sees is the state its dependencies build: on
-        04/10/2026, every relation to a supplier (`RELATIONS_AT_0037`) - one
+        04/10/2026, every relation to a supplier (`RELATIONS_AT_0038`) - one
         left out is never asked, and a CASCADE takes its rows.
 
         Compared with that day's list, never with today's model. Once
-        shipped, 0037 runs in every espace and is never edited: a key to
+        shipped, 0038 runs in every espace and is never edited: a key to
         Supplier added by a later migration is none of its business, and a
         dependency added to it then would stop every espace that applied it
         (InconsistentMigrationHistory, `migrate_tenants` failing at the
         deploy)."""
         state = MigrationLoader(connection).project_state(NODE, at_end=False)
         walked = relations_to(state.apps.get_model("invoices", "Supplier"))
-        self.assertEqual(walked, RELATIONS_AT_0037)
+        self.assertEqual(walked, RELATIONS_AT_0038)

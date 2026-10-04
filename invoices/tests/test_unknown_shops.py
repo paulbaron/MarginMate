@@ -142,7 +142,7 @@ class CreateShopTests(TestCase):
                 self.assertEqual(create_shop(name).code, code)
 
     def test_never_the_code_of_the_removed_ai_reading_s_supplier(self):
-        """invoices/0037 took OTHER away; an archive written before
+        """invoices/0038 took OTHER away; an archive written before
         04/10/2026 still carries « Autre (analyse IA) » under it, and
         « Données » pairs a supplier by its code - a shop of that code would
         take that supplier and its documents."""

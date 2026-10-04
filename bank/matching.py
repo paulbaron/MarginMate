@@ -200,7 +200,7 @@ GENERIC_WORDS = frozenset(
         "FRANCE",
         "PARIS",
         # « Autre (analyse IA) », code OTHER: the name the removed AI
-        # reading's supplier keeps where invoices/0037 found something
+        # reading's supplier keeps where invoices/0038 found something
         # naming it - and words any payee may print.
         "AUTRE",
         "ANALYSE",

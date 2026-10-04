@@ -1068,10 +1068,10 @@ Si la page Identifiants avait une clé d'analyse IA enregistrée, elle la propos
 (« Effacer ANTHROPIC_API_KEY »). Si votre `.env` contient encore `ANTHROPIC_API_KEY`, supprimez la
 ligne.
 
-Cette version ajoute quatre migrations (`bank` 0009, `recipes` 0018, `invoices` 0037 et `accounts`
-0004) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
-qui est déjà dans votre espace ne change de sens ; `invoices` 0037 retire le fournisseur de l'analyse
-IA comme dit ci-dessus, et `accounts` 0004 ne change que le texte d'aide d'une case de
+Cette version ajoute quatre migrations (`bank` 0009, `recipes` 0019, `invoices` 0038 et `accounts`
+0005) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
+qui est déjà dans votre espace ne change de sens ; `invoices` 0038 retire le fournisseur de l'analyse
+IA comme dit ci-dessus, et `accounts` 0005 ne change que le texte d'aide d'une case de
 l'administration.
 
 ## Limites connues

@@ -12,7 +12,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("recipes", "0017_posdailypayment"),
+        ("recipes", "0018_auto_sales_import"),
     ]
 
     operations = [

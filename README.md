@@ -23,7 +23,7 @@ and keep a live view of stock quantity/value.
     `cecina.py`, each with a `label`) and the tills configured for some
     shops. The registry is `registry.py`. (The AI reader and its « Autre
     (analyse IA) » supplier were removed on 04/10/2026, never used:
-    migration invoices/0037.)
+    migration invoices/0038.)
   - `einvoice.py` - electronic invoices (Factur-X, UBL, CII), read as data,
     to the cent: since 1 September 2026 suppliers bill through an approved
     platform; the bar downloads them there and drops them in Achats (the

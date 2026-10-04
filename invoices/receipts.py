@@ -968,7 +968,7 @@ def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Ren
 
 
 #: Codes never given to a new shop: OTHER was the AI reading's
-#: pseudo-supplier (invoices/0037). An archive written before 04/10/2026
+#: pseudo-supplier (invoices/0038). An archive written before 04/10/2026
 #: still carries it, and « Données » pairs a supplier by its code - a shop
 #: named « Other » would take that archive's « Autre (analyse IA) » and the
 #: documents filed under it (transfer/sections/suppliers.py).

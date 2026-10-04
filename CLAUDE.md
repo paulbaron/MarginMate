@@ -6746,7 +6746,7 @@ unmatched).
 A bar whose till is not L'Addition - or that has old exports to bring - uploads
 its till's export on « Ventes » (« Importer un fichier de la caisse »). **No
 till is written in the code**: how its export is laid out is a `TillFormat`
-(migration `recipes/0018`, a table only) the bar describes on « Formats des
+(migration `recipes/0019`, a table only) the bar describes on « Formats des
 fichiers de caisse » (`/recipes/caisse/formats/`, `recipes/till_views.py`),
 read by the pure `till_file.read` into the very `ParsedExport` L'Addition's
 reader returns, then written by `store_reading`. L'Addition's own « Lignes de
@@ -6900,12 +6900,14 @@ difference a conflict under « Fusionner » and replaced under « Remplacer »
 (whose prune deletes what the archive does not name, of a list it said),
 every format written through the model's check, its refusal in French.
 
-- Migration `recipes/0018`, **WRITTEN and left to be applied** (the owner,
+- Migration `recipes/0019`, **WRITTEN and left to be applied** (the owner,
   after a backup, `migrate_tenants`; `serve` refuses to start until then).
-  One new empty table: nothing existing is read or rewritten, in any espace
-  or the `_template`. Until it is applied, « Ventes » (it lists the formats
-  for the owner), the formats pages and « Données » (it counts them) answer
-  « no such table ».
+  Written as 0018 and renumbered after GitHub's main's
+  `recipes/0018_auto_sales_import`, which it depends on. One new empty
+  table: nothing existing is read or rewritten, in any espace or the
+  `_template`. Until it is applied, « Ventes » (it lists the formats for the
+  owner), the formats pages and « Données » (it counts them) answer « no
+  such table ».
 
 Not done, the owner's call: ready-made formats per till (no real export of
 any - collect one at onboarding, build its format with « Tester », publish it
@@ -9608,7 +9610,7 @@ code (a till answers only where its row is, `receipts.configured_tills`;
 `create_shop` never takes a registry key as a code: « Sabbh » is
 `SABBH_2` - nor a retired one, `RETIRED_CODES`: « Other » is `OTHER_2`).
 The seed migrations and `SEEDED_SOURCE` are unchanged, and
-`SEEDED_SUPPLIERS` lost only OTHER (invoices/0037, below): a new espace holds
+`SEEDED_SUPPLIERS` lost only OTHER (invoices/0038, below): a new espace holds
 a subset of the seeds. **A later data
 migration must not count on them**: `migrate_tenants` runs it in every
 espace, hosted ones included, so it looks UBA, SABBH, WINGSENG, « UBA -
@@ -9628,20 +9630,25 @@ otherwise its `assert_not_called()` on the mailbox proves nothing.
 peux supprimer la clé IA »): the « Autre (analyse IA) » choice of the PDF
 import (`parsers/llm_fallback.py`, the Anthropic SDK and its key
 `ANTHROPIC_API_KEY`, its « Identifiants » card), and the pseudo-supplier
-0002 seeded for it (code OTHER, reader key LLM). Migration `invoices/0037`
+0002 seeded for it (code OTHER, reader key LLM). Migration `invoices/0038`
 deletes that supplier wherever no row names it - every relation to Supplier
 walked, CASCADE and hidden ones included - and keeps it as an ordinary
 supplier, its reader key emptied, where something does; no other supplier
-is touched. Migrations `invoices/0037` and `accounts/0004` (which rewords
+is touched. Migrations `invoices/0038` and `accounts/0005` (which rewords
 the admin's help of « utilise les accès du serveur », no SQL), **WRITTEN and
 left to be applied** (the owner, after a backup, `migrate_tenants`; `serve`
-refuses to start until then). **0037's test compares the relations it walks
-with that day's literal list** (`RELATIONS_AT_0037`), never with the live
-model: a key to Supplier added later is none of its business, and a
-dependency added to it once applied is an InconsistentMigrationHistory in
-every espace.
+refuses to start until then). They were written as `invoices/0037` and
+`accounts/0004` and renumbered when GitHub's main brought its own
+(`0037_auto_gather`, `0004_pushdevice`, already published): 0038 depends on
+`0037_auto_gather` and on the latest migration of every app pointing at
+Supplier then - bank 0009, inventory 0021 (its `ShoppingExclusion`),
+returnables 0002 -, 0005 on `0004_pushdevice`. **0038's test compares the
+relations it walks with that day's literal list** (`RELATIONS_AT_0038`, the
+merge's `inventory.ShoppingExclusion` included), never with the live model:
+a key to Supplier added later is none of its business, and a dependency
+added to it once applied is an InconsistentMigrationHistory in every espace.
 - **« Données »** never creates it again from an older archive, nor writes
-  its reader key (`sections/suppliers._retired_ai`). Kept here by 0037, the
+  its reader key (`sections/suppliers._retired_ai`). Kept here by 0038, the
   record is that supplier's, matched by its code as any other (left out,
   « Remplacer » pruned it and what named it). Gone here, it comes back as an
   ordinary supplier only when the run imports something filed under it -

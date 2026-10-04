@@ -729,7 +729,7 @@ OLD_AI = {"code": "OTHER", "name": "Autre (analyse IA)", "parser_key": "LLM", "i
 
 class OlderArchiveTests(TestCase):
     """An archive written before 04/10/2026 still carries « Autre (analyse
-    IA) » (OTHER, reader LLM), which invoices/0037 removed with the reading:
+    IA) » (OTHER, reader LLM), which invoices/0038 removed with the reading:
     it is never created again as such. Left out when nothing the run imports
     is filed under it; otherwise an ordinary supplier, its reader key empty -
     so nothing of the archive is lost. Every other record imports as
@@ -738,7 +738,7 @@ class OlderArchiveTests(TestCase):
     def old_archive(self, keys, *, filed=False, priced=False, payee=False, paid=False):
         """Export `keys` from this database holding the pseudo-supplier as
         0002 seeded it, as an older version did, then take it away with
-        everything naming it, as 0037 does in the database imported into.
+        everything naming it, as 0038 does in the database imported into.
         Under it: a document when `filed`, a known price when `priced`, a
         payee name learnt when `payee`, and when `paid` a document a bank
         line pays."""
@@ -804,7 +804,7 @@ class OlderArchiveTests(TestCase):
         self.assertEqual((report.conflicts, report.skipped), ([], []))
 
     def test_into_an_espace_that_kept_it_it_stays_an_ordinary_supplier(self):
-        """Something named it here, so 0037 kept it with its reader key
+        """Something named it here, so 0038 kept it with its reader key
         emptied: the archive's key is no conflict, and is never written."""
         reader = self.old_archive({"fournisseurs", "factures"}, filed=True)
         kept = Supplier.objects.create(**{**OLD_AI, "parser_key": ""})
@@ -822,7 +822,7 @@ class OlderArchiveTests(TestCase):
 
     def test_its_own_known_prices_bring_it_as_an_ordinary_supplier(self):
         """Its prices travel in its own record: left out, they were dropped
-        with no line saying so - where 0037 keeps a supplier a price
+        with no line saying so - where 0038 keeps a supplier a price
         names."""
         for strategy in (MERGE, REPLACE):
             with self.subTest(strategy=strategy):
@@ -864,8 +864,8 @@ class OlderArchiveTests(TestCase):
         self.assertEqual(kept.parser_key, "")
         self.assertEqual(list(BankTransaction.objects.values_list("payments__invoice__supplier", flat=True)), [kept.pk])
 
-    def test_replace_never_prunes_the_one_0037_kept_nor_what_names_it(self):
-        """0037 kept it here, a payee name naming it: an older archive's
+    def test_replace_never_prunes_the_one_0038_kept_nor_what_names_it(self):
+        """0038 kept it here, a payee name naming it: an older archive's
         record of it, with nothing filed under it, is that supplier's. Left
         out, « Remplacer » took it for one the archive does not have and
         deleted it - its payee name with it (CASCADE)."""
@@ -882,7 +882,7 @@ class OlderArchiveTests(TestCase):
                 self.assertFalse([note for note in report.notes if "analyse IA a été retirée" in note])
 
     def test_no_new_shop_takes_its_code(self):
-        """So OTHER here is always the supplier 0037 kept, and an archive's
+        """So OTHER here is always the supplier 0038 kept, and an archive's
         record of it is matched by its code."""
         from invoices.receipts import RETIRED_CODES
 
@@ -918,7 +918,7 @@ class OlderArchiveTests(TestCase):
         self.assertIn(section.AI_LEFT_OUT.format(name="Autre (analyse IA)"), report.notes)
 
     def test_an_archive_written_since_carries_it_as_any_supplier(self):
-        """Kept as an ordinary supplier by 0037, it is exported as one: no
+        """Kept as an ordinary supplier by 0038, it is exported as one: no
         reader key, no note."""
         payloads = {"fournisseurs": {"suppliers": [{**OLD_AI, "parser_key": ""}]}}
         from transfer.archive import ArchiveReader

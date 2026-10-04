@@ -3,7 +3,7 @@
 The seed migrations write the same suppliers into every database - the test
 one, the `_template` every new espace is copied from, and each espace:
 Metro and UBA (invoices/0002, which also seeded the AI reading's « Autre
-(analyse IA) », removed by 0037 where nothing named it), UBA's mailbox source
+(analyse IA) », removed by 0038 where nothing named it), UBA's mailbox source
 « UBA - Factures » (0007), the four shops whose tills are configured in the
 code (0012: Franprix, Monoprix, Sabbh Oriental, Wing Seng) and UBA's slip
 format « UBA — bon du livreur » (returnables/0002).
@@ -20,7 +20,7 @@ those codes (receipts.create_shop), and a supplier brought back under one -
 a « Données » archive of the original bar - is read as before.
 
 The template, the seed migrations and « Données »'s `SEEDED_SUPPLIERS` /
-`SEEDED_SOURCE` are left as they are (but for OTHER, which 0037 takes out
+`SEEDED_SOURCE` are left as they are (but for OTHER, which 0038 takes out
 of every database): a new espace holds a subset of the seeds, so it is
 still a new database there. The owner's espace was adopted,
 never provisioned: nothing here reaches it.
