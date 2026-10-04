@@ -32,6 +32,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
+from invoices.scrapers import chrome
 from recipes.integration import refusal, till_allowed
 
 REPORTING_ROOT = "https://reporting.laddition.com"
@@ -116,7 +117,9 @@ def navigate(driver, url: str, log=print, attempts: int = NAVIGATION_ATTEMPTS, s
 def build_driver(download_dir: str) -> webdriver.Chrome:
     os.makedirs(download_dir, exist_ok=True)
     options = webdriver.ChromeOptions()
-    if settings.SCRAPER_HEADLESS:
+    # Headless whatever the settings outside the platform owner's espace: a
+    # visible window would open on the server's desktop (scrapers/chrome.py).
+    if chrome.headless(settings.SCRAPER_HEADLESS):
         options.add_argument("--headless=new")
     options.add_experimental_option(
         "prefs",
@@ -276,11 +279,13 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
     Refused (LadditionNotAllowed) unbound, before the browser starts.
     """
     _refuse_unless_allowed()
-    driver = build_driver(download_dir)
-    try:
-        open_report(driver, path, log=log)
-        yield driver
-    finally:
-        # Never let a teardown failure mask the real error.
-        with contextlib.suppress(Exception):
-            driver.quit()
+    # One of the server's browsers, or a refusal at once (scrapers/chrome.py).
+    with chrome.browser_slot(refused=LadditionAuthError):
+        driver = build_driver(download_dir)
+        try:
+            open_report(driver, path, log=log)
+            yield driver
+        finally:
+            # Never let a teardown failure mask the real error.
+            with contextlib.suppress(Exception):
+                driver.quit()
