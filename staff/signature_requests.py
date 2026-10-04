@@ -27,7 +27,7 @@ or a French refusal (`RequestError` and its kinds).
    employer handed over while it can still be typed. The method recorded
    (`identification`) is the one of the code he TYPED, set when he types it
    - never by a code merely issued. A verified code is remembered in HIS
-   session, for THIS request only (`is_identified`).
+   session, for THIS request only, for an hour (`is_identified`).
 4. **He signs** (`sign_for_employee`): the certification ticked, his drawing
    checked (`signing.clean_signature_png`), the frozen file checked against
    its hash, then `signing.sign_as_employee` with a timestamp. No timestamp
@@ -112,6 +112,10 @@ Identification = SignatureRequest.Identification
 
 LINK_VALIDITY = timedelta(days=14)
 CODE_VALIDITY = timedelta(minutes=15)
+#: How long a code typed identifies his session (`is_identified`): time to
+#: read his month and sign - not the session's two weeks, on a phone he may
+#: share (« Cache-Control: no-store »).
+IDENTIFICATION_VALIDITY = timedelta(hours=1)
 CODE_MAX_ATTEMPTS = 5
 CODES_PER_HOUR = 3
 CODE_DIGITS = 6
@@ -909,9 +913,12 @@ def _session_key(request) -> str:
     return f"staff-signature-identified-{request.uuid}"
 
 
-def is_identified(session, request: SignatureRequest) -> bool:
-    """Whether THIS session verified a code for THIS request."""
+def is_identified(session, request: SignatureRequest, now=None) -> bool:
+    """Whether THIS session verified a code for THIS request, within
+    `IDENTIFICATION_VALIDITY`."""
     if request.code_verified_at is None:
+        return False
+    if _now(now) - request.code_verified_at > IDENTIFICATION_VALIDITY:
         return False
     return session.get(_session_key(request)) == _moment(request.code_verified_at)
 
@@ -1035,7 +1042,7 @@ def sign_for_employee(
     certified and the authority that issued his certificate."""
     now = _now(now)
     request = _waiting(request, now)
-    if not is_identified(session, request):
+    if not is_identified(session, request, now):
         raise IdentificationRequired(
             "Identifiez-vous d'abord avec le code à usage unique, sur cette page, avant de signer."
         )

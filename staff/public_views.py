@@ -24,8 +24,8 @@ What protects it, and what each view keeps to:
   to the owner, and are rendered without the context processors (no
   messages of the owner's session, no counts of anything).
 * **The one-time code** (`check_code`), remembered in HIS session for THIS
-  request only (`is_identified`); the session's key changes once it is
-  verified. Signing needs it; reading the month and the PDF do not - and
+  request only, for an hour (`is_identified`); the session's key changes
+  once it is verified. Signing needs it; reading the month and the PDF do not - and
   the PDF stays so on purpose (security audit ANON-6, 29/09): the page the
   link opens shows everything the PDF holds, and once he has signed no code
   can be issued, while « Voir le PDF » and his copy stay offered until the

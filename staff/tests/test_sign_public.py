@@ -574,6 +574,21 @@ class SigningTests(PublicCase):
         self.assertIn(public_views.IDENTIFY_FIRST, self.text(answer))
         self.assertEqual(self.refresh().status, Status.PENDING)
 
+    def test_a_code_typed_hours_ago_signs_nothing(self):
+        """A shared phone: he typed his code and closed the tab; whoever
+        opens the link from the history later is asked for a code again."""
+        page = self.identify()
+        self.assertIn(public_views.CODE_VERIFIED, self.text(page))
+        later = timezone.now() + requests_.IDENTIFICATION_VALIDITY + timedelta(minutes=1)
+        with mock.patch.object(requests_, "_now", lambda now=None: now or later):
+            again = self.get()
+            self.assertNotIn(public_views.CODE_VERIFIED, self.text(again))
+            self.assertNotIn(self.route("staff:sign_submit"), self.html(again))
+            answer = self.sign(page)
+        self.assertEqual(answer.status_code, 403)
+        self.assertIn(public_views.IDENTIFY_FIRST, self.text(answer))
+        self.assertEqual(self.refresh().status, Status.PENDING)
+
     def test_after_countersigning_the_final_copy(self):
         self.sign(self.identify())
         request = requests_.countersign_request(self.refresh(), employer_signature())

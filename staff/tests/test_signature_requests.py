@@ -340,7 +340,7 @@ class CodeTests(RequestCase):
         request, _token = self.create()
         code = requests_.issue_code(request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
         requests_.check_code(request, f" {code[:3]} {code[3:]} ", self.session, now=NOW, ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW))
         request.refresh_from_db()
         self.assertEqual(request.code_verified_at, NOW)
         self.assertEqual(request.code_hash, "")
@@ -379,7 +379,34 @@ class CodeTests(RequestCase):
             ip=IP,
             user_agent=PHONE,
         )
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=30)))
+
+    def test_a_verified_code_identifies_for_an_hour_only(self):
+        """Not for the session's two weeks: on a shared phone, whoever
+        reopens the link days later must not sign in his name."""
+        request, _token = self.create()
+        self.identified(request)
+        request.refresh_from_db()
+        window = requests_.IDENTIFICATION_VALIDITY
+        self.assertEqual(window, dt.timedelta(hours=1))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + window))
+        self.assertFalse(requests_.is_identified(self.session, request, now=NOW + window + dt.timedelta(seconds=1)))
+        with self.assertRaises(requests_.IdentificationRequired):
+            requests_.sign_for_employee(
+                request,
+                drawn_signature(),
+                session=self.session,
+                statement_accepted=True,
+                now=NOW + dt.timedelta(hours=2),
+                ip=IP,
+                user_agent=PHONE,
+            )
+        request.refresh_from_db()
+        self.assertEqual(request.status, Status.PENDING)
+        # A new code, a new hour.
+        self.identified(request, now=NOW + dt.timedelta(hours=2))
+        request.refresh_from_db()
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(hours=2, minutes=59)))
 
     def test_three_codes_an_hour(self):
         request, _token = self.create()
@@ -405,7 +432,7 @@ class CodeTests(RequestCase):
         save_month(other_person, JUNE, [])
         other, _token_2 = self.create(person=other_person)
         self.identified(request)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW))
         self.assertFalse(requests_.is_identified(self.session, other))
         with self.assertRaises(requests_.IdentificationRequired):
             requests_.sign_for_employee(
@@ -876,7 +903,7 @@ class CodeChannelTests(RequestCase):
                 )
             self.assertEqual(str(caught.exception), requests_.HANDED_OVER_CODE_WAITING)
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=3), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=3)))
 
     def test_a_handed_over_code_that_can_no_longer_be_used_protects_nothing(self):
         request, _token = self.create()
@@ -895,7 +922,7 @@ class CodeChannelTests(RequestCase):
         requests_.issue_code(request, Identification.CODE_BY_EMAIL, now=NOW)
         code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=1))
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=2), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=2)))
 
     def test_the_owner_still_gives_a_code_after_three_asked_by_email(self):
         request, _token = self.create()
@@ -906,7 +933,7 @@ class CodeChannelTests(RequestCase):
         self.assertIn("3 codes", str(caught.exception))
         code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=4))
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=5), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=5)))
 
     def test_the_code_waiting_and_its_method(self):
         request, _token = self.create()
