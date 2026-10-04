@@ -1405,6 +1405,68 @@ class KeyTests(MediaMixin, TestCase):
         self.assertEqual(archive.safe_member_name(by_number["M-0001"]["source_file"]["member"]), True)
 
 
+class FilelessDocumentsTests(MediaMixin, TestCase):
+    """Two Metro documents typed by hand with no number and no file - the
+    hand-entry page leaves both optional -, the second paid by the bank.
+    Both were the key (METRO, "", "", "", 0): a merge of the espace's own
+    export added a copy of the first, and a restore kept the first alone,
+    the second's payment moved onto it (audit 04/10/2026)."""
+
+    def setUp(self):
+        super().setUp()
+        metro = Supplier.objects.get(code="METRO")
+        typed = []
+        for minute, (name, total) in enumerate((("SAISIE ESSAI A", "10.00"), ("SAISIE ESSAI B", "250.00")), start=1):
+            invoice = imported(unnumbered(metro, invoice_date=date(2026, 9, 1), status=COMPLETE), minute)
+            make_invoice_line(invoice, make_product(metro, name), quantity=D("1"), total_ht=total)
+            typed.append(invoice)
+        payment(typed[1])
+
+    @staticmethod
+    def state() -> list:
+        return sorted(
+            (str(invoice.lines.get().total_ht), invoice.payments.count())
+            for invoice in Invoice.objects.filter(supplier__code="METRO", invoice_number="")
+        )
+
+    def test_they_are_ranked_apart_in_the_archive(self):
+        reader = export_archive({"factures"}, closed=False)
+        self.addCleanup(reader.close)
+        records = reader.section("factures").payload()["invoices"]
+        self.assertEqual(sorted(record["key"]["occurrence"] for record in records), [0, 1])
+
+    def test_a_merge_of_the_own_export_changes_nothing(self):
+        reader = export_archive(registry.closure({"factures", "banque"}, "export"))
+        self.addCleanup(reader.close)
+        run = import_archive(reader, MERGE)
+        documents = run.section("factures").tallies["documents"]
+        self.assertEqual((documents.created, documents.updated, documents.deleted), (0, 0, 0))
+        self.assertEqual(run.section("factures").skipped, [])
+        self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1)])
+
+    def test_twins_whose_files_are_gone_stay_two(self):
+        """Real tickets 262 and 263 (byte-identical, no number, no stored
+        sha) once a PDF is lost: no file sha either."""
+        monoprix = Supplier.objects.get(code="MONOPRIX")
+        for minute in (3, 4):
+            imported(
+                unnumbered(
+                    monoprix, invoice_date=date(2025, 2, 26), source_file=f"invoices/2025/02/perdu_{minute}.pdf"
+                ),
+                minute,
+            )
+        reader = export_archive({"factures"}, closed=False)
+        self.addCleanup(reader.close)
+        run = import_archive(reader, MERGE)
+        self.assertEqual(run.section("factures").tallies["documents"].created, 0)
+        self.assertEqual(Invoice.objects.filter(supplier=monoprix).count(), 2)
+
+    def test_a_restore_brings_both_back_the_payment_on_its_own(self):
+        before, after = round_trip({"factures", "banque"}, REPLACE)
+        self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1)])
+        self.assertEqual(before, after)
+
+
 class TwinProductsTests(MediaMixin, TestCase):
     """Two UNCLASSIFIED products of one supplier differing by an accented
     capital: the app makes them two (SQLite's case-blind comparison is ASCII

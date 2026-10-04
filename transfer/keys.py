@@ -283,7 +283,10 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
     database whatever was asked, so the bank's keys and the stock takes'
     agree with the invoices section's. Two real Monoprix tickets have no
     number, no stored sha and byte-identical files: they are (file sha, 0)
-    and (file sha, 1), and round-trip as two.
+    and (file sha, 1), and round-trip as two. One with nothing to hash
+    either - typed by hand without a file, or its file gone from the disk -
+    is ranked among its supplier's such documents: all were (supplier, "",
+    "", "", 0), and a restore kept one of them (audit 04/10/2026).
 
     `file_shas` (pk → sha) are the shas already known - the invoices
     section has them from the file refs it just wrote - so no file is
@@ -303,14 +306,13 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
         return known[pk]
 
     ranks: dict[int, int] = {}
-    groups: dict[str, int] = defaultdict(int)
-    for pk, _code, number, stored_sha, _imported_at, name in rows:  # already in (imported_at, id) order
+    groups: dict[str | tuple, int] = defaultdict(int)
+    for pk, code, number, stored_sha, _imported_at, name in rows:  # already in (imported_at, id) order
         if number:
             continue
-        fallback = stored_sha or sha_of(pk, name)
-        if fallback:
-            ranks[pk] = groups[fallback]
-            groups[fallback] += 1
+        fallback = stored_sha or sha_of(pk, name) or ("no file", code)
+        ranks[pk] = groups[fallback]
+        groups[fallback] += 1
 
     if invoices is None:
         wanted = None
@@ -355,6 +357,9 @@ class InvoiceIndex:
        the importer's own dedupe.
     3. the file's sha of invoices with no stored sha, rank `occurrence`;
        hashed lazily, on the first miss, once per run.
+    4. a key with no number and no sha at all: rank `occurrence` among the
+       supplier's invoices with no number, no stored sha and no file on the
+       disk (invoice_keys ranks them so).
 
     Steps 2 and 3 still run when step 1 finds something: a document whose
     number differs between the databases (a stand-in « YYYYMMDD-total »
@@ -373,7 +378,9 @@ class InvoiceIndex:
         self._by_number: dict[tuple[int, str], int] = {}
         self._by_sha: dict[str, list[int]] = defaultdict(list)
         self._unhashed: dict[int, str] = {}  # pk → file name, invoices with no stored sha
+        self._suppliers: dict[int, int] = {}  # pk → supplier pk, the same invoices
         self._by_file_sha: dict[str, list[int]] | None = None
+        self._fileless: dict[int, list[int]] = defaultdict(list)  # supplier pk → step 4's, with _by_file_sha
         for pk, supplier_id, number, stored_sha, imported_at, name in Invoice.objects.values_list(
             "id", "supplier_id", "invoice_number", "source_sha256", "imported_at", "source_file"
         ):
@@ -390,6 +397,7 @@ class InvoiceIndex:
             self._by_sha[stored_sha].append(pk)
         else:
             self._unhashed[pk] = name or ""
+            self._suppliers[pk] = supplier_id
 
     def _invoice(self, pk: int):
         from invoices.models import Invoice
@@ -417,22 +425,33 @@ class InvoiceIndex:
         ordered = sorted(set(ids), key=self._order.__getitem__)
         return ordered[occurrence] if 0 <= occurrence < len(ordered) else None
 
-    def _by_content(self, key: dict) -> int | None:
-        shas = {sha for sha in (key.get("sha256"), key.get("file_sha256")) if isinstance(sha, str) and sha}
-        if not shas:
-            return None
-        occurrence = key.get("occurrence", 0)
-        if isinstance(occurrence, bool) or not isinstance(occurrence, int):
-            return None
-        found = self._rank([pk for sha in shas for pk in self._by_sha.get(sha, [])], occurrence)
-        if found is not None:
-            return found
+    def _hash_files(self) -> None:
         if self._by_file_sha is None:
             self._by_file_sha = defaultdict(list)
             for pk, name in self._unhashed.items():
                 sha = file_sha256(name)
                 if sha:
                     self._by_file_sha[sha].append(pk)
+                elif not self._numbers[pk]:
+                    self._fileless[self._suppliers[pk]].append(pk)
+
+    def _by_content(self, key: dict) -> int | None:
+        occurrence = key.get("occurrence", 0)
+        if isinstance(occurrence, bool) or not isinstance(occurrence, int):
+            return None
+        shas = {sha for sha in (key.get("sha256"), key.get("file_sha256")) if isinstance(sha, str) and sha}
+        if not shas:
+            if key.get("number"):
+                return None
+            supplier = self.suppliers.resolve(key.get("supplier"))
+            if supplier is None:
+                return None
+            self._hash_files()
+            return self._rank(self._fileless.get(supplier.pk, []), occurrence)
+        found = self._rank([pk for sha in shas for pk in self._by_sha.get(sha, [])], occurrence)
+        if found is not None:
+            return found
+        self._hash_files()
         return self._rank([pk for sha in shas for pk in self._by_file_sha.get(sha, [])], occurrence)
 
     def resolve(self, key: dict, report=None):
