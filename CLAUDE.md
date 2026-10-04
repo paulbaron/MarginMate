@@ -2902,36 +2902,72 @@ its own - the views, the task bodies, each connector last:
   asked, his .env or page stand): the gather card and Consignes offer its
   mailbox sources and slips once `vault.ready(INVOICE_EMAIL_ADDRESS,
   INVOICE_EMAIL_APP_PASSWORD)` (`integrations.mailbox_offered`, ONE
-  `vault.load()` per page), else « Boîte mail : à renseigner sur la page
-  Identifiants. » - a source that could only fail is not ticked at every
-  gather; « Analyse IA » once its key is (`ai_offered`), the upload form
-  refusing it before anything is sent.
+  `vault.load()` per page, pinned by a test on the Achats page), else
+  « Boîte mail : à renseigner sur la page Identifiants. » - a source that
+  could only fail is not ticked at every gather; with nothing else to
+  gather (Metro and the portals are the owner's) the card draws that
+  sentence and the notes in place of the form (`gather_to_fill`). Consignes
+  still shows, and is held by, a gather running whatever the mailbox.
+  « Analyse IA » once its key is (`ai_offered`), the upload form refusing it
+  before anything is sent.
 - **The mailbox's guards** (another bar's unless said):
   - `EmailInvoiceSource.clean` runs the pattern guard
-    (`returnables.patterns.compile_pattern(..., flags=0)`) after the plain
-    `re.compile`, whose « Expression régulière invalide » stays - the form
-    and « Données » alike; the gather and « Tester » match with
-    `invoice_mail_matcher` (case-sensitive and single-line as `re`, the
-    body to 100 000 characters, the source stopped after three timeouts).
-    The owner's patterns are `re`'s, as always.
+    (`returnables.patterns.compile_pattern(..., flags=0, strip=False)`)
+    after the plain `re.compile`, whose « Expression régulière invalide »
+    stays - the form and « Données » alike; the gather and « Tester » match
+    with `invoice_mail_matcher` (case-sensitive and single-line as `re`, not
+    stripped - a trailing space is part of what `re` matched -, the body to
+    100 000 characters, the source stopped after three timeouts), each
+    pattern named in a refusal as the form names it (`PATTERN_LABELS`,
+    `generic_email._guarded_compilers`: « Motif de la source » left the bar
+    guessing which of four failed). A pattern finding something in an empty
+    text keeps every mail: refused with its field's own sentence
+    (`EMPTY_MATCH_REASONS`, « … pour tous les expéditeurs, écrivez @ »),
+    never the slips' one about lines. The owner's patterns are `re`'s.
   - `invoices/scrapers/egress.py`: the IMAP server's name is resolved
     (`egress.resolve`, looked up at each call) before IMAP4_SSL, and
     anything but a public unicast address refused - loopback, private,
-    link-local, CGNAT, multicast, reserved, unspecified, an IPv4-mapped IPv6
-    unwrapped; « Identifiants » refuses a local name (« localhost », a
-    single label, `.local`, `.lan`…). The connection resolves again: a name
-    rebinding in between still meets the TLS check of its certificate.
-  - in every espace, imaplib's `read(size)` of a literal past 50 MB is
-    refused (`generic_email._open_mailbox`, the capped class built at the
-    call so a test's stand-in for IMAP4_SSL still applies).
-  - **`NoNetworkTestCase` refuses `socket.getaddrinfo` of a name** (the
-    machine's own and addresses written as such pass): patch
-    `egress.resolve`, never resolve for real.
+    link-local, CGNAT, multicast, reserved, unspecified; an IPv6 wrapping
+    an IPv4 (IPv4-mapped, 6to4 `2002::/16`, which Python calls global)
+    judged as that IPv4. « Identifiants » refuses a local name
+    (« localhost », a single label, `.local`, `.lan`…). The connection
+    resolves again: a name rebinding in between still meets the TLS check
+    of its certificate.
+  - **Memory** (`generic_email._open_mailbox`, the classes built at the call
+    so a test's stand-in for IMAP4_SSL still applies): in every espace a
+    literal past 50 MB is refused (`MessageTooBig`). Another bar's
+    connection is also held to `MAX_RESPONSE_BYTES` (100 MB) per command's
+    answer - its literals AND its lines, counted from each `send` - and
+    `MAX_SEARCH_BYTES` (500 MB) per search (`_Budgeted`): the cap alone let
+    one FETCH of 150 messages at 49 MB each hold 7 GB, and nothing limited
+    how many 1 MB lines an answer streamed. Its phase 1 asks each message's
+    `RFC822.SIZE` (`SIZED_HEADER_QUERY`), passes over one announced past
+    the cap on its own line (`TOO_BIG_SKIPPED`), and phase 2 fetches by
+    size (`_batches_by_size`: 40 MB a FETCH, a size not said fetched
+    alone). The owner's search sends the same commands as before.
+  - **What a failure says** (`generic_email.failure_said`, in the gather's
+    mailbox and slips lines and « Tester »): another bar never reads the
+    library's words (English, its server's host, a certificate's details -
+    LB-3): the app's own refusals as they are, imaplib/ssl/socket errors as
+    fixed sentences by kind (`LOGIN_REFUSED`, `CERTIFICATE_REFUSED`,
+    `NO_ANSWER`…), anything else `common.SERVER_ERROR`; the line with its
+    traceback goes whole to the server's log (`job_line`). A gather failing
+    as a whole says `error_for_page` there too. The owner's say the
+    exception, as always.
+  - **One « Tester » at a time** for another bar (`views._a_test_runs_here`,
+    stale tests reaped first, `TEST_RUNNING`): each click was a thread
+    signing in to a server it names over the dates it chose. The owner's
+    run as before.
+  - **`NoNetworkTestCase` and `TenancyTestCase` refuse `socket.getaddrinfo`
+    of a name** (the machine's own and addresses written as such pass):
+    patch `egress.resolve`, never resolve for real.
 - **The AI reading** (`parsers/llm_fallback.py`): runs inside the upload's
   request, so `anthropic.Anthropic(api_key, timeout=60, max_retries=0)`
   (Cloudflare answers the browser at 100 s), two process-wide slots taken
-  without waiting (`integrations.AI_BUSY`), every SDK error a fixed French
-  sentence read off the SDK's class names (`_said`) - all
+  without waiting (`integrations.AI_BUSY`) and ONE per other espace
+  (`_ai_slot`, `AI_BUSY_HERE`: one bar's two uploads took both and refused
+  every other bar; the owner's not counted per espace), every SDK error a
+  fixed French sentence read off the SDK's class names (`_said`) - all
   `integrations.AiReadingRefused`, in `receipt_batches.READING_REFUSALS`.
   `MODEL` and the forced `tool_choice` are unchanged: Sonnet 5.5 and Opus 5.5
   refuse a forced tool.
@@ -2940,22 +2976,34 @@ its own - the views, the task bodies, each connector last:
   `browser_slot()`: two sessions for every other espace together, one each,
   never waited for (« Tous les navigateurs du serveur sont occupés … »); the
   owner's not counted. Wired into L'Addition's session only - Metro and the
-  portals are the owner's.
+  portals are the owner's. Another bar with no L'Addition login on its
+  « Identifiants » is refused before a browser starts
+  (`recipes.integration.till_login_missing`, `TILL_LOGIN_MISSING`).
 - **Clean job logs** (`common.job_line`, in `ScrapeJob.append_log`, the text
   of `update_progress` and `SalesImportJob.append_log`): outside the owner's
   espace a line is cut at « Traceback (most recent call last): » and at
   Selenium's « Stacktrace: », a path in the espace's own folder reduced to
-  its file's name, any other absolute path « [fichier du serveur] », and
-  sent whole to the `marginmate.jobs` logger (WARNING) with the espace's
-  folder; a line that was only a traceback is not written. The gather's
-  and the source tests' lines are French.
+  its file's name, any other absolute path « [fichier du serveur] » - a
+  Windows or UNC one whatever it holds (« O'Brien » included), a POSIX one
+  only from a server's folder (`common.POSIX_ROOTS` and the first folder of
+  the server's own: « /v2/shift-details » and « N° /FA/2026/001 » are no
+  file) -, and sent whole to the `marginmate.jobs` logger (WARNING) with
+  the espace's folder; a line that was only a traceback is not written. The
+  gather's and the source tests' lines are French.
 - **Tests**: `invoices/tests/test_tenancy.py::GateTests` pins the
   cross-espace guarantee - the owner's .env values in the settings, another
   bar with nothing typed reaches none of them (Metro refused, the mailbox
-  `MAILBOX_MISSING`, the AI `AI_KEY_MISSING`, L'Addition types nothing:
-  `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
+  `MAILBOX_MISSING`, the AI `AI_KEY_MISSING`, L'Addition types nothing and
+  starts no browser: `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
   `test_ai_reading.py`, `test_chrome_policy.py`, `test_job_logs.py`,
   `accounts/tests/test_credentials_hosted.py`.
+- **Left to the till axis, and marked**: `recipes/templates/recipes/_tab_sales.html`
+  still says « Nécessite LADDITION_EMAIL et LADDITION_PASSWORD dans le
+  fichier .env » to every bar; `recipes/tests/test_tenants.py::
+  test_another_bar_s_tab_names_no_server_variable` is an
+  `expectedFailure` until that paragraph goes - then an unexpected success,
+  which fails the run: take the decorator off at the merge. The branch is
+  merged whole: its commits opened the connectors before hardening them.
 - **Not done, on purpose**: a kill switch per espace, an egress proxy that
   would let the portals open, a server-wide Metro throttle, fair OCR between
   bars, several mailboxes per espace. Every bar's store sits on the owner's
