@@ -470,6 +470,21 @@ class ApproveSureSuggestionsTests(TestCase):
         response = self.client.post(self.url, {"confiance": "haute"})
         self.assertIn("Aucune suggestion sûre", self.message(response))
 
+    def test_a_factor_whose_movement_no_column_holds_is_left_to_classify(self):
+        """0.0001 is a factor; a bottle bought 183.50 EUR is then 1 835 000
+        EUR a unit, which a stock movement cannot store."""
+        product = make_product(
+            supplier=self.supplier,
+            raw_name="RHUM X 70CL",
+            ai_suggestion=suggestion(self.rum, "high", stock_equivalent="0.0001"),
+        )
+        make_invoice_line(product=product, quantity=1, total_ht="183.50")
+        response = self.client.post(self.url, {"confiance": "haute"})
+        product.refresh_from_db()
+        self.assertIsNone(product.stock_type)
+        self.assertIn("facteur de conversion hors limites", self.message(response))
+        self.assertEqual(self.client.get(reverse("inventory:stock_list")).status_code, 200)
+
     def test_approving_everything_still_takes_every_confidence(self):
         products = [
             self.pending("RHUM A 70CL", self.rum, "high"),

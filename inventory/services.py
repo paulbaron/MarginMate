@@ -1,8 +1,11 @@
+from copy import copy
 from datetime import date
 from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import F, Min, Q
+
+from common import format_money
 
 from .models import (
     MovementKind,
@@ -146,6 +149,37 @@ def compute_movement_amounts(invoice_line) -> tuple[Decimal, Decimal]:
     quantity = product_base_amount(invoice_line) * product.stock_equivalent
     unit_cost_ht = (invoice_line.cost_ht / quantity) if quantity else Decimal("0")
     return quantity, unit_cost_ht
+
+
+#: The widest figures StockMovement's columns hold once rounded to their
+#: places: quantity (12,3), unit_cost_ht (10,4). SQLite stores a wider one
+#: without a word and every later read of it raises - the Stock, « Liste »
+#: and Marges pages with it (CLAUDE.md, « A figure wider than the column
+#: behind it is refused, at the door »).
+MOVEMENT_QUANTITY_LIMIT = Decimal("999999999.9995")
+MOVEMENT_UNIT_COST_LIMIT = Decimal("999999.99995")
+
+
+def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal) -> str:
+    """Why `product` cannot be booked with this unit and factor - a French
+    sentence naming the purchase whose movement would not fit its columns -
+    or "" when every one fits. A factor that fits its own column can still
+    divide a line's cost into a unit cost no column holds (0.0001 on a 183 EUR
+    line is 1 835 000 EUR a unit), so this is asked before anything is
+    written, with compute_movement_amounts' own arithmetic."""
+    probe = copy(product)
+    probe.unit = unit
+    probe.stock_equivalent = stock_equivalent
+    for line in product.invoice_lines.filter(is_spread_charge=False):
+        line.product = probe
+        quantity, unit_cost_ht = compute_movement_amounts(line)
+        if abs(quantity) >= MOVEMENT_QUANTITY_LIMIT or abs(unit_cost_ht) >= MOVEMENT_UNIT_COST_LIMIT:
+            return (
+                f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé : un achat de « {product.raw_name} » "
+                f"ferait {format_money(quantity, '.3f')} unités de stock à {format_money(unit_cost_ht, '.4f')} € "
+                "l'unité, plus que MarginMate ne peut enregistrer."
+            )
+    return ""
 
 
 def _fifo_value(lines_with_amounts, counted_quantity: Decimal) -> dict:
@@ -368,6 +402,7 @@ def link_product_to_stock_type(
     refresh_invoice_statuses_for_product(product)
 
 
+@transaction.atomic
 def update_product_conversion(product: Product, unit: str, stock_equivalent: Decimal) -> None:
     """Fixes a product's unit/factor in place, without touching which stock
     type it's linked to - for correcting a wrong conversion directly from
@@ -376,6 +411,9 @@ def update_product_conversion(product: Product, unit: str, stock_equivalent: Dec
     values, so they're dropped and recreated from scratch rather than
     patched - there's no way to "adjust" a past movement's quantity/cost
     without just recomputing it from the underlying invoice line.
+
+    In one transaction: a failure after the delete left the product's
+    purchases out of the stock ledger, silently.
     """
     StockMovement.objects.filter(invoice_line__product=product).delete()
     product.unit = unit

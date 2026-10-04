@@ -71,6 +71,7 @@ from .models import (
 )
 from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
 from .services import (
+    conversion_refusal,
     link_product_to_stock_type,
     merge_stock_types,
     product_base_amount,
@@ -1355,10 +1356,14 @@ def edit_product_conversion(request, product_id):
     product = get_object_or_404(Product, pk=product_id)
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=None)
     if stock_equivalent is None:
-        messages.error(request, "Facteur invalide.")
+        messages.error(request, "Facteur invalide : un nombre positif d'au plus 4 décimales est attendu.")
         return redirect("inventory:stock_list")
     if product.stock_type is None:
         messages.error(request, f"« {product.raw_name} » n'est rangé dans aucun article.")
+        return redirect("inventory:stock_list")
+    refusal = conversion_refusal(product, product.stock_type.unit, stock_equivalent)
+    if refusal:
+        messages.error(request, refusal)
         return redirect("inventory:stock_list")
     # product.unit always mirrors its stock type's unit now (see
     # assign_product) - there's nothing left for a human to choose here
@@ -1448,6 +1453,8 @@ def approve_all_suggestions(request):
             reason = "aucun article identifié"
         elif stock_equivalent is None:
             reason = f"facteur de conversion invalide ({suggestion.get('stock_equivalent')!r})"
+        elif conversion_refusal(product, stock_type.unit, stock_equivalent):
+            reason = f"facteur de conversion hors limites ({suggestion.get('stock_equivalent')!r})"
 
         if reason:
             skip_reasons[reason] += 1
@@ -1487,15 +1494,17 @@ def approve_all_suggestions(request):
 
 
 def _parse_positive_decimal(raw: str, default: Decimal) -> Decimal | None:
-    """Returns the parsed value, `default` if blank, or None if invalid."""
+    """Returns the parsed value, `default` if blank, or None if invalid.
+
+    Valid is what Product.stock_equivalent (10,4) holds, never rounded: a
+    wider factor was stored anyway and every read of the product then raised,
+    so nothing in the app could correct it again. And no NaN or Infinity,
+    which Decimal() takes."""
     raw = raw.strip()
     if not raw:
         return default
-    try:
-        value = Decimal(raw.replace(",", "."))
-    except InvalidOperation:
-        return None
-    return value if value > 0 else None
+    value = read_amount(raw, places=4, digits=10)
+    return value if value is not None and value > 0 else None
 
 
 def assign_product(request, product_id):
@@ -1517,7 +1526,7 @@ def assign_product(request, product_id):
         # classified, the rent became bottles, with a stock movement behind.
         error = f"« {product.raw_name} » est un poste de charge : il ne se range dans aucun article."
     elif stock_equivalent is None:
-        error = "« 1 produit = » doit être un nombre positif."
+        error = "« 1 produit = » doit être un nombre positif d'au plus 4 décimales."
     elif not name:
         error = "Donnez le nom de l'article."
     if error:
@@ -1534,6 +1543,14 @@ def assign_product(request, product_id):
         unit = request.POST.get("new_stock_type_unit") or UnitChoices.UNIT
         if unit not in UnitChoices.values:
             unit = UnitChoices.UNIT
+    else:
+        unit = stock_type.unit
+    # Asked before the new article is made: a refusal writes nothing.
+    refusal = conversion_refusal(product, unit, stock_equivalent)
+    if refusal:
+        messages.error(request, refusal)
+        return _review_panel(request) if _is_htmx(request) else redirect("inventory:stock_list")
+    if created:
         category = request.POST.get("new_stock_type_category", "").strip()
         stock_type = StockType.objects.create(name=name, unit=unit, category=category)
 
