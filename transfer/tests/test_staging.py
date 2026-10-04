@@ -117,6 +117,24 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         self.assertEqual(str(caught.exception), "Export d'associations refusé : il contient un caractère invalide.")
         self.assertEqual(set(staging.staging_dir().iterdir()), before)
 
+    def test_an_old_associations_file_has_its_own_small_bounds(self):
+        """A real one is a few hundred KB. Under the archive's bounds (256 MB,
+        25 million values), « {"products": [[], [], …]} » parsed into some
+        0.9 GB before its shape was even looked at (review, 04/10/2026):
+        refused unread, as not that file, past either of its own."""
+        before = set(staging.staging_dir().iterdir())
+        many = b'{"version": 1, "products": [' + b",".join([b"[]"] * staging.MAX_LEGACY_VALUES) + b"]}"
+        padded = b'{"version": 1, "products": []' + b" " * staging.MAX_LEGACY_BYTES + b"}"
+        for name, raw in (("values", many), ("bytes", padded)):
+            with (
+                self.subTest(name),
+                mock.patch("transfer.staging.json.loads", side_effect=AssertionError("parsed")),
+                self.assertRaises(ArchiveError) as caught,
+            ):
+                staging.stage_upload(SimpleUploadedFile("marginmate-associations.json", raw))
+            self.assertEqual(str(caught.exception), archive.NOT_ZIP_NOR_JSON)
+        self.assertEqual(set(staging.staging_dir().iterdir()), before)
+
     def test_too_big(self):
         upload = upload_of(self.archive_path)
         with mock.patch.object(archive, "MAX_ARCHIVE_BYTES", 10), self.assertRaises(ArchiveError) as caught:

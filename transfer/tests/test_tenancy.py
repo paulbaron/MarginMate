@@ -241,6 +241,40 @@ class OneImportAtATimeTests(TenantTestCase):
         self.assertRedirects(again, url_a, fetch_redirect_response=False)
         self.assertEqual(said(again), [])
 
+    def test_an_upload_is_staged_one_at_a_time_too(self):
+        """Staging parses what was sent - an old associations file whole, an
+        archive's manifest - as much as a preview holds: eight sent at once
+        from tabs or a script filled the server's threads, the guard covering
+        the preview and the import only (review, 04/10/2026)."""
+        with bound_tenant(self.bar_a):
+            path = paths.staging_dir() / "envoyee-par-essai.zip"
+            run_export({"fournisseurs"}, path)
+            sent = path.read_bytes()
+            path.unlink()
+        backup = Path(self.backups_of(self.bar_a)["archive"]).name
+        self.log_in(self.user_a)
+        url = reverse("transfer:data_import")
+        real = staging.stage_upload
+        staged = []
+        during = {}
+
+        def while_a_stages(upload):
+            staged.append(upload)
+            if len(staged) == 1:
+                # A's other tabs, in this thread: their bindings nest into A's.
+                during["upload"] = said(self.client.post(url, {"archive": SimpleUploadedFile("archive.zip", sent)}))
+                during["backup"] = said(self.client.post(reverse("transfer:data_import_backup"), {"nom": backup}))
+            return real(upload)
+
+        with mock.patch("transfer.views.staging.stage_upload", side_effect=while_a_stages):
+            first = self.client.post(url, {"archive": SimpleUploadedFile("archive.zip", sent)})
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(during, {"upload": [views.IMPORT_RUNNING], "backup": [views.IMPORT_RUNNING]})
+        self.assertEqual(said(first), [])
+        with bound_tenant(self.bar_a):
+            self.assertEqual(len(staging.pending()), 1)
+        self.assertNotEqual(first.url, url)  # to the archive staged
+
 
 class FilesTests(TenantTestCase):
     NAME = "invoices/2026/09/meme-nom-essai.pdf"

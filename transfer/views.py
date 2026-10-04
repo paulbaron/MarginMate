@@ -518,8 +518,11 @@ def data_import(request):
             messages.error(request, "Choisissez un fichier à importer.")
             return redirect("transfer:data_import")
         try:
-            stage = staging.stage_upload(upload)
-        except ArchiveError as exc:
+            # Staging parses what was sent (an old associations file, a
+            # manifest): one at a time with the previews (`_one_import`).
+            with _one_import():
+                stage = staging.stage_upload(upload)
+        except (ArchiveError, Busy) as exc:
             messages.error(request, str(exc))
             return redirect("transfer:data_import")
         except OSError as exc:
@@ -580,8 +583,9 @@ def data_import_backup(request):
         messages.error(request, busy)
         return redirect("transfer:data_import")
     try:
-        stage = staging.stage_backup(request.POST.get("nom", ""))
-    except ArchiveError as exc:
+        with _one_import():
+            stage = staging.stage_backup(request.POST.get("nom", ""))
+    except (ArchiveError, Busy) as exc:
         messages.error(request, str(exc))
         return redirect("transfer:data_import")
     return redirect("transfer:data_import_stage", token=stage.token)
@@ -726,8 +730,10 @@ def _one_import():
     refused at once (Busy, IMPORT_RUNNING) rather than queued. Each holds the
     archive's sections parsed - up to about 0.9 GB for a hostile archive
     (archive.py's value budget) - and posted from several tabs, eight could
-    fill the server's threads (review, 04/10/2026). Per espace: another bar
-    never waits on this one."""
+    fill the server's threads (review, 04/10/2026). Staging an upload or a
+    backup takes the same turn: it parses the manifest, or an old
+    associations file whole. Per espace: another bar never waits on this
+    one."""
     key = tenant_key()
     with _imports_lock:
         if key in _imports_running:
