@@ -1288,7 +1288,7 @@ def _lot_of(request):
 
 def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> bool:
     """Store what the page says. Returns whether it was saved."""
-    from .receipts import _describe, learn_identifiers, recheck_after_review
+    from .receipts import _describe, learn_identifiers, recheck_after_review, without_date_problem
 
     document = DOCUMENT_RECEIPT if invoice.is_receipt else DOCUMENT_INVOICE
     stored = {line.pk: line for line in invoice.lines.all()}
@@ -1342,6 +1342,12 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 # with none, the charge came out settled.
                 charge_state(invoice, invoice.printed_total_ttc)
             fields = ["invoice_date", "printed_total_ttc"]
+            # The header form only takes a date between 2000 and today: the
+            # sentence the import left asking for one is answered.
+            message = without_date_problem(invoice.error_message)
+            if message != invoice.error_message:
+                invoice.error_message = message
+                fields.append("error_message")
             doubted = bool(invoice.supplier_doubt)
             if doubted:
                 # Validated here, it is this supplier's: stored before the

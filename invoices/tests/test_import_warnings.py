@@ -90,6 +90,29 @@ class ImportWarningTests(TestCase):
         invoice = parse_and_import(self.path, supplier)
         self.assertIn("Date introuvable", invoice.error_message)
 
+    def test_the_date_typed_in_takes_the_sentence_away_and_keeps_the_rest(self):
+        """The sentence asks for the date; typed in, it is no longer true.
+        What else the import said - the parser read nothing - stays."""
+        invoice = parse_and_import(self.path, make_supplier(code="NOPARSER", parser_key=""))
+        Invoice.objects.filter(pk=invoice.pk).update(
+            error_message="Le parseur X n'a trouvé aucune ligne dans ce document. " + invoice.error_message
+        )
+        url = reverse("invoices:invoice_edit_lines", args=[invoice.pk])
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-05-01",
+            "form-0-product_name": "VIN EXEMPLE",
+            "form-0-quantity": "6",
+            "form-0-total_ht": "30.00",
+            "form-0-vat_rate": "20",
+        }
+        self.assertEqual(self.client.post(url, data).status_code, 302)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.error_message, "Le parseur X n'a trouvé aucune ligne dans ce document.")
+
 
 class EmptyInvoicePageTests(TestCase):
     def test_a_supplier_with_a_parser_is_not_said_to_have_none(self):

@@ -113,6 +113,10 @@ def import_parsed_invoice(
     return invoice
 
 
+#: Said on a supplier's PDF with no date read; taken off once one is typed
+#: in (receipts.without_date_problem).
+PDF_NO_DATE = "Date introuvable dans le document : saisissez-la dans « Corriger les lignes »."
+
 UNREAD_CHARGE = (
     "Le total de ce document n'a pas été lu : le montant de la charge vient de ce qui a pu être lu, "
     "vérifiez-le sur le document."
@@ -758,7 +762,7 @@ def parse_and_import(
         )
     if invoice.invoice_date is None:
         # Undated, it sits outside every stock valuation and the bank match.
-        problems.append("Date introuvable dans le document : saisissez-la dans « Corriger les lignes ».")
+        problems.append(PDF_NO_DATE)
     if problems:
         invoice.error_message = " ".join(problems)
         invoice.status = Invoice.Status.NEEDS_REVIEW
