@@ -5,31 +5,40 @@ and keep a live view of stock quantity/value.
 
 ## Architecture
 
-- **inventory** app: `StockType` (a "type" like Vodka or Gin), `Product` (a
-  specific supplier product like "SOBIESKI VODKA 70CL"), and `StockMovement`
-  (an append-only ledger of stock received). Current stock quantity/value is
+- **inventory** app: `StockType` (an article, like Vodka or Gin), `Product`
+  (a specific supplier product like "SOBIESKI VODKA 70CL"), and
+  `StockMovement` (an append-only ledger). Current stock quantity/value is
   always computed from the ledger, never stored directly, so it can't drift.
-  A `Product` with no `StockType` yet sits in the review queue - "Appliquer
-  les règles" pre-fills it from `product_matching_rules.py` (a hardcoded,
-  regex-based brand/product → stock item table) and `quantity_extraction.py`
-  (a regex-based pack-size/count parser), covering known products instantly;
-  anything neither recognises still needs a manual "Rattacher".
-- **invoices** app: `Supplier`, `Invoice`, `InvoiceLine`, `ScrapeJob`, plus:
-  - `parsers/` - one parser class per supplier PDF layout (`metro.py`,
-    `uba.py`), a registry (`registry.py`), and a last-resort generic parser
-    that asks the Claude API to extract line items (`llm_fallback.py`) for
-    suppliers with no dedicated parser yet.
-  - `scrapers/` - Selenium (Metro) and IMAP (UBA emails) scrapers, ported
-    from the original `ScrapBarInvoices` project.
-  - `tasks.py` - runs both scrapers and imports whatever they find, in a
-    plain background thread (see `invoices/views.py:trigger_gather`) so
-    "Gather new invoices" returns immediately and the page polls a status
-    card for live progress instead of blocking the request.
-
-Recipes, margin tracking, and fixed costs (mentioned as future goals) aren't
-built yet, but the `StockMovement` ledger is designed so that "deduct stock
-when a recipe is sold" can be added later as just another kind of movement,
-without changing anything that exists today.
+  A `Product` with no article yet waits in the « À classer » panel, which
+  suggests one (`product_matching_rules.py`): a product the bar already
+  classified whose name says the same thing, else a hand-written rule table,
+  else the raw name - with a conversion factor from `quantity_extraction.py`.
+  Nothing is filed until a person approves it.
+- **invoices** app: `Supplier`, `Invoice`, `InvoiceLine`, `InvoiceType` (a
+  « source de factures »), `ScrapeJob`, plus:
+  - `parsers/` - the **generic reader** (`generic_receipt.py`), which reads
+    any ticket, scan or PDF for what its numbers do and checks it against
+    its own printed totals: a supplier needs no code of its own. Beside it,
+    a few dedicated readers of one PDF layout (`metro.py`, `uba.py`,
+    `cecina.py`, each with a `label`), the tills configured for some shops,
+    and the AI reader (`llm_fallback.py`, the « Autre (analyse IA) »
+    pseudo-supplier, where an Anthropic key is set). The registry is
+    `registry.py`.
+  - `einvoice.py` - electronic invoices (Factur-X, UBL, CII), read as data,
+    to the cent: since 1 September 2026 suppliers bill through an approved
+    platform; the bar downloads them there and drops them in Achats (the
+    app has no account on any platform).
+  - `scrapers/` - Metro's own module (Selenium), the invoice mailbox
+    (`generic_email.py`: one source per supplier, matched by sender and
+    subject patterns) and customer portals (`website.py`).
+  - `tasks.py` - « Récupérer » runs the sources and imports whatever they
+    find, in a plain background thread (see `invoices/views.py:trigger_gather`)
+    so the page returns immediately and polls a status card for live progress.
+- **recipes** (recipes and the till's sales), **margins** (the « Marges »
+  page), **bank** (statements, recognition, spending, treasury),
+  **returnables** (« Consignes »), **staff** (« Personnel »), **transfer**
+  (« Données »: export, import, clear) and **accounts** (espaces, logins,
+  « Identifiants »).
 
 ## First-time setup
 
@@ -60,13 +69,13 @@ Edit `.env`:
   With DEBUG off, a missing or weak key stops the app from starting.
 - `DJANGO_DEBUG` - `False` by default; `True` on your own machine only (the
   app refuses it beside a public host in `DJANGO_ALLOWED_HOSTS`).
-- `METRO_EMAIL` / `METRO_PASSWORD` - your docs.metro.fr login, needed for the
-  "gather new invoices" button to fetch Metro invoices.
-- `UBA_EMAIL_ADDRESS` / `UBA_EMAIL_APP_PASSWORD` - the Gmail account UBA
-  sends invoices to. Use a Gmail **app password**, not your real password
-  (Google account settings → App passwords, requires 2FA enabled).
-- `ANTHROPIC_API_KEY` - optional, only needed to use "Autre (analyse IA)"
-  when uploading an invoice from a supplier with no dedicated parser.
+- `METRO_EMAIL` / `METRO_PASSWORD`, `INVOICE_EMAIL_ADDRESS` /
+  `INVOICE_EMAIL_APP_PASSWORD` (the mailbox suppliers send invoices to: a
+  Gmail **app password**, not the real password; `UBA_EMAIL_*` are the old
+  names, still read), `ANTHROPIC_API_KEY` (the « Autre (analyse IA) »
+  reader) - all optional. An espace's own accounts are typed on its
+  « Identifiants » page; these lines stand in for the platform owner's espace
+  only.
 
 **Security note:** never put real credentials directly in Python files. The
 original `ScrapBarInvoices/src/Server/ScrapInvoices/ScrapInvoices.py` had a
@@ -135,15 +144,17 @@ data up first (`manage.py backup_data`).
 
 ## Stock item matching
 
-"📋 Appliquer les règles" in the review queue (`/review/`) pre-fills the
-stock-matching form for each pending product without a suggestion yet -
-which stock item it likely belongs to, its unit, and the conversion factor.
-Both are entirely hardcoded/regex-based, not model-generated:
+The « À classer » panel pre-fills, for each product waiting for its
+article, which article it likely belongs to, its unit, and the conversion
+factor. None of it is model-generated:
 
-- `inventory/product_matching_rules.py` - a table of (regex pattern → stock
-  item name, category, unit), e.g. any raw name containing "RHUM" maps to
-  "Rhum" regardless of brand. Add a new tuple here whenever a recurring
-  product keeps landing in the review queue unmatched.
+- `inventory/product_matching_rules.py` - first a product the bar already
+  classified whose name says the same words (learned from that espace's own
+  classifications, so it follows its conventions), then a table of (regex
+  pattern → article name, category, unit), e.g. any raw name containing
+  "RHUM" maps to "Rhum" regardless of brand, then the raw name. A few rules
+  name the original bar's own articles and answer only where that article
+  exists (`bar_specific`).
 - `inventory/quantity_extraction.py` - parses a pack size or count out of
   the raw name (70CL, 1KG, "MPRO 100 GANT LATEX" → 100, ...), cross-checked
   against the invoice line's own colisage/quantity/volume so a pack size
@@ -157,9 +168,8 @@ that's ever worth revisiting with a faster/more capable model - the
 regex-based quantity extraction was already proven more reliable than the
 LLM at that specific job even before the naming side was replaced too.
 
-Either way, this only pre-fills the form; you still confirm/edit and click
-"Rattacher" yourself. Anything neither the rules nor the quantity extractor
-recognise falls through to a normal manual review, same as before.
+Either way, this only pre-fills the form; a person still confirms or edits
+it.
 
 ## Selenium / Chrome
 
@@ -171,10 +181,18 @@ if you need to debug what the scraper sees.
 
 ## Adding a new supplier
 
-1. Add a `Supplier` row (via `/admin/`) with a `code` and a `parser_key`.
-2. If you can write a regex parser for it: add `invoices/parsers/<name>.py`
-   following `metro.py` / `uba.py`, register it with `@register`, add it to
-   `invoices/parsers/__init__.py`, and set `parser_key` to its
-   `supplier_code`.
-3. If not yet: leave `parser_key` blank or set it to `LLM` - manual uploads
-   for that supplier will use the AI-assisted parser instead.
+No code. In Achats, « Fournisseurs » → « + Nouveau fournisseur » (or name it
+while importing its first document). Its tickets, scans and PDFs are read by
+the generic reader and checked against their own totals; its electronic
+invoices (Factur-X, UBL, CII) are read as data. To fetch its invoices, give
+it a « source de factures »: a search of the invoice mailbox (sender and
+subject patterns) or its customer portal, each with its « Lecteur » (the
+generic one unless a dedicated reader is chosen).
+
+A dedicated reader is worth writing only for a layout the generic reader
+measurably misreads: add `invoices/parsers/<name>.py` implementing
+`parse_pages` only (never the PDF reading: `test_parser_contract.py`), with
+its `supplier_code`, a French `label` and `@register`, import it in
+`invoices/parsers/__init__.py`, and test it on hand-written pages copying the
+real layout's structure with invented data. It is then offered in a source's
+« Lecteur ».

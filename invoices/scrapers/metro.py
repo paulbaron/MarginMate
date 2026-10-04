@@ -72,7 +72,7 @@ RESTART_PAUSE_SECONDS = 120
 DATE_FROM_SELECTOR = "input[data-testid='DateInputFieldInputDe']"
 # Metro's firewall judges each sign-in: it refused one after two quiet days,
 # and 31/08 had seen some twenty-five (development testing, mostly). So
-# AdminMate signs in rarely, and leaves Metro alone after a refusal - how
+# MarginMate signs in rarely, and leaves Metro alone after a refusal - how
 # long a block lasts is not known (the 02/09 one was over by 16/09).
 BLOCK_PAUSE = timedelta(days=7)
 REPEAT_BLOCK_WITHIN = timedelta(days=30)  # refused again this soon: twice as long

@@ -5,7 +5,7 @@ unnamed ticket lines are known by (`ShopItemPrice`).
 
 Two things are never an import's or a clear's to touch:
 
-* **Metro's firewall state** (`scrape_*`): when AdminMate last signed in
+* **Metro's firewall state** (`scrape_*`): when MarginMate last signed in
   there, when it was refused, and until when it leaves the site alone.
   Never exported, never written, never reset. A restore that put back an
   older pause, or none, would let the next gather sign in to a site that

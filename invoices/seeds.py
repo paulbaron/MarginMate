@@ -14,8 +14,9 @@ starts without them (`forget_original_bar_suppliers`, one of
 accounts.provisioning.HOSTED_ESPACE_STEPS); Metro (not fetching), the AI
 reader, Franprix, Monoprix and the returnable types stay. Their readers and
 tills stay in the code: a till answers only where its supplier exists
-(receipts.configured_tills), and a supplier made later under those codes is
-read as before.
+(receipts.configured_tills), a shop created from a ticket never takes one of
+those codes (receipts.create_shop), and a supplier brought back under one -
+a « Données » archive of the original bar - is read as before.
 
 The template, the seed migrations and « Données »'s `SEEDED_SUPPLIERS` /
 `SEEDED_SOURCE` are left as they are: a new espace holds a subset of the

@@ -59,7 +59,7 @@ class Supplier(models.Model):
         default=False,
         help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
     )
-    # A site that protects itself (Metro's firewall): when AdminMate last
+    # A site that protects itself (Metro's firewall): when MarginMate last
     # signed in there - noted before the password is sent, so a run that
     # dies still counts - and until when it leaves the site alone after a
     # refusal (scrapers/metro.metro_pause). Kept here, not read from the
@@ -245,8 +245,8 @@ APP_ENV_PREFIXES = (
     "DEFAULT_FROM_EMAIL",
 )
 APP_ENV_REFUSED = (
-    "« {name} » est une variable de l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : "
-    "jamais celle d'un portail"
+    "« {name} » est une variable de l'application elle-même (la boîte mail, la caisse, le module d'un "
+    "fournisseur, l'IA) : jamais celle d'un portail"
 )
 
 
