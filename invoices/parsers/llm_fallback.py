@@ -58,10 +58,12 @@ def _extract_text(pdf_path: str) -> str:
     """Every page's text, through `ocr.pdf_pages`: refused (DocumentTooBig)
     past ocr.MAX_PAGES before a page is read - or the API billed for it -
     and each page released once read (security review of HARDEN-01: this
-    loop had no cap at all)."""
-    from ..ocr import pdf_pages
+    loop had no cap at all); a page drawing too many glyphs is DocumentTooBig
+    too (ocr.bounded_reading)."""
+    from ..ocr import bounded_reading, pdf_pages
 
-    return "\n".join((page.extract_text(y_tolerance=0) or "") for page in pdf_pages(pdf_path))
+    with bounded_reading():
+        return "\n".join((page.extract_text(y_tolerance=0) or "") for page in pdf_pages(pdf_path))
 
 
 class AIReadingRefused(ValueError):

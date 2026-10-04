@@ -59,6 +59,7 @@ from __future__ import annotations
 import math
 import statistics
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -296,6 +297,7 @@ PAGE_TOO_LARGE = (
     "Page trop grande pour être lue (page {number} : {width} × {height} cm) : ce n'est ni un ticket ni une facture."
 )
 IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
+TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères sur une page."
 
 
 class DocumentTooBig(ValueError):
@@ -522,6 +524,29 @@ def pdf_pages(path: str):
                 page.close()
 
 
+@contextmanager
+def bounded_reading():
+    """Around a reader walking `pdf_pages`: what pdfminer stopped (a page
+    past returnables.reading.MAX_PAGE_GLYPHS glyphs, the bound
+    reading.bound_pdf_glyphs puts on every pdfminer reader) is
+    DocumentTooBig, said on the file's line - not the PdfminerException
+    pdfplumber wraps it in, which a reader's caller takes for a broken
+    file. Entered by the caller, not inside `pdf_pages`: the page is read
+    in the caller's loop, never in the generator."""
+    from common import group_thousands
+    from returnables import reading
+
+    try:
+        yield
+    except DocumentTooBig:
+        raise
+    except Exception as error:
+        if reading.glyphs_refused(error):
+            limit = group_thousands(reading.MAX_PAGE_GLYPHS)
+            raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
+        raise
+
+
 def document_text(path: str) -> str:
     """The text a digital document carries, or "" for a photo or a scan.
     Raises DocumentTooBig as `text_layer_pages` does."""
@@ -536,18 +561,20 @@ def text_layer_pages(path: str) -> list[OcrPage | None]:
     says what is wrong with it.
 
     A PDF of more than MAX_PAGES pages raises DocumentTooBig, before any
-    page is read (`pdf_pages`) - never swallowed into « no layer » by the
-    handler below, which would send it on to be rendered."""
+    page is read (`pdf_pages`), and so does a page drawing too many glyphs
+    (`bounded_reading`) - never swallowed into « no layer » by the handler
+    below, which would send it on to be rendered."""
     if not path.lower().endswith(".pdf"):
         return []
     pages: list[OcrPage | None] = []
     try:
-        for page in pdf_pages(path):
-            words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
-            if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
-                pages.append(None)
-                continue
-            pages.append(OcrPage(lines=_text_lines(words)))
+        with bounded_reading():
+            for page in pdf_pages(path):
+                words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+                if sum(len(word["text"]) for word in words) < MIN_TEXT_LAYER_CHARS:
+                    pages.append(None)
+                    continue
+                pages.append(OcrPage(lines=_text_lines(words)))
     except DocumentTooBig:
         raise
     except Exception:  # noqa: BLE001 - pdfminer raises its own zoo for a broken file

@@ -16,6 +16,10 @@
   `InflateLimit` - never a zlib.error, which pdfminer would retry without a
   bound - and the slip is « trop long ». Achats' own pdfplumber pass gets
   the per-stream bound as well.
+- **And what it draws** (`bound_pdf_glyphs`, process-wide too): a character
+  object of about 2 KB for every glyph, so one compressed Tj of 600 000
+  « A » - a 1 KB file - took 1,4 GB. A page stops at MAX_PAGE_GLYPHS
+  (`GlyphLimit`): the slip is « trop long », Achats' reader DocumentTooBig.
 - `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
   lines, what could not be read, the delivery date, the number, the
   delivery-note references, « annule et remplace », the printed total, the
@@ -83,6 +87,10 @@ MAX_TEXT_CHARS = 200_000
 #: real slip's page is a few KB; an invoice's embedded font a few hundred.
 MAX_INFLATE_STAGE = 64 * 1024 * 1024
 MAX_INFLATE_TOTAL = 64 * 1024 * 1024
+#: The glyphs one page may draw, for every pdfminer reader of the process
+#: (bound_pdf_glyphs): the densest page of 1 374 real invoices (Metro's)
+#: draws 6 617.
+MAX_PAGE_GLYPHS = 30_000
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
 SHOWN_LINE_CHARS = 120
@@ -245,9 +253,13 @@ def inflate_budget(total: int):
 def inflate_refused(error: BaseException | None) -> bool:
     """Whether InflateLimit is behind `error`: pdfplumber re-raises what
     pdfminer raises as its own PdfminerException."""
+    return _behind(error, InflateLimit)
+
+
+def _behind(error: BaseException | None, kind: type) -> bool:
     seen = set()
     while error is not None and id(error) not in seen:
-        if isinstance(error, InflateLimit):
+        if isinstance(error, kind):
             return True
         seen.add(id(error))
         error = error.__cause__ or error.__context__
@@ -389,14 +401,61 @@ def bound_pdf_decoding() -> None:
 bound_pdf_decoding()
 
 
+# -- What pdfminer draws ----------------------------------------------------------------------------------------------
+
+
+class GlyphLimit(Exception):
+    """A page drawing more than MAX_PAGE_GLYPHS glyphs."""
+
+
+def glyphs_refused(error: BaseException | None) -> bool:
+    """Whether GlyphLimit is behind `error` (pdfplumber's PdfminerException
+    around it, as for InflateLimit)."""
+    return _behind(error, GlyphLimit)
+
+
+def bound_pdf_glyphs() -> None:
+    """Stop every pdfminer page at MAX_PAGE_GLYPHS glyphs, for the whole
+    process (idempotent), BEFORE the next one's character is made: pdfminer
+    makes one for every glyph a Tj draws, about 2 KB each, held until the
+    page is done, and one compressed Tj of 600 000 « A » - a PDF of 1 KB -
+    took 1,4 GB and 24 s in the slips' reading, Achats' text layer and the
+    suppliers' readers alike. Counted on the device, which pdfplumber makes
+    for each page (and pdfminer starts each page on with begin_page)."""
+    from pdfminer.converter import PDFLayoutAnalyzer
+
+    if getattr(PDFLayoutAnalyzer.render_char, "glyph_bound", False):
+        return
+    render_char, begin_page = PDFLayoutAnalyzer.render_char, PDFLayoutAnalyzer.begin_page
+
+    def bounded_render_char(self, *args, **kwargs):
+        drawn = getattr(self, "_glyphs_drawn", 0) + 1
+        if drawn > MAX_PAGE_GLYPHS:
+            raise GlyphLimit("trop de caractères sur une page")
+        self._glyphs_drawn = drawn
+        return render_char(self, *args, **kwargs)
+
+    def counted_begin_page(self, *args, **kwargs):
+        self._glyphs_drawn = 0
+        return begin_page(self, *args, **kwargs)
+
+    bounded_render_char.glyph_bound = True
+    PDFLayoutAnalyzer.render_char = bounded_render_char
+    PDFLayoutAnalyzer.begin_page = counted_begin_page
+
+
+bound_pdf_glyphs()
+
+
 # -- The PDF --------------------------------------------------------------------------------------------------------
 
 
 def pdf_text(content: bytes) -> str:
     """The text layer of a slip's PDF, pages joined by a newline - or
     SlipError: over 5 MB, over 5 pages or 200 000 characters (checked while
-    extracting, page by page), streams inflating past MAX_INFLATE_STAGE or,
-    together, MAX_INFLATE_TOTAL (« trop long »), no text at all (a scan),
+    extracting, page by page), a page drawing over MAX_PAGE_GLYPHS glyphs,
+    streams inflating past MAX_INFLATE_STAGE or, together,
+    MAX_INFLATE_TOTAL (« trop long »), no text at all (a scan),
     or not a PDF pdfplumber can read (pdfminer raises a zoo of exceptions:
     every one is « pas un PDF lisible »)."""
     if not isinstance(content, (bytes, bytearray, memoryview)) or not len(content):
@@ -406,6 +465,7 @@ def pdf_text(content: bytes) -> str:
     import pdfplumber
 
     bound_pdf_decoding()
+    bound_pdf_glyphs()
     texts, budget = [], None
     try:
         with inflate_budget(MAX_INFLATE_TOTAL) as budget:
@@ -423,8 +483,8 @@ def pdf_text(content: bytes) -> str:
         raise
     except Exception as error:  # noqa: BLE001 - pdfminer's zoo of errors is a French refusal, never a 500
         # However pdfplumber wrapped it (PdfminerException), a decode past
-        # its bound left the budget refused.
-        if (budget is not None and budget[0] < 0) or inflate_refused(error):
+        # its bound left the budget refused; a page past MAX_PAGE_GLYPHS too.
+        if (budget is not None and budget[0] < 0) or inflate_refused(error) or glyphs_refused(error):
             raise SlipError(TOO_LONG) from None
         raise SlipError(NOT_A_PDF) from None
     text = "\n".join(texts)
@@ -450,10 +510,13 @@ def _page_count(content: bytes, limit: int) -> int:
 
 
 def _page_texts(pdf) -> list:
-    """Each page's text, in order, stopped past MAX_TEXT_CHARS (TOO_LONG)."""
+    """Each page's text, in order, stopped past MAX_TEXT_CHARS (TOO_LONG).
+    Each page released once read: pdfplumber keeps its characters until the
+    file closes, up to MAX_PAGE_GLYPHS of them a page."""
     texts, size = [], 0
     for page in pdf.pages:
         text = page.extract_text() or ""
+        page.close()
         size += len(text) + 1
         if size > MAX_TEXT_CHARS:
             raise SlipError(TOO_LONG)

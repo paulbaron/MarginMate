@@ -695,6 +695,9 @@ class PdfTextTests(SimpleTestCase):
                 extracted.append(self.text)
                 return self.text
 
+            def close(self):
+                extracted.append("closed")
+
         class Document:
             def __init__(self, pages):
                 self.pages = pages
@@ -719,7 +722,8 @@ class PdfTextTests(SimpleTestCase):
         with mock.patch.object(reading, "MAX_TEXT_CHARS", 10), document, counted:
             with self.assertRaises(SlipError):
                 pdf_text(b"%PDF-")
-        self.assertEqual(extracted, ["x" * 20])
+        # Each page released once read: up to MAX_PAGE_GLYPHS characters each.
+        self.assertEqual(extracted, ["x" * 20, "closed"])
         # No page at all is a broken file, not a scan - pdfplumber not even opened.
         document, counted = opened([])
         with document as opening, counted:
@@ -878,3 +882,57 @@ class InflateBoundTests(SimpleTestCase):
         with mock.patch.object(reading, "MAX_INFLATE_STAGE", 2_559):
             with self.assertRaises(reading.InflateLimit):
                 pdftypes.rldecode(runs)
+
+
+def drawing_glyphs(count: int) -> bytes:
+    """A one-page PDF of a few hundred bytes whose one Tj draws `count`
+    glyphs: it compresses about 1000:1, so no byte or inflate cap sees it."""
+    return pdf_with_streams(
+        [(["FlateDecode"], zlib.compress(b"BT /F1 1 Tf 40 700 Td (" + b"A" * count + b") Tj ET\n"))]
+    )
+
+
+class GlyphBoundTests(SimpleTestCase):
+    """pdfminer makes a character object for every glyph a page draws,
+    about 2 KB each, held until the page is done: an 813-byte slip drawing
+    200 000 glyphs took 500 MB and 7 s before MAX_TEXT_CHARS could refuse
+    it, 600 000 glyphs 1,4 GB - in the one process serving every bar.
+    Every pdfminer reader stops at MAX_PAGE_GLYPHS a page, before the
+    character is made. MACHINE SAFETY: the cap is patched DOWN; nothing
+    here draws more than a few thousand glyphs."""
+
+    def test_a_page_drawing_past_the_cap_is_too_long_before_its_characters_are_made(self):
+        from pdfminer import converter
+
+        bomb = drawing_glyphs(5_000)
+        self.assertLess(len(bomb), 1_000)
+        made = []
+
+        class Counted(converter.LTChar):
+            def __init__(self, *args, **kwargs):
+                made.append(1)
+                super().__init__(*args, **kwargs)
+
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), mock.patch.object(converter, "LTChar", Counted):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        self.assertEqual(len(made), 1_000)
+        # Within the cap the same file reads: a real slip is never refused.
+        self.assertEqual(pdf_text(bomb), "A" * 5_000)
+
+    def test_the_cap_holds_for_every_pdfminer_reader_not_only_the_slips(self):
+        """Achats' text layer and the suppliers' readers open PDFs through
+        pdfplumber too."""
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            with self.assertRaises(Exception) as caught, pdfplumber.open(io.BytesIO(drawing_glyphs(5_000))) as pdf:
+                pdf.pages[0].extract_words()
+        # pdfplumber re-raises it as its own PdfminerException.
+        self.assertTrue(reading.glyphs_refused(caught.exception), repr(caught.exception))
+        self.assertFalse(reading.glyphs_refused(ValueError("autre chose")))
+
+    def test_the_cap_is_a_page_s_not_the_document_s(self):
+        from invoices.tests.test_pdf_page_cap import pdf_of_pages
+
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            self.assertEqual(pdf_text(pdf_of_pages(2, line="A" * 800)), "\n".join(["A" * 800] * 2))

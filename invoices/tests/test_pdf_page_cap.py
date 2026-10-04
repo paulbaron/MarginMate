@@ -40,6 +40,7 @@ from invoices.parsers import get_parser
 from invoices.parsers.base import InvoiceParser
 from invoices.receipt_batches import run_receipt_batch, stage_batch
 from invoices.receipts import RereadError, import_document, reread_document
+from returnables import reading
 from tests.factories import make_invoice
 
 LINE = "ARTICLE EXEMPLE CONDITIONNE PAR SIX  2  12,50  25,00"
@@ -440,3 +441,53 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
             with self.assertRaises(RereadError) as refused:
                 reread_document(invoice)
         self.assertEqual(str(refused.exception), f"{TOO_LONG} La facture n'a pas été modifiée.")
+
+
+TOO_DENSE = "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères sur une page."
+
+
+class TooManyGlyphsTests(TestCase):
+    """A page drawing hundreds of thousands of glyphs from one compressed
+    Tj (1 KB of PDF, 1,4 GB once pdfminer had made a character of each):
+    every Achats reader stops at `returnables.reading.MAX_PAGE_GLYPHS` a
+    page and says it on the file's line - never « no text layer », which
+    sent the file on to be rendered. Machine safety: the cap is patched down
+    to 1 000, the page draws 5 000."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.path = os.path.join(self.folder, "dense.pdf")
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_of_pages(1, line="A" * 5_000))
+        patch = mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_every_reader_says_it(self):
+        from invoices.parsers import llm_fallback
+
+        readers = {
+            "text_layer_pages": ocr.text_layer_pages,
+            "document_text": ocr.document_text,
+            "InvoiceParser.parse": Recorder().parse,
+            "llm_fallback": llm_fallback._extract_text,
+        }
+        for name, reader in readers.items():
+            with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
+                reader(self.path)
+            self.assertEqual(str(refused.exception), TOO_DENSE)
+
+    def test_the_one_import_files_nothing(self):
+        with mock.patch("invoices.receipts.page_images", never("page_images")) as rendered:
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                import_document(self.path, display_filename="dense.pdf")
+        rendered.assert_not_called()
+        self.assertEqual(str(refused.exception), TOO_DENSE)
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_a_page_within_the_cap_reads(self):
+        path = os.path.join(self.folder, "facture.pdf")
+        with open(path, "wb") as handle:
+            handle.write(pdf_of_pages(2))
+        self.assertEqual(ocr.document_text(path).count("ARTICLE EXEMPLE"), 2)
