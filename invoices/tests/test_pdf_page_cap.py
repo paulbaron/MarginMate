@@ -444,7 +444,9 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
         self.assertEqual(str(refused.exception), f"{TOO_LONG} La facture n'a pas été modifiée.")
 
 
-TOO_DENSE = "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères ou traits sur une page."
+TOO_DENSE = (
+    "Document trop chargé pour être lu : plus de 1\N{NO-BREAK SPACE}000 caractères, traits ou images sur une page."
+)
 
 
 class TooManyGlyphsTests(TestCase):
@@ -478,6 +480,19 @@ class TooManyGlyphsTests(TestCase):
             with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
                 reader(self.path)
             self.assertEqual(str(refused.exception), TOO_DENSE)
+
+    def test_images_drawn_say_it_too(self):
+        """A figure and an image kept for every image drawn, about 2 KB:
+        100 000 draws of one 1x1 image took 263 MB in the text layer."""
+        from returnables.tests.test_reading import drawing_images
+
+        for inline in (False, True):
+            with open(self.path, "wb") as handle:
+                handle.write(drawing_images(1_500, inline=inline))
+            with self.subTest(inline=inline):
+                with self.assertRaises(ocr.DocumentTooBig) as refused:
+                    ocr.text_layer_pages(self.path)
+                self.assertEqual(str(refused.exception), TOO_DENSE)
 
     def test_the_one_import_files_nothing(self):
         with mock.patch("invoices.receipts.page_images", never("page_images")) as rendered:

@@ -20,9 +20,11 @@
   (invoices.ocr.MAX_INFLATE_TOTAL, through `inflate_budget`).
 - **And what it draws** (`bound_pdf_glyphs`, process-wide too): a character
   object of about 2 KB for every glyph, so one compressed Tj of 600 000
-  « A » - a 1 KB file - took 1,4 GB; a path's every point is kept as well.
-  A page stops at MAX_PAGE_GLYPHS glyphs and segments (`GlyphLimit`): the
-  slip is « trop long », Achats' reader DocumentTooBig.
+  « A » - a 1 KB file - took 1,4 GB; a path's every point is kept as well,
+  and a figure for every image or form drawn. A page stops at
+  MAX_PAGE_GLYPHS glyphs, segments and figures (`GlyphLimit`): the slip is
+  « trop long », Achats' reader DocumentTooBig. Not bounded: what a font's
+  ToUnicode map declares (a range is expanded code by code).
 - `read_slip_text(text, fmt)` - a `SlipReading`: the returnables part's
   lines, what could not be read, the delivery date, the number, the
   delivery-note references, « annule et remplace », the printed total, the
@@ -93,10 +95,10 @@ MAX_TEXT_CHARS = 200_000
 #: (the UBA invoices' streams inflate 260 KB at most, fonts included).
 MAX_INFLATE_STAGE = 64 * 1024 * 1024
 MAX_INFLATE_TOTAL = 4 * 1024 * 1024
-#: The glyphs one page may draw, its path segments counted with them, for
-#: every pdfminer reader of the process (bound_pdf_glyphs): the densest page
-#: of 1 374 real invoices (Metro's) draws 6 617 glyphs, the most segments
-#: one page paints are 4 634 (Free's).
+#: The glyphs one page may draw, its path segments and figures (an image, a
+#: form) counted with them, for every pdfminer reader of the process
+#: (bound_pdf_glyphs): the densest page of 1 374 real invoices (Metro's)
+#: draws 6 617 glyphs, the most segments one page paints are 4 634 (Free's).
 MAX_PAGE_GLYPHS = 30_000
 #: A longer line is never matched, and shown cut to SHOWN_LINE_CHARS.
 MAX_LINE_CHARS = 500
@@ -462,7 +464,7 @@ bound_pdf_interpreting()
 
 
 class GlyphLimit(Exception):
-    """A page drawing more than MAX_PAGE_GLYPHS glyphs."""
+    """A page drawing more than MAX_PAGE_GLYPHS glyphs, segments and figures."""
 
 
 def glyphs_refused(error: BaseException | None) -> bool:
@@ -479,15 +481,17 @@ def bound_pdf_glyphs() -> None:
     took 1,4 GB and 24 s in the slips' reading, Achats' text layer and the
     suppliers' readers alike. A painted path's segments count as glyphs,
     before its curve is made: pdfminer and pdfplumber keep every point, and
-    2 MB of « 0 0 m 1 1 l S » took 520 MB and 22 s. Counted on the device,
-    which pdfplumber makes for each page (and pdfminer starts each page on
-    with begin_page)."""
+    2 MB of « 0 0 m 1 1 l S » took 520 MB and 22 s. So does every figure,
+    before it is made - an image drawn (by Do or inline), a form: a 4 KB bon
+    drawing one 1x1 image 400 000 times took 866 MB and was read. Counted on
+    the device, which pdfplumber makes for each page (and pdfminer starts
+    each page on with begin_page)."""
     from pdfminer.converter import PDFLayoutAnalyzer
 
     if getattr(PDFLayoutAnalyzer.render_char, "glyph_bound", False):
         return
     render_char, paint_path = PDFLayoutAnalyzer.render_char, PDFLayoutAnalyzer.paint_path
-    begin_page = PDFLayoutAnalyzer.begin_page
+    begin_page, begin_figure = PDFLayoutAnalyzer.begin_page, PDFLayoutAnalyzer.begin_figure
 
     def draw(device, count):
         drawn = getattr(device, "_glyphs_drawn", 0) + count
@@ -500,8 +504,15 @@ def bound_pdf_glyphs() -> None:
         return render_char(self, *args, **kwargs)
 
     def bounded_paint_path(self, gstate, stroke, fill, evenodd, path):
-        draw(self, len(path))
+        # A path of several subpaths is painted one subpath at a time,
+        # through here again: each is counted then.
+        if sum(1 for segment in path if segment[0] == "m") <= 1:
+            draw(self, len(path))
         return paint_path(self, gstate, stroke, fill, evenodd, path)
+
+    def bounded_begin_figure(self, *args, **kwargs):
+        draw(self, 1)
+        return begin_figure(self, *args, **kwargs)
 
     def counted_begin_page(self, *args, **kwargs):
         self._glyphs_drawn = 0
@@ -510,6 +521,7 @@ def bound_pdf_glyphs() -> None:
     bounded_render_char.glyph_bound = True
     PDFLayoutAnalyzer.render_char = bounded_render_char
     PDFLayoutAnalyzer.paint_path = bounded_paint_path
+    PDFLayoutAnalyzer.begin_figure = bounded_begin_figure
     PDFLayoutAnalyzer.begin_page = counted_begin_page
 
 

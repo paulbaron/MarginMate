@@ -309,7 +309,7 @@ PAGE_TOO_LARGE = (
     "Page trop grande pour être lue (page {number} : {width} × {height} cm) : ce n'est ni un ticket ni une facture."
 )
 IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
-TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères ou traits sur une page."
+TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères, traits ou images sur une page."
 TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
 TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
 

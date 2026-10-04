@@ -937,6 +937,31 @@ def drawing_glyphs(count: int) -> bytes:
     )
 
 
+def drawing_images(count: int, inline: bool = False) -> bytes:
+    """A one-page PDF of a few hundred bytes drawing a 1x1 image `count`
+    times: one image XObject by Do, or as many inline images."""
+    drawn = b"BI /W 1 /H 1 /BPC 8 /CS /G ID x EI\n" if inline else b"/Im1 Do\n"
+    content = zlib.compress(DRAWN + drawn * count)
+    image = b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 6 0 R >> /XObject << /Im1 5 0 R >> >> >>"
+            ),
+            b"<< /Filter /FlateDecode /Length "
+            + str(len(content)).encode()
+            + b" >>\nstream\n"
+            + content
+            + b"\nendstream",
+            image + b" /Length 1 >>\nstream\n\x00\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
+
+
 class GlyphBoundTests(SimpleTestCase):
     """pdfminer makes a character object for every glyph a page draws,
     about 2 KB each, held until the page is done: an 813-byte slip drawing
@@ -983,6 +1008,25 @@ class GlyphBoundTests(SimpleTestCase):
         strokes = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m 1 1 l S\n" * 600))])
         one_path = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m " + b"1 1 l " * 1_200 + b"S\n"))])
         for drawn in (strokes, one_path):
+            with self.subTest(size=len(drawn)):
+                with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(drawn)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                self.assertEqual(pdf_text(drawn), "REPRISE VIDE")
+
+    def test_a_path_s_segments_count_once_however_many_subpaths_it_has(self):
+        """pdfminer paints a path of several « m » one subpath at a time,
+        through the same paint_path: 800 segments are 800, not 1 600."""
+        subpaths = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m 1 1 l " * 400 + b"S\n"))])
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            self.assertEqual(pdf_text(subpaths), "REPRISE VIDE")
+
+    def test_images_drawn_count_as_glyphs(self):
+        """pdfminer and pdfplumber keep a figure and an image for every
+        image a page draws, about 2 KB: a 4 KB bon drawing one 1x1 image
+        400 000 times took 866 MB and 17 s, and was read. Drawn by Do or
+        inline, alike."""
+        for drawn in (drawing_images(1_500), drawing_images(1_500, inline=True)):
             with self.subTest(size=len(drawn)):
                 with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), self.assertRaises(SlipError) as caught:
                     pdf_text(drawn)
