@@ -35,7 +35,7 @@ from django.utils import timezone
 
 from accounts import paths
 from invoices.models import Invoice, ScrapeJob
-from returnables import patterns, views
+from returnables import patterns, slips, views
 from returnables.forms import COUNT_ERROR, NO_DATE_PATTERN, NO_SUBJECT, NOTHING_LEFT, NOTHING_TO_SAVE
 from returnables.models import (
     MAX_PHOTOS,
@@ -796,6 +796,38 @@ class SlipUploadTests(PageTestCase):
                     self.messages_of(response),
                     ["Ce format de bon n'existe plus : choisissez-en un dans la liste. Rien n'a été ajouté."],
                 )
+        self.assertEqual(Slip.objects.count(), 0)
+
+    def test_too_many_documents_at_once_are_refused_before_any_is_read(self):
+        """Every document is read in the request, seconds each on a bad
+        file: one post of hundreds held a server thread for hours."""
+        files = lambda count: [self.pdf(f"T{index}.pdf", number=f"42{index:02d}") for index in range(count)]
+        with (
+            mock.patch.object(slips, "MAX_SLIP_UPLOAD_FILES", 2),
+            mock.patch.object(slips, "store_uploads", side_effect=AssertionError("un bon a été lu")) as stored,
+        ):
+            response = self.send(self.upload_form(), files={"bons": files(3)})
+        stored.assert_not_called()
+        self.assertEqual(response.redirect_chain[-1], (f"{HOME}#bons", 302))
+        self.assertEqual(
+            self.messages_of(response),
+            ["3 documents d'un coup : 2 au plus par envoi, rien n'a été ajouté. Envoyez-les en plusieurs fois."],
+        )
+        with mock.patch.object(slips, "MAX_SLIP_UPLOAD_FILES", 2):
+            self.send(self.upload_form(), files={"bons": files(2)})
+        self.assertEqual(Slip.objects.count(), 2)
+
+    def test_a_selection_too_heavy_is_refused_before_any_is_read(self):
+        with (
+            mock.patch("common.UPLOAD_MAX_TOTAL_BYTES", 1_000),
+            mock.patch.object(slips, "store_uploads", side_effect=AssertionError("un bon a été lu")) as stored,
+        ):
+            files = [self.pdf("T1.pdf", number="4301"), self.pdf("T2.pdf", number="4302")]
+            self.assertGreater(sum(file.size for file in files), 1_024)
+            response = self.send(self.upload_form(), files={"bons": files})
+        stored.assert_not_called()
+        (said,) = self.messages_of(response)
+        self.assertRegex(said, r"^La sélection pèse \d Ko : 1 Ko au plus en une fois\. .* Rien n'a été ajouté\.$")
         self.assertEqual(Slip.objects.count(), 0)
 
 

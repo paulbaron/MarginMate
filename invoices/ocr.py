@@ -298,6 +298,11 @@ IMAGE_MAX_PIXELS = 89_478_485
 #: until the file is closed, and PDFium decodes it all again. The heaviest
 #: of 1 374 real invoices inflates 1,1 MB, its fonts included.
 MAX_INFLATE_TOTAL = 64 * 1024 * 1024
+#: What pdfminer's interpreter may run of one PDF, a stream counted each
+#: time it runs - a page drawing one form a thousand times runs it a
+#: thousand times (returnables.reading.bound_pdf_interpreting), at 6 to
+#: 11 s of CPU a MB. The most of 1 374 real invoices is 340 KB.
+MAX_RUN_TOTAL = 8 * 1024 * 1024
 
 TOO_MANY_PAGES = "Document trop long pour être lu : {pages} pages, {limit} au plus."
 PAGE_TOO_LARGE = (
@@ -306,6 +311,7 @@ PAGE_TOO_LARGE = (
 IMAGE_TOO_LARGE = "Image trop grande pour être lue (page {number} : {pixels} millions de pixels, {limit} au plus)."
 TOO_MANY_GLYPHS = "Document trop chargé pour être lu : plus de {limit} caractères sur une page."
 TOO_HEAVY_CONTENT = "Document trop lourd pour être lu : plus de {weight} une fois décompressé."
+TOO_LONG_CONTENT = "Document trop long à lire : plus de {weight} de contenu à dessiner."
 
 
 class DocumentTooBig(ValueError):
@@ -614,17 +620,18 @@ def pdf_pages(path: str):
 def bounded_reading():
     """Around a reader walking `pdf_pages`: its decodes share
     MAX_INFLATE_TOTAL (returnables.reading.inflate_budget - should a stream
-    escape `_weigh_contents`), and what pdfminer stopped (that budget, a
-    page past reading.MAX_PAGE_GLYPHS glyphs) is DocumentTooBig, said on the
+    escape `_weigh_contents`), what it runs MAX_RUN_TOTAL, and what pdfminer
+    stopped (those budgets, a page past reading.MAX_PAGE_GLYPHS glyphs) is
+    DocumentTooBig, said on the
     file's line - not the PdfminerException pdfplumber wraps it in, which a
     reader's caller takes for a broken file. Entered by the caller, not
     inside `pdf_pages`: the page is read in the caller's loop, never in the
     generator, and a ContextVar set across a generator's yields lives in
     whichever context resumes it."""
-    from common import group_thousands
+    from common import group_thousands, weight
     from returnables import reading
 
-    with reading.inflate_budget(MAX_INFLATE_TOTAL) as budget:
+    with reading.inflate_budget(MAX_INFLATE_TOTAL, run=MAX_RUN_TOTAL) as budget:
         try:
             yield
         except DocumentTooBig:
@@ -633,6 +640,8 @@ def bounded_reading():
             if reading.glyphs_refused(error):
                 limit = group_thousands(reading.MAX_PAGE_GLYPHS)
                 raise DocumentTooBig(TOO_MANY_GLYPHS.format(limit=limit)) from None
+            if reading.run_refused(error):
+                raise DocumentTooBig(TOO_LONG_CONTENT.format(weight=weight(MAX_RUN_TOTAL))) from None
             if budget[0] < 0 or reading.inflate_refused(error):
                 raise _too_heavy() from None
             raise

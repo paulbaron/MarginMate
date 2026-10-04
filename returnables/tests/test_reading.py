@@ -767,6 +767,11 @@ def pdf_with_streams(streams) -> bytes:
             b"<< /Filter [" + names + b"] /Length " + str(len(raw)).encode() + b" >>\nstream\n" + raw + b"\nendstream"
         )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    return pdf_of_objects(objects)
+
+
+def pdf_of_objects(objects) -> bytes:
+    """`objects` (bodies, numbered from 1, the catalog first) as a PDF."""
     output = bytearray(b"%PDF-1.4\n")
     offsets = []
     for number, body in enumerate(objects, start=1):
@@ -778,6 +783,46 @@ def pdf_with_streams(streams) -> bytes:
         output += f"{offset:010d} 00000 n \n".encode()
     output += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     return bytes(output)
+
+
+#: Each run of it draws DRAWN 20 points lower than the last (a page's
+#: graphics state carries from one content stream to the next).
+DRAWN_LOWER_EACH_TIME = b"1 0 0 1 0 -20 cm " + DRAWN
+
+
+def pdf_listing_one_stream(times: int, size: int) -> bytes:
+    """A one-page PDF whose /Contents lists one stream - DRAWN_LOWER_EACH_TIME
+    padded to `size` bytes - `times` times."""
+    # `times` copies, then every reference turned to the first: the same
+    # length, so the cross-reference offsets still hold.
+    content = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN_LOWER_EACH_TIME.ljust(size)))] * times)
+    copies = " ".join(f"{4 + index} 0 R" for index in range(times))
+    listed = " ".join(f"{4:<{len(str(4 + index))}} 0 R" for index in range(times))
+    return content.replace(f"/Contents [{copies}]".encode(), f"/Contents [{listed}]".encode())
+
+
+def pdf_drawing_a_form(times: int, size: int) -> bytes:
+    """A one-page PDF drawing one form XObject - DRAWN padded to `size`
+    bytes - `times` times, each 20 points lower."""
+    form = zlib.compress(DRAWN.ljust(size))
+    content = b" ".join([b"/Fm1 Do 1 0 0 1 0 -20 cm"] * times)
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 6 0 R >> /XObject << /Fm1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 595 842] /Filter /FlateDecode /Length "
+            + str(len(form)).encode()
+            + b" >>\nstream\n"
+            + form
+            + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
 
 
 class InflateBoundTests(SimpleTestCase):
@@ -936,3 +981,35 @@ class GlyphBoundTests(SimpleTestCase):
 
         with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
             self.assertEqual(pdf_text(pdf_of_pages(2, line="A" * 800)), "\n".join(["A" * 800] * 2))
+
+
+class InterpretedContentBoundTests(SimpleTestCase):
+    """pdfminer decodes a stream once and charges it once, but interprets it
+    each time a page runs it - at about 3 s a MB: a 1,4 KB slip listing a
+    0,5 MB stream twelve times took 20 s, past a 2 MB inflate total. What
+    the interpreter runs shares the reading's MAX_INFLATE_TOTAL too, counted
+    on every run. MACHINE SAFETY: the totals are patched down to a few KB."""
+
+    def test_a_stream_listed_again_is_counted_again(self):
+        listed = pdf_listing_one_stream(3, 3_000)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(listed)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 9_100):
+            self.assertEqual(pdf_text(listed), "\n".join(["REPRISE VIDE"] * 3))
+
+    def test_a_form_drawn_again_is_counted_again(self):
+        drawn = pdf_drawing_a_form(3, 3_000)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(drawn)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 9_100):
+            self.assertEqual(pdf_text(drawn), "\n".join(["REPRISE VIDE"] * 3))
+
+    def test_a_bon_s_total_is_what_a_bon_needs(self):
+        """The UBA invoices' streams inflate 260 KB at most, fonts included;
+        8 MB of path operators held a thread a minute and a half."""
+        self.assertEqual(reading.MAX_INFLATE_TOTAL, 4 * 1024 * 1024)
+        self.assertLess(reading.MAX_INFLATE_TOTAL, reading.MAX_INFLATE_STAGE)

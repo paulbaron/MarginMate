@@ -12,7 +12,8 @@
   applied. pdfminer's Flate (and its retry of a damaged stream, which it
   runs on any zlib.error), LZW and RunLength decoders are replaced by
   bounded ones: MAX_INFLATE_STAGE bytes a stream and a filter, and a slip's
-  streams share MAX_INFLATE_TOTAL (`inflate_budget`). Past it,
+  streams share MAX_INFLATE_TOTAL (`inflate_budget`) - and so does what the
+  interpreter runs of them, on every run (`bound_pdf_interpreting`). Past it,
   `InflateLimit` - never a zlib.error, which pdfminer would retry without a
   bound - and the slip is « trop long ». Achats' own pdfplumber pass gets
   the per-stream bound as well, and a document total of its own
@@ -84,10 +85,13 @@ MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_PDF_PAGES = 5
 MAX_TEXT_CHARS = 200_000
 #: What pdfminer may inflate: one stream through one filter (everywhere in
-#: this process), and all the streams of one slip together (pdf_text). A
-#: real slip's page is a few KB; an invoice's embedded font a few hundred.
+#: this process), and all the streams of one slip together (pdf_text) - the
+#: same total for what its interpreter runs of them, counted on every run:
+#: 6 to 11 s of CPU a MB of operators, so 64 MB held a thread for minutes. A
+#: real slip's page is a few KB; an invoice's embedded font a few hundred
+#: (the UBA invoices' streams inflate 260 KB at most, fonts included).
 MAX_INFLATE_STAGE = 64 * 1024 * 1024
-MAX_INFLATE_TOTAL = 64 * 1024 * 1024
+MAX_INFLATE_TOTAL = 4 * 1024 * 1024
 #: The glyphs one page may draw, for every pdfminer reader of the process
 #: (bound_pdf_glyphs): the densest page of 1 374 real invoices (Metro's)
 #: draws 6 617.
@@ -234,20 +238,29 @@ class InflateLimit(Exception):
     pdfminer answers one with decompress_corrupted, a byte-by-byte retry."""
 
 
+class RunLimit(InflateLimit):
+    """What pdfminer's interpreter runs, past the reading's run budget."""
+
+
 #: [bytes left] of the reading under way in this thread (pdf_text), or None.
 _BUDGET: ContextVar[list | None] = ContextVar("returnables_inflate_budget", default=None)
+#: [bytes left] the interpreter may still run in that reading, or None.
+_RUN: ContextVar[list | None] = ContextVar("returnables_run_budget", default=None)
 
 
 @contextmanager
-def inflate_budget(total: int):
+def inflate_budget(total: int, run: int | None = None):
     """Every pdfminer decode inside - in this thread - shares `total` bytes:
-    the streams of one document together (a page may list hundreds). Yields
-    the budget, [bytes left]: -1 once a decode was refused."""
+    the streams of one document together (a page may list hundreds); what
+    the interpreter runs has `run` bytes (`total` when None), a stream
+    counted each time it is run (`bound_pdf_interpreting`). Yields the
+    budget, [bytes left]: -1 once a decode, or a run, was refused."""
     budget = [total]
-    token = _BUDGET.set(budget)
+    token, run_token = _BUDGET.set(budget), _RUN.set([total if run is None else run])
     try:
         yield budget
     finally:
+        _RUN.reset(run_token)
         _BUDGET.reset(token)
 
 
@@ -255,6 +268,11 @@ def inflate_refused(error: BaseException | None) -> bool:
     """Whether InflateLimit is behind `error`: pdfplumber re-raises what
     pdfminer raises as its own PdfminerException."""
     return _behind(error, InflateLimit)
+
+
+def run_refused(error: BaseException | None) -> bool:
+    """Whether RunLimit is behind `error` (inflate_refused says so too)."""
+    return _behind(error, RunLimit)
 
 
 def _behind(error: BaseException | None, kind: type) -> bool:
@@ -280,13 +298,13 @@ def _charge(size: int) -> None:
         budget[0] -= size
 
 
-def _refuse():
+def _refuse(limit: type = InflateLimit):
     """Past the bound: this decode, and every later one of the same
     reading (pdfminer may swallow an error and try another way)."""
     budget = _BUDGET.get()
     if budget is not None:
         budget[0] = -1
-    raise InflateLimit("flux PDF trop gros une fois décompressé")
+    raise limit("flux PDF trop gros une fois décompressé")
 
 
 def bounded_decompress(data) -> bytes:
@@ -402,6 +420,42 @@ def bound_pdf_decoding() -> None:
 bound_pdf_decoding()
 
 
+def bound_pdf_interpreting() -> None:
+    """Charge what pdfminer's interpreter runs to the reading's run budget
+    (`inflate_budget`), for the whole process (idempotent): /Contents may
+    list one stream hundreds of times, and a page draw one form (Do) as
+    often - decoded and charged once, interpreted every time, at 6 to 11 s
+    of CPU a MB (a 1,4 KB slip listing a 0,5 MB stream twelve times held a
+    thread 20 s past a 2 MB total). Past it, RunLimit, an InflateLimit:
+    refused as a decode past its bound is. With no budget (a reader that
+    entered none), nothing is counted."""
+    from pdfminer.pdfinterp import PDFPageInterpreter
+    from pdfminer.pdftypes import PDFStream, resolve1
+
+    if getattr(PDFPageInterpreter.execute, "run_bound", False):
+        return
+    execute = PDFPageInterpreter.execute
+
+    def counted_execute(self, streams):
+        left = _RUN.get()
+        if left is not None:
+            parents = getattr(self, "parent_stream_ids", ())
+            for item in streams:
+                stream = resolve1(item)
+                # What execute itself skips: an inline stream, a form drawing itself.
+                if isinstance(stream, PDFStream) and stream.objid is not None and stream.objid not in parents:
+                    left[0] -= len(stream.get_data())
+            if left[0] < 0:
+                _refuse(RunLimit)
+        return execute(self, streams)
+
+    counted_execute.run_bound = True
+    PDFPageInterpreter.execute = counted_execute
+
+
+bound_pdf_interpreting()
+
+
 # -- What pdfminer draws ----------------------------------------------------------------------------------------------
 
 
@@ -455,8 +509,9 @@ def pdf_text(content: bytes) -> str:
     """The text layer of a slip's PDF, pages joined by a newline - or
     SlipError: over 5 MB, over 5 pages or 200 000 characters (checked while
     extracting, page by page), a page drawing over MAX_PAGE_GLYPHS glyphs,
-    streams inflating past MAX_INFLATE_STAGE or, together,
-    MAX_INFLATE_TOTAL (« trop long »), no text at all (a scan),
+    streams inflating past MAX_INFLATE_STAGE or, together - or run by the
+    interpreter, as often as it runs them -, past MAX_INFLATE_TOTAL (« trop
+    long »), no text at all (a scan),
     or not a PDF pdfplumber can read (pdfminer raises a zoo of exceptions:
     every one is « pas un PDF lisible »)."""
     if not isinstance(content, (bytes, bytearray, memoryview)) or not len(content):
@@ -466,6 +521,7 @@ def pdf_text(content: bytes) -> str:
     import pdfplumber
 
     bound_pdf_decoding()
+    bound_pdf_interpreting()
     bound_pdf_glyphs()
     texts, budget = [], None
     try:

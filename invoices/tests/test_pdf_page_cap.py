@@ -565,6 +565,22 @@ class InflatedContentTests(TestCase):
                 ocr.check_page_count(self.path)
         self.assertEqual(str(refused.exception), HEAVY.replace("6 Ko", "9 Ko"))
 
+    def test_a_form_drawn_again_is_counted_again_by_the_readers(self):
+        """Weighed once, a form the page draws over and over is interpreted
+        each time (6 to 11 s of CPU a MB): the readers count every run."""
+        from invoices.parsers import llm_fallback
+        from returnables.tests.test_reading import pdf_drawing_a_form
+
+        with open(self.path, "wb") as handle:
+            handle.write(pdf_drawing_a_form(3, 4_000))
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 9_000):
+            ocr.check_page_count(self.path)
+            with self.assertRaises(ocr.DocumentTooBig) as refused:
+                ocr.text_layer_pages(self.path)
+        self.assertEqual(str(refused.exception), "Document trop long à lire : plus de 9 Ko de contenu à dessiner.")
+        with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
+            self.assertEqual(llm_fallback._extract_text(self.path).count("REPRISE VIDE"), 3)
+
     def test_the_readers_share_the_budget_too(self):
         """Should a stream escape the weighing (a form a page draws, a
         stream pdfminer decodes for itself), the reading is bounded all the
