@@ -111,6 +111,37 @@ class ConversionLimitsTests(TestCase):
         self.pending.refresh_from_db()
         self.assertEqual((self.pending.stock_type, self.pending.stock_equivalent), (self.prosecco, D("0.75")))
 
+    def change_unit(self, unit):
+        return self.client.post(
+            reverse("inventory:stock_type_update", args=[self.prosecco.pk]),
+            {"name": "Prosecco", "unit": unit, "category": "", "loss_percent": "0"},
+        )
+
+    def test_an_article_unit_whose_movements_no_column_holds_is_refused(self):
+        """Counted by the unit, a line's measured volume says nothing; in
+        litres it divides the cost. 1 835 EUR over 0.001 L is 1 835 000 EUR a
+        litre, which the movement's unit cost does not hold."""
+        create_stock_movement_for_line(
+            make_invoice_line(product=self.classified, quantity=1, total_volume="0.001", total_ht="1835")
+        )
+        before = self.movements()
+        response = self.change_unit(UnitChoices.LITRE)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "PROSECCO 75CL")
+        self.assertContains(response, "1 835 000.00 €")
+        self.prosecco.refresh_from_db()
+        self.classified.refresh_from_db()
+        self.assertEqual((self.prosecco.unit, self.classified.unit), (UnitChoices.UNIT, UnitChoices.UNIT))
+        self.assertEqual(self.movements(), before)
+        self.assert_pages_open()
+
+    def test_an_article_unit_that_fits_is_still_taken(self):
+        response = self.change_unit(UnitChoices.LITRE)
+        self.assertRedirects(response, reverse("inventory:stock_list"), fetch_redirect_response=False)
+        self.classified.refresh_from_db()
+        self.assertEqual(self.classified.unit, UnitChoices.LITRE)
+        self.assertEqual(self.movements(), [(self.prosecco.pk, D("1"), D("183.5"))])
+
     def test_a_conversion_that_fails_halfway_keeps_the_old_movements(self):
         """The movements are deleted before they are made again: a failure in
         between used to leave the product's purchases out of the stock."""

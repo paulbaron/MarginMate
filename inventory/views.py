@@ -1091,9 +1091,18 @@ class StockTypeUpdateView(CategoryAutocompleteMixin, UpdateView):
         # Without this, changing "Prosecco" from Unité to Litre would save
         # the new unit but leave every purchase still counted as bottles.
         old_unit = StockType.objects.get(pk=self.object.pk).unit
+        products = list(self.object.products.all()) if self.object.unit != old_unit else []
+        # Asked before anything is saved: from Unité to Litre a line's measured
+        # volume becomes what its cost is divided by, and a tiny one makes a
+        # unit cost no stock movement holds.
+        refused = f"Unité « {self.object.get_unit_display()} » refusée"
+        for product in products:
+            refusal = conversion_refusal(product, self.object.unit, product.stock_equivalent, refused=refused)
+            if refusal:
+                form.add_error("unit", refusal)
+                return self.form_invalid(form)
         response = super().form_valid(form)
         if self.object.unit != old_unit:
-            products = list(self.object.products.all())
             for product in products:
                 update_product_conversion(product, unit=self.object.unit, stock_equivalent=product.stock_equivalent)
             if products:

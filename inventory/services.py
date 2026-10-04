@@ -160,13 +160,14 @@ MOVEMENT_QUANTITY_LIMIT = Decimal("999999999.9995")
 MOVEMENT_UNIT_COST_LIMIT = Decimal("999999.99995")
 
 
-def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal) -> str:
+def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal, refused: str = "") -> str:
     """Why `product` cannot be booked with this unit and factor - a French
     sentence naming the purchase whose movement would not fit its columns -
     or "" when every one fits. A factor that fits its own column can still
     divide a line's cost into a unit cost no column holds (0.0001 on a 183 EUR
     line is 1 835 000 EUR a unit), so this is asked before anything is
-    written, with compute_movement_amounts' own arithmetic."""
+    written, with compute_movement_amounts' own arithmetic. `refused` names
+    what the sentence refuses when it is not the factor (an article's unit)."""
     probe = copy(product)
     probe.unit = unit
     probe.stock_equivalent = stock_equivalent
@@ -181,10 +182,8 @@ def conversion_refusal(product: Product, unit: str, stock_equivalent: Decimal) -
             figure = f"ferait {format_money(quantity, '.3f')} unités de stock"
         else:
             continue
-        return (
-            f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé : un achat de « {product.raw_name} » "
-            f"{figure}, plus que MarginMate ne peut enregistrer."
-        )
+        refused = refused or f"Facteur {format(stock_equivalent.normalize(), 'f')} refusé"
+        return f"{refused} : un achat de « {product.raw_name} » {figure}, plus que MarginMate ne peut enregistrer."
     return ""
 
 
