@@ -167,8 +167,8 @@ class InvoiceType(models.Model):
 
 
 class EmailInvoiceSource(models.Model):
-    """How to recognize an InvoiceType's emails in the shared invoice
-    mailbox (see settings.INVOICE_EMAIL_ADDRESS) and which attachment to
+    """How to recognize an InvoiceType's emails in the espace's invoice
+    mailbox (its « Identifiants », accounts/vault.py) and which attachment to
     treat as the invoice. All patterns are real regexes (not IMAP's own
     crude substring search - see invoices/scrapers/generic_email.py for
     why), tested against the From header, the Subject, the decoded text
@@ -195,7 +195,25 @@ class EmailInvoiceSource(models.Model):
     def __str__(self):
         return f"Source email de {self.invoice_type}"
 
+    #: Each pattern's name in a refusal of the guard.
+    PATTERN_LABELS = {
+        "sender_pattern": "Motif d'expéditeur",
+        "subject_pattern": "Motif d'objet",
+        "body_pattern": "Motif de contenu",
+        "attachment_pattern": "Motif de pièce jointe",
+    }
+
     def clean(self):
+        """Each pattern compiles - and outside the platform owner's espace
+        passes the pattern guard too (returnables.patterns, `flags=0`: the
+        case-sensitive `re` they are matched with), each refusal in French on
+        its field: the gather runs them on headers and bodies anybody can
+        write, in the one process every bar runs in. The owner's are matched
+        by `re` as always, and checked as always. The form and « Données »'s
+        import both run this."""
+        from accounts.tenancy import server_accounts_allowed
+
+        guarded = not server_accounts_allowed()
         errors = {}
         for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
             value = getattr(self, field_name)
@@ -205,6 +223,19 @@ class EmailInvoiceSource(models.Model):
                 re.compile(value)
             except re.error as exc:
                 errors[field_name] = f"Expression régulière invalide : {exc}"
+                continue
+            if guarded:
+                from returnables import patterns
+
+                try:
+                    patterns.compile_pattern(
+                        value,
+                        field_label=self.PATTERN_LABELS[field_name],
+                        max_length=self._meta.get_field(field_name).max_length,
+                        flags=0,
+                    )
+                except patterns.PatternError as exc:
+                    errors[field_name] = str(exc)
         if errors:
             raise ValidationError(errors)
 

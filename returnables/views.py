@@ -200,7 +200,11 @@ def _gather_context(today: date, slips_only: bool = False) -> dict:
         .select_related("supplier")
         .order_by("name", "pk")
     )
-    allowed = integrations_allowed()
+    # Unbound nothing; another espace's mailbox once filled in on its
+    # « Identifiants » (invoices.integrations.mailbox_offered) - never a
+    # gather that could only fail.
+    bound = integrations_allowed()
+    allowed = bound and integrations.mailbox_offered()
     job, running = _slips_job() if allowed else (None, False)
     # Each format's own start (returnables.mail: a few days before its newest
     # MAILED slip, else 90 days back); the gather searches from the earliest.
@@ -221,7 +225,7 @@ def _gather_context(today: date, slips_only: bool = False) -> dict:
     return {
         "mail_formats": mail_formats,
         "gather_allowed": allowed,
-        "gather_refused": "" if allowed else slips_refused(),
+        "gather_refused": "" if allowed else (integrations.MAILBOX_TO_FILL if bound else slips_refused()),
         "gather_job": job,
         "gather_running": running,
         "gather_running_sentence": ALREADY_GATHERING if another else "",

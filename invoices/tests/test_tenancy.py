@@ -162,6 +162,13 @@ class GateTests(TwoTenantsTestCase):
 
     def test_the_import_card_offers_a_hosted_bar_its_mailbox_and_says_metro_and_the_portals(self):
         codes = self.reopen_everything_in_b()
+        with bound_tenant(self.bar_b):
+            # Its mailbox, on its « Identifiants » (invoices/tests/test_mailbox_guards.py
+            # has the card before it is).
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
         gather = f'action="{reverse("invoices:gather")}"'
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer")
@@ -356,8 +363,10 @@ class GateTests(TwoTenantsTestCase):
             )
             imap = mock.Mock()
             imap.login.side_effect = _Reached
+            public = [(2, 1, 6, "", ("8.8.8.8", 993))]
             with (
                 mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL", return_value=imap) as opened,
+                mock.patch("invoices.scrapers.egress.resolve", return_value=public),
                 self.assertRaises(_Reached),
             ):
                 find_matching_emails(START, END, "traiteur", "", "", "")

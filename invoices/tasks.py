@@ -381,9 +381,14 @@ def _gather_email(
     except _Cancelled:
         raise
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
+        from returnables.patterns import PatternError
+
         detail = str(exc).strip() or exc.__class__.__name__
         job.append_log(f"{invoice_type.name} : échec de la boîte mail - {detail}\n{traceback.format_exc()}")
-        job.update_progress(code, error=f"Boîte mail : {detail}"[:300])
+        # A pattern the guard refuses, or a server refused, is the source's
+        # or the « Identifiants »'s to correct, said as it is.
+        said = detail if isinstance(exc, PatternError) else f"Boîte mail : {detail}"
+        job.update_progress(code, error=said[:300])
         return 0, 0
     job.update_progress(code, found=len(results))
     imported = 0

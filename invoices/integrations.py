@@ -67,9 +67,29 @@ PORTALS = refused("Les espaces clients des fournisseurs", plural=True)
 #: The « Sources » tab and a source's form, unbound.
 SOURCES = refused("Les sources de factures (boîte mail, espaces clients)", plural=True)
 AI_READING = refused("L'analyse IA")
+#: Said in place of the mailbox's sources and slips (the gather card,
+#: Consignes) where the espace's mailbox is not filled in on « Identifiants ».
+MAILBOX_TO_FILL = "Boîte mail : à renseigner sur la page Identifiants."
+#: The names the mailbox signs in with (accounts/credentials.py).
+MAILBOX_NAMES = ("INVOICE_EMAIL_ADDRESS", "INVOICE_EMAIL_APP_PASSWORD")
 #: The AI reading chosen where no key is typed (and, in the owner's tenant,
 #: none in the server's settings either).
 AI_KEY_MISSING = (
     "L'analyse IA demande une clé d'API Anthropic : renseignez-la sur la page Identifiants (réservée au "
     "propriétaire de l'espace)."
 )
+
+
+def mailbox_offered(state=None) -> bool:
+    """Whether the gather offers the mailbox's sources and slips: in the
+    platform owner's espace always, as before (his .env or his page); in
+    any other once its address and app password are on its « Identifiants »
+    page (`vault.ready`) - a source that could only fail, at every gather,
+    is not ticked for it. `state`: the store already read for this request
+    (a page reads it once)."""
+    from accounts import vault
+    from accounts.tenancy import server_accounts_allowed
+
+    if server_accounts_allowed():
+        return True
+    return vault.ready(*MAILBOX_NAMES, state=state)

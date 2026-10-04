@@ -499,6 +499,14 @@ class CredentialsForm(forms.Form):
         host = (self.cleaned_data.get(MAILBOX_HOST) or "").strip().lower().rstrip(".")
         if host and (not HOST_RE.match(host) or host.startswith("localhost")):
             raise forms.ValidationError(BAD_HOST)
+        if host and not server_accounts_allowed():
+            # Another bar's server is reached from the platform owner's
+            # network: never a name only that network answers to (the
+            # gather checks the addresses too, invoices/scrapers/egress.py).
+            from invoices.scrapers import egress
+
+            if egress.local_name(host):
+                raise forms.ValidationError(egress.LOCAL_NAME.format(host=host))
         return host
 
     @sensitive_variables("typed", "cleaned")

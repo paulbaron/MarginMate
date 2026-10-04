@@ -24,6 +24,7 @@ from django.utils import timezone
 from django.utils.http import urlencode
 
 import common
+from accounts import vault
 from accounts.tenancy import integrations_allowed, server_accounts_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
@@ -259,12 +260,16 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
     # its mailbox's sources only, and told so.
     allowed = integrations_allowed()
     server = server_accounts_allowed()
+    # Another espace's mailbox is offered once filled in on its « Identifiants »
+    # - its store read once for the card (pages are measured).
+    state = None if server or not allowed else vault.load()
+    mailbox = allowed and integrations.mailbox_offered(state)
     metro = own_module_suppliers().first()
     # The mailbox's types and the customer portals': both are gathered.
     active_types = InvoiceType.objects.filter(is_active=True).select_related("supplier")
     if not server:
         active_types = active_types.filter(source_kind=InvoiceType.SourceKind.EMAIL)
-    email_types = list(active_types) if allowed else []
+    email_types = list(active_types) if mailbox else []
     gather_sources = []
     if metro:
         from .scrapers.metro import metro_pause
@@ -273,7 +278,7 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         # box is out of reach and the reason said (_import_card.html).
         gather_sources.append({"code": "METRO", "label": metro.name, "paused": metro_pause()})
     gather_sources += [{"code": f"type-{it.id}", "label": it.name} for it in email_types]
-    if allowed:
+    if mailbox:
         # The drivers' returnables slips, each format fetched by mail: they
         # go to Consignes, never among the invoices (tasks._gather_slips).
         from returnables.models import SlipFormat
@@ -351,7 +356,11 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
         # What another espace's gather does not search, said under its sources.
-        "gather_notes": [] if server or not allowed else [integrations.METRO, integrations.PORTALS],
+        "gather_notes": (
+            []
+            if server or not allowed
+            else [*([] if mailbox else [integrations.MAILBOX_TO_FILL]), integrations.METRO, integrations.PORTALS]
+        ),
         "ai_refused": None if allowed else integrations.AI_READING,
         # « Prendre une photo » stops what the form would post short of
         # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
