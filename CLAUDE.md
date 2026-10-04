@@ -3241,17 +3241,24 @@ through the motif guard too**
 (`returnables.patterns.check_invoice_mail_pattern`, used by
 `EmailInvoiceSource.clean()`, and `invoice_mail_matcher`, the
 default `compile` of `find_matching_emails`, so the gather and « Tester »
-both use it): the shape check without compiling (« The motif guard », under
-« Consignes »), then `regex.compile` with NO flag - `re`'s meaning kept,
-case-sensitive unless the pattern says `(?i)`, a blank-matching « .* »
-accepted, unlike a returnables format -, 500 characters at most (the
-column), matched on the first 200 000 characters of the text with a 1 s
-timeout per match; a timeout is « no match », said in the job's log, and
-makes the search an incomplete one (above). A refusal names its field
-(`generic_email.PATTERN_LABELS`: « Motif d'expéditeur / d'objet / de
-contenu / de pièce jointe »), and `_gather_email` says a stored pattern the
-guard refuses (saved before it) as « Motif de la source à corriger : … »,
-never « Boîte mail : », the way `_gather_slips` says a format's. It
+both use it), **in every espace, the owner's included** (his decision for
+his own espace; the merge of 04/10/2026 made it the one implementation):
+the shape check without compiling (« The motif guard », under
+« Consignes »), on the tree `regex` builds with no flag (`_check_shape(pattern,
+0)`: the tree compiled), then `regex.compile` with NO flag - `re`'s meaning
+kept, case-sensitive unless the pattern says `(?i)`, stripped as the form
+strips it, a blank-matching « .* » accepted in the owner's espace, unlike a
+returnables format -, 500 characters at most (the column), matched on the
+first 200 000 characters of the text with a 1 s timeout per match; a timeout
+is « no match », said in the job's log, and makes the search an incomplete
+one (above). A refusal at the gather names its field
+(`EmailInvoiceSource.PATTERN_LABELS`, through `generic_email._invoice_matcher`:
+« Motif d'expéditeur / d'objet / de contenu / de pièce jointe »), and
+`_gather_email` says a stored pattern the guard refuses (saved before it) as
+« Motif de la source à corriger : … », never « Boîte mail : », the way
+`_gather_slips` says a format's; `EmailInvoiceSource.clean` says
+« Expression régulière invalide : … » in the owner's espace. What another
+bar's patterns get on top is under « Every espace's connectors » below. It
 used to be a bare `re.compile` run on mail anybody can write: one
 backtracking pattern and one crafted body pinned the server's CPU for every
 bar (audit 04/10/2026). An attachment's file name
@@ -3360,19 +3367,28 @@ its own - the views, the task bodies, each connector last:
   sentence and the notes in place of the form (`gather_to_fill`). Consignes
   still shows, and is held by, a gather running whatever the mailbox.
 - **The mailbox's guards** (another bar's unless said):
-  - `EmailInvoiceSource.clean` runs the pattern guard
-    (`returnables.patterns.compile_pattern(..., flags=0, strip=False)`)
-    after the plain `re.compile`, whose « Expression régulière invalide »
-    stays - the form and « Données » alike; the gather and « Tester » match
-    with `invoice_mail_matcher` (case-sensitive and single-line as `re`, not
-    stripped - a trailing space is part of what `re` matched -, the body to
-    100 000 characters, the source stopped after three timeouts), each
-    pattern named in a refusal as the form names it (`PATTERN_LABELS`,
-    `generic_email._guarded_compilers`: « Motif de la source » left the bar
-    guessing which of four failed). A pattern finding something in an empty
-    text keeps every mail: refused with its field's own sentence
-    (`EMPTY_MATCH_REASONS`, « … pour tous les expéditeurs, écrivez @ »),
-    never the slips' one about lines. The owner's patterns are `re`'s.
+  - **The patterns: GitHub's main's rule in every espace, another bar's
+    extras on top, one implementation** (merged 04/10/2026, « An invoice
+    source's four patterns » above). `EmailInvoiceSource.clean` (the form
+    and « Données » alike) and the gather and « Tester »
+    (`generic_email._invoice_matcher` → `invoice_mail_matcher`) all go
+    through `returnables.patterns.check_invoice_mail_pattern`. Outside the
+    owner's espace: `clean`'s refusals name their field (`PATTERN_LABELS`,
+    « Motif d'expéditeur : … » where the owner's say « Expression régulière
+    invalide : … »); a pattern finding something in an empty text keeps
+    every mail until the byte budgets stop the search, so it is refused,
+    when saved and before a search signs in, with its field's own sentence
+    (`EMPTY_MATCH_REASONS` passed as `empty_reason`, « … pour tous les
+    expéditeurs, écrivez @ »; the owner's « .* » is `re`'s); and a pattern
+    out of time on `MAX_MAIL_TIMEOUTS` (3) mails of one search stops its
+    source (`MailMatcher(max_timeouts=)`, a PatternError « Motif de
+    contenu : motif trop lent sur ces mails — simplifiez-le. », said
+    « Motif de la source à corriger : … ») - before it each slow mail makes
+    the search incomplete, as in the owner's espace, where no number of
+    them stops it. The patterns are stripped and matched on 200 000
+    characters in every espace: this branch's « not stripped » and 100 000
+    gave way to GitHub's main's rule.
+    `invoices/tests/test_mailbox_guards.py` tests each rule in both espaces.
   - `invoices/scrapers/egress.py`: the IMAP server's name is resolved
     (`egress.resolve`, looked up at each call) before IMAP4_SSL, and
     anything but a public unicast address refused - loopback, private,

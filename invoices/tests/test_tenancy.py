@@ -870,7 +870,8 @@ class AutomaticGatherGateTests(TwoTenantsTestCase):
         job, client, _alert = self.run_beta_s_gather()
         client.assert_not_called()
         self.assertEqual(
-            job.progress[self.mailbox_code]["error"], "Motif d'expéditeur : répétition trop grande : 100 fois au plus."
+            job.progress[self.mailbox_code]["error"],
+            "Motif de la source à corriger : Motif d'expéditeur : répétition trop grande : 100 fois au plus.",
         )
         # Its server leading to the local network is never connected.
         with bound_tenant(self.bar_b):

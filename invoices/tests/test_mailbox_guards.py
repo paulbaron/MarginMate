@@ -1,10 +1,13 @@
 """The invoice mailbox, open to every bar: what keeps it from hurting the
 server and the other bars.
 
-- Outside the platform owner's espace, a source's patterns pass the pattern
-  guard (returnables.patterns) when saved and are matched with a timeout,
-  case-sensitive as `re` matched them; the owner's are matched by `re` as
-  always.
+- In every espace a source's patterns pass the motif guard
+  (returnables.patterns.check_invoice_mail_pattern, the audit of 04/10/2026)
+  when saved and are matched with a timeout, case-sensitive as `re` matched
+  them, a timeout making the search an incomplete one. Outside the platform
+  owner's espace a refusal also names its field when saved, a pattern
+  finding something in an empty text is refused, and one too slow on
+  MAX_MAIL_TIMEOUTS mails stops its source; the owner's take « .* ».
 - Outside the owner's espace, the IMAP server must be a public address
   (invoices/scrapers/egress.py), checked before anything connects; a local
   name is refused when typed on « Identifiants ».
@@ -36,7 +39,7 @@ from accounts.tests.support import TwoTenantsTestCase
 from invoices import integrations
 from invoices.models import EmailInvoiceSource, InvoiceType, ScrapeJob
 from invoices.scrapers import egress, generic_email
-from invoices.scrapers.generic_email import find_matching_emails
+from invoices.scrapers.generic_email import IncompleteSearch, find_matching_emails
 from invoices.tests.test_email_search import fake_mailbox
 from returnables import patterns
 from returnables.patterns import PatternError
@@ -273,24 +276,57 @@ class InvoiceMailMatcherTests(SimpleTestCase):
 
     def test_a_refused_pattern_is_refused_before_compiling(self):
         never = NeverCompile()
-        patterns._checked.cache_clear()
-        self.addCleanup(patterns._checked.cache_clear)
+        patterns._invoice_mail_compiled.cache_clear()
+        self.addCleanup(patterns._invoice_mail_compiled.cache_clear)
         with mock.patch.object(regex, "compile", new=never):
-            with self.assertRaisesMessage(PatternError, "Motif de la source : répétition trop grande"):
-                patterns.invoice_mail_matcher("x{500}")
+            with self.assertRaisesMessage(PatternError, "Motif de contenu : répétition trop grande"):
+                patterns.invoice_mail_matcher("x{500}", field_label="Motif de contenu")
         self.assertEqual(never.calls, [])
 
-    def test_slow_on_three_mails_stops_the_source(self):
+    def test_the_shape_checked_is_the_tree_compiled_with_no_flag(self):
+        """One implementation for every espace (GitHub's main's audit rule):
+        the motif guard walks the tree `regex` builds with the flags it is
+        compiled with - none, `re`'s meaning."""
+        patterns._invoice_mail_compiled.cache_clear()
+        self.addCleanup(patterns._invoice_mail_compiled.cache_clear)
+        with mock.patch.object(patterns, "_check_shape", wraps=patterns._check_shape) as shape:
+            compiled = patterns.check_invoice_mail_pattern("Facture forme essai")
+        shape.assert_called_once_with("Facture forme essai", 0)
+        self.assertEqual(compiled.flags & (regex.IGNORECASE | regex.MULTILINE), 0)
+
+    def test_a_pattern_keeping_every_mail_is_refused_only_when_told_why(self):
+        """The owner's « .* » is accepted, as `re` took it; another bar's
+        caller passes its field's sentence, and it is refused with it."""
+        self.assertIsNotNone(patterns.check_invoice_mail_pattern(".*"))
+        self.assertIsNotNone(patterns.invoice_mail_matcher("a?").search(""))
+        reason = EmailInvoiceSource.EMPTY_MATCH_REASONS["sender_pattern"]
+        with self.assertRaisesMessage(PatternError, f"Motif d'expéditeur : {reason}."):
+            patterns.invoice_mail_matcher(".*", field_label="Motif d'expéditeur", empty_reason=reason)
+        self.assertTrue(patterns.invoice_mail_matcher("@", empty_reason=reason).search("f@exemple.invalid"))
+
+    def test_a_timeout_is_counted_and_never_stops_the_owner_s_source(self):
         said = []
-        matcher = patterns.MailMatcher(
-            SlowPattern(), log=said.append, max_timeouts=patterns.MAX_MAIL_TIMEOUTS, field_label="Motif de la source"
+        matcher = patterns.InvoiceMailMatcher(SlowPattern(), log=said.append)
+        with self.assertLogs("returnables.patterns", level="WARNING"):
+            for text in ("un", "deux", "trois", "quatre"):
+                self.assertIsNone(matcher.search(text))
+        self.assertEqual(matcher.timed_out, 4)
+        self.assertEqual(len(said), 4)
+
+    def test_slow_on_three_mails_stops_another_bar_s_source(self):
+        said = []
+        slow = SlowPattern()
+        matcher = patterns.InvoiceMailMatcher(
+            slow, log=said.append, max_timeouts=patterns.MAX_MAIL_TIMEOUTS, field_label="Motif de contenu"
         )
         with self.assertLogs("returnables.patterns", level="WARNING"):
             self.assertIsNone(matcher.search("un"))
             self.assertIsNone(matcher.search("deux"))
-            with self.assertRaisesMessage(PatternError, "Motif de la source : motif trop lent sur ces mails"):
+            with self.assertRaisesMessage(PatternError, "Motif de contenu : motif trop lent sur ces mails"):
                 matcher.search("trois")
-        self.assertEqual(len(said), 3)
+        self.assertEqual((matcher.timed_out, len(said)), (3, 3))
+        # GitHub's main's limits for an invoice source, in every espace.
+        self.assertEqual(slow.calls[0][1], {"timeout": patterns.INVOICE_MAIL_TIMEOUT, "concurrent": True})
 
 
 class HostedMailboxTests(TwoTenantsTestCase):
@@ -317,13 +353,45 @@ class HostedMailboxTests(TwoTenantsTestCase):
             make_format(name="Grossiste Beta — bon du livreur", supplier=supplier)
 
     def search(self, tenant, message=None, **patterns_given):
+        """A search in `tenant`'s mailbox: Beta's typed on its
+        « Identifiants » (type_the_mailbox), the owner's from the settings,
+        as his .env gives them."""
         with (
             bound_tenant(tenant),
+            override_settings(INVOICE_EMAIL_ADDRESS="f@exemple.invalid", INVOICE_EMAIL_APP_PASSWORD="x"),
             mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
             mock.patch.object(egress, "resolve", answers(PUBLIC)),
         ):
             fake_mailbox(client, message or a_mail())
             return find_matching_emails(START, END, log=lambda line: None, **patterns_given), client
+
+    def search_slow(self, tenant, mails: int):
+        """A search over `mails` mails whose body pattern times out on every
+        one of them (simulated: SlowOn on their body « Votre document. »,
+        never a real catastrophic match)."""
+        from invoices.tests.test_email_search import FakeMailbox, SlowOn, dated_mail
+
+        real = patterns.check_invoice_mail_pattern
+
+        def check(text, **kwargs):
+            compiled = real(text, **kwargs)
+            return SlowOn(compiled, "document") if text == "Votre" else compiled
+
+        boxes = {
+            str(n).encode(): dated_mail(date(2026, 2, n), f"facture-{n}", sender="f@traiteur.invalid")
+            for n in range(1, mails + 1)
+        }
+        with (
+            bound_tenant(tenant),
+            override_settings(INVOICE_EMAIL_ADDRESS="f@exemple.invalid", INVOICE_EMAIL_APP_PASSWORD="x"),
+            mock.patch("invoices.scrapers.generic_email.BATCH_SIZE", 1),
+            mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+            mock.patch.object(egress, "resolve", answers(PUBLIC)),
+            mock.patch("returnables.patterns.check_invoice_mail_pattern", check),
+            self.assertLogs("returnables.patterns", level="WARNING"),
+        ):
+            FakeMailbox(boxes).install(client)
+            return find_matching_emails(START, END, "traiteur", body_pattern="Votre", log=lambda line: None)
 
     def test_another_bar_s_server_leading_to_the_local_network_is_never_connected(self):
         self.type_the_mailbox(self.bar_b)
@@ -349,19 +417,43 @@ class HostedMailboxTests(TwoTenantsTestCase):
             fake_mailbox(client, a_mail())
             self.assertEqual(len(find_matching_emails(START, END, "traiteur", log=lambda line: None)), 1)
 
-    def test_another_bar_s_patterns_are_guarded_and_case_sensitive(self):
+    def test_every_espace_s_patterns_are_guarded_and_case_sensitive(self):
+        """GitHub's main's audit rule, the owner's espace included: checked
+        by the motif guard before anything compiles them or signs in."""
         self.type_the_mailbox(self.bar_b)
-        self.assertEqual(self.search(self.bar_b, sender_pattern="TRAITEUR")[0], [])
-        body = "x" * 2_000 + " Référence MOTCLE"
-        self.assertEqual(
-            len(self.search(self.bar_b, a_mail(body=body), sender_pattern="traiteur", body_pattern="MOTCLE")[0]), 1
-        )
-        never = NeverCompile()
-        patterns._checked.cache_clear()
-        self.addCleanup(patterns._checked.cache_clear)
-        with mock.patch.object(regex, "compile", new=never), self.assertRaises(PatternError):
-            self.search(self.bar_b, sender_pattern="x{500}")
-        self.assertEqual(never.calls, [])
+        for tenant in (self.bar_b, self.bar_a):
+            with self.subTest(tenant=tenant.name):
+                self.assertEqual(self.search(tenant, sender_pattern="TRAITEUR")[0], [])
+                body = "x" * 2_000 + " Référence MOTCLE"
+                self.assertEqual(
+                    len(self.search(tenant, a_mail(body=body), sender_pattern="traiteur", body_pattern="MOTCLE")[0]),
+                    1,
+                )
+                never = NeverCompile()
+                patterns._invoice_mail_compiled.cache_clear()
+                self.addCleanup(patterns._invoice_mail_compiled.cache_clear)
+                with (
+                    mock.patch.object(regex, "compile", new=never),
+                    self.assertRaisesMessage(PatternError, "Motif d'expéditeur : répétition trop grande"),
+                ):
+                    self.search(tenant, sender_pattern="x{500}")
+                self.assertEqual(never.calls, [])
+
+    def test_a_pattern_slow_on_mails_stops_another_bar_s_source_only(self):
+        """A timeout is no « no match » in either espace (GitHub's main): the
+        owner's search ends incomplete, every slow mail counted, to be
+        searched again; another bar's source is stopped at the
+        MAX_MAIL_TIMEOUTS-th, naming its pattern - the gather's thread is the
+        one process every bar runs in."""
+        self.type_the_mailbox(self.bar_b)
+        with self.assertRaises(IncompleteSearch) as incomplete:
+            self.search_slow(self.bar_a, 4)
+        self.assertEqual((incomplete.exception.slow, incomplete.exception.matches), (4, []))
+        with self.assertRaises(IncompleteSearch) as incomplete:
+            self.search_slow(self.bar_b, patterns.MAX_MAIL_TIMEOUTS - 1)
+        self.assertEqual(incomplete.exception.slow, patterns.MAX_MAIL_TIMEOUTS - 1)
+        with self.assertRaisesMessage(PatternError, "Motif de contenu : motif trop lent sur ces mails"):
+            self.search_slow(self.bar_b, patterns.MAX_MAIL_TIMEOUTS + 1)
 
     def test_a_refused_pattern_fails_its_source_on_its_own_line(self):
         self.type_the_mailbox(self.bar_b)
@@ -384,25 +476,29 @@ class HostedMailboxTests(TwoTenantsTestCase):
             job.refresh_from_db()
         client.assert_not_called()
         self.assertEqual(job.status, ScrapeJob.Status.SUCCESS)
-        # Named as the source's form names it: which of four patterns failed.
+        # Named as the source's form names it: which of four patterns failed,
+        # and the source's to correct (GitHub's main's words), not the mailbox's.
         self.assertEqual(
             job.progress[f"type-{source_type.pk}"]["error"],
-            "Motif d'expéditeur : répétition trop grande : 100 fois au plus.",
+            "Motif de la source à corriger : Motif d'expéditeur : répétition trop grande : 100 fois au plus.",
         )
 
-    def test_each_pattern_is_named_and_kept_as_typed(self):
+    def test_each_pattern_is_named_in_every_espace(self):
         self.type_the_mailbox(self.bar_b)
-        for given, said in (
-            ({"sender_pattern": "traiteur", "body_pattern": "x{500}"}, "Motif de contenu :"),
-            ({"sender_pattern": "traiteur", "subject_pattern": "("}, "Motif d'objet :"),
-            ({"sender_pattern": "traiteur", "attachment_pattern": "x{500}"}, "Motif de pièce jointe :"),
-        ):
-            with self.subTest(given=given), self.assertRaises(PatternError) as refused:
-                self.search(self.bar_b, **given)
-            self.assertTrue(str(refused.exception).startswith(said), str(refused.exception))
-        # A trailing space is part of the pattern, as `re` read it.
-        self.assertEqual(self.search(self.bar_b, sender_pattern="traiteur", subject_pattern="Votre facture ")[0], [])
-        self.assertEqual(len(self.search(self.bar_b, sender_pattern="traiteur", subject_pattern="Votre facture")[0]), 1)
+        for tenant in (self.bar_b, self.bar_a):
+            for given, said in (
+                ({"sender_pattern": "traiteur", "body_pattern": "x{500}"}, "Motif de contenu :"),
+                ({"sender_pattern": "traiteur", "subject_pattern": "("}, "Motif d'objet :"),
+                ({"sender_pattern": "traiteur", "attachment_pattern": "x{500}"}, "Motif de pièce jointe :"),
+            ):
+                with self.subTest(tenant=tenant.name, given=given), self.assertRaises(PatternError) as refused:
+                    self.search(tenant, **given)
+                self.assertTrue(str(refused.exception).startswith(said), str(refused.exception))
+            # Stripped, as the source's form strips what it is typed
+            # (check_invoice_mail_pattern, GitHub's main's rule).
+            self.assertEqual(
+                len(self.search(tenant, sender_pattern="traiteur", subject_pattern="Votre facture ")[0]), 1
+            )
 
     def test_a_pattern_keeping_every_mail_is_told_how_to_say_so(self):
         with bound_tenant(self.bar_b):
@@ -413,9 +509,22 @@ class HostedMailboxTests(TwoTenantsTestCase):
                 source.full_clean()
             errors = refused.exception.message_dict
             self.assertIn("écrivez @", errors["sender_pattern"][0])
+            self.assertTrue(errors["sender_pattern"][0].startswith("Motif d'expéditeur : le motif retient"))
             self.assertIn("laissez le champ vide pour ne pas filtrer", errors["subject_pattern"][0])
             self.assertNotIn("ligne", errors["sender_pattern"][0])
             EmailInvoiceSource(invoice_type=source_type, sender_pattern="@").full_clean()
+        # The owner's « .* » is `re`'s, as GitHub's main's rule takes it.
+        with bound_tenant(self.bar_a):
+            supplier = make_supplier(code="TRAITEUR", name="Traiteur", parser_key="")
+            source_type = InvoiceType.objects.create(name="Traiteur - Factures", supplier=supplier)
+            EmailInvoiceSource(invoice_type=source_type, sender_pattern=".*", subject_pattern="a?").full_clean()
+
+    def test_a_search_keeping_every_mail_is_refused_before_signing_in_in_another_bar_only(self):
+        self.type_the_mailbox(self.bar_b)
+        with self.assertRaises(PatternError) as refused:
+            self.search(self.bar_b, sender_pattern=".*")
+        self.assertIn("pour tous les expéditeurs, écrivez @", str(refused.exception))
+        self.assertEqual(len(self.search(self.bar_a, sender_pattern=".*")[0]), 1)
 
     def test_another_bar_s_search_asks_the_sizes_and_passes_over_a_message_too_big(self):
         self.type_the_mailbox(self.bar_b)
@@ -515,8 +624,12 @@ class HostedMailboxTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_a):
             self.assertEqual(generic_email.failure_said(refused), str(refused))
 
-    def test_saving_another_bar_s_patterns_goes_through_the_guard(self):
-        for tenant, guarded in ((self.bar_b, True), (self.bar_a, False)):
+    def test_saving_every_espace_s_patterns_goes_through_the_guard(self):
+        """One check in both espaces (GitHub's main's audit rule), a syntax
+        error said in French by the guard; another bar's refusal names its
+        field, the owner's says « Expression régulière invalide » as GitHub's
+        main wrote it."""
+        for tenant, label in ((self.bar_b, "Motif d'expéditeur"), (self.bar_a, "Expression régulière invalide")):
             with bound_tenant(tenant):
                 supplier = make_supplier(code="TRAITEUR", name="Traiteur", parser_key="")
                 source_type = InvoiceType.objects.create(name="Traiteur - Factures", supplier=supplier)
@@ -524,14 +637,9 @@ class HostedMailboxTests(TwoTenantsTestCase):
                 with self.assertRaises(ValidationError) as refused:
                     source.full_clean()
             errors = refused.exception.message_dict
-            # A syntax error is said as it always was, in both.
-            self.assertTrue(errors["body_pattern"][0].startswith("Expression régulière invalide :"))
-            if guarded:
-                self.assertEqual(
-                    errors["sender_pattern"], ["Motif d'expéditeur : répétition trop grande : 100 fois au plus."]
-                )
-            else:
-                self.assertNotIn("sender_pattern", errors)
+            self.assertEqual(errors["sender_pattern"], [f"{label} : répétition trop grande : 100 fois au plus."])
+            body_label = "Motif de contenu" if tenant == self.bar_b else label
+            self.assertEqual(errors["body_pattern"], [f"{body_label} : parenthèse non fermée (position 1)."])
 
     def test_a_local_imap_server_is_refused_on_another_bar_s_page(self):
         from tests.runner import confirm_password
@@ -648,7 +756,7 @@ class HostedMailboxTests(TwoTenantsTestCase):
             self.client.post(create, {**data, "supplier": str(owner_supplier.pk)})
         thread.assert_called_once()
 
-    def test_an_archive_s_source_goes_through_the_guard_in_another_bar(self):
+    def test_an_archive_s_source_goes_through_the_guard_in_every_espace(self):
         from transfer.archive import ArchiveReader
         from transfer.sections.base import Strategy
         from transfer.tests.support import forge, import_archive
@@ -677,18 +785,15 @@ class HostedMailboxTests(TwoTenantsTestCase):
             self.addCleanup(reader.close)
             return reader
 
-        for tenant, refused in ((self.bar_b, True), (self.bar_a, False)):
+        for tenant, said in ((self.bar_b, "Motif d'expéditeur"), (self.bar_a, "Expression régulière invalide")):
             with self.subTest(tenant=tenant.name), bound_tenant(tenant):
                 make_supplier(code="TRAITEUR_B", name="Traiteur Beta", parser_key="")
                 report = import_archive(archive("x{500}"), {"sources": Strategy.MERGE}).section("sources")
                 imported = InvoiceType.objects.filter(name="Traiteur Beta - Factures").exists()
-                if refused:
-                    self.assertFalse(imported)
-                    self.assertEqual(len(report.skipped), 1, report.skipped)
-                    self.assertIn("Motif d'expéditeur : répétition trop grande", report.skipped[0])
-                else:
-                    # The owner's patterns are `re`'s, as always.
-                    self.assertTrue(imported, report.skipped)
+                # Refused in both since GitHub's main's audit, each in its words.
+                self.assertFalse(imported)
+                self.assertEqual(len(report.skipped), 1, report.skipped)
+                self.assertIn(f"{said} : répétition trop grande", report.skipped[0])
 
     def test_consignes_offers_another_bar_s_slips_once_its_mailbox_is_filled_in(self):
         self.beta_s_sources()
