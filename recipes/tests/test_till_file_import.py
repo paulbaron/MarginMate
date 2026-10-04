@@ -29,7 +29,7 @@ from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from recipes import tasks
 from recipes.models import PosDailyPayment, PosProduct, PosProductDailyQuantity, RecipeSale, SalesImportJob, TillFormat
-from recipes.pos import connectors, till_file
+from recipes.pos import connectors, laddition_xlsx, till_file
 from recipes.sales import MANUAL_SALE_SOURCE, TILL_SOURCE
 from recipes.tests.test_pos_payments import TICKET_HEADER, ticket
 from recipes.tests.test_pos_revenue import HEADER, line, write_workbook
@@ -421,3 +421,102 @@ class AnotherBarTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_a):
             self.assertFalse(PosProductDailyQuantity.objects.exists())
             self.assertEqual(kept(paths.downloads_dir() / "caisse"), [])
+
+
+class KeptOnceTests(UploadCase):
+    """downloads/ is in every backup: a file uploaded again is kept once,
+    and only the newest KEPT_FILES uploads stay - L'Addition's beside the
+    fetch's own downloads, which are never pruned."""
+
+    def setUp(self):
+        super().setUp()
+        self.fmt = sales_format()
+
+    def laddition_export(self, price: str = "7.50") -> SimpleUploadedFile:
+        path = write_workbook([HEADER, line("2026-06-01", "Pinte Exemple", price, "20%")])
+        return SimpleUploadedFile("Lignes de ventes.xlsx", Path(path).read_bytes())
+
+    def test_the_same_file_uploaded_twice_is_kept_once(self):
+        for _time in range(2):
+            _response, job = self.upload(csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20"), self.fmt.pk)
+            self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertEqual(len(kept(paths.downloads_dir() / "caisse")), 1)
+        export = self.laddition_export().read()
+        for _time in range(2):
+            upload = SimpleUploadedFile("Lignes de ventes.xlsx", export)
+            _response, job = self.upload(upload, connectors.LADDITION_CHOICE)
+            self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertEqual(len(kept(paths.downloads_dir())), 1)
+        self.assertEqual(kept(tasks.staged_uploads_dir()), [])
+
+    def test_the_newest_uploads_are_kept_never_a_download_of_the_fetch(self):
+        fetched = paths.downloads_dir() / "export-lignes-de-ventes.xlsx"
+        fetched.write_bytes(Path(write_workbook([HEADER])).read_bytes())
+        with mock.patch.object(tasks, "KEPT_FILES", 1):
+            for price in ("7.50", "8.00", "8.50"):
+                _response, job = self.upload(self.laddition_export(price), connectors.LADDITION_CHOICE)
+                self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        names = kept(paths.downloads_dir())
+        self.assertEqual(len(names), 2)
+        self.assertIn(fetched.name, names)
+        self.assertTrue(any(name.startswith(f"{tasks.UPLOADED}-") for name in names))
+        self.assertEqual(PosProductDailyQuantity.objects.get().revenue_ttc, Decimal("8.50"))
+
+
+class SilentReadingTests(UploadCase):
+    """A reading is silent, and a run silent for ten minutes is reaped - a
+    second upload or fetch could then start beside it. The job beats as the
+    rows go by, and hears a cancel there."""
+
+    def setUp(self):
+        super().setUp()
+        self.fmt = sales_format()
+        self.enterContext(mock.patch.object(laddition_xlsx, "PROGRESS_ROWS", 2))
+        self.lines = [SALES, *[f"03/07/2026;Produit Exemple {n};1;1,00;20" for n in range(6)]]
+
+    def test_the_job_beats_while_it_reads(self):
+        real = SalesImportJob.beat
+        beats = []
+
+        def beat(job):
+            beats.append(job.pk)
+            real(job)
+
+        with mock.patch.object(SalesImportJob, "beat", beat):
+            _response, job = self.upload(csv(*self.lines), self.fmt.pk)
+        self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertGreaterEqual(len(beats), 3)
+
+    def test_a_cancel_is_heard_while_it_reads_nothing_written_nothing_kept(self):
+        def resolved_then_cancelled(value, file_name):
+            SalesImportJob.objects.update(cancel_requested=True)
+            return connectors.resolve(value, file_name)
+
+        with mock.patch("recipes.tasks.resolve", resolved_then_cancelled):
+            _response, job = self.upload(csv(*self.lines), self.fmt.pk)
+        self.assertEqual(job.status, SalesImportJob.Status.CANCELLED, job.log)
+        self.assertIn("Annulé.", job.log)
+        self.assertFalse(PosProductDailyQuantity.objects.exists())
+        self.assertEqual(kept(paths.downloads_dir() / "caisse"), [])
+        self.assertEqual(kept(tasks.staged_uploads_dir()), [])
+
+
+class MoneyNotReadTests(UploadCase):
+    """A format with no amount column writes the quantities alone: a day
+    already imported with its money keeps it, another stays « non lu » -
+    what the formats page, « Tester » and the job say (till_views.NO_MONEY)."""
+
+    def test_a_file_reading_no_money_keeps_the_money_already_read(self):
+        priced = sales_format()
+        bare = sales_format(name="Rapport sans montant", amount_column="", rate_column="")
+        self.upload(csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20"), priced.pk)
+        _response, job = self.upload(
+            csv("Date;Article;Qté", "03/07/2026;Pinte Exemple;3", "04/07/2026;Pinte Exemple;1"), bare.pk
+        )
+        self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        days = {
+            day.sold_on: (day.quantity, day.revenue_ttc, day.revenue_read)
+            for day in PosProductDailyQuantity.objects.all()
+        }
+        self.assertEqual(days[date(2026, 7, 3)], (3, Decimal("13.00"), True))
+        self.assertEqual(days[date(2026, 7, 4)][::2], (1, False))

@@ -136,3 +136,64 @@ class StoreReadingTests(TestCase):
         )
         self.assertEqual(stored(), [(june(1), CB, Decimal("7.50"))])
         self.assertFalse(RecipeSale.objects.exists())
+
+
+def sales_of(*entries) -> ParsedExport:
+    """A reading of these (name, day, quantity), each a product of its own."""
+    export = ParsedExport(entries=list(entries))
+    for name, day, quantity in entries:
+        export.products[name] = {"quantity": quantity, "category": "", "typology": "", "first": day, "last": day}
+    return export
+
+
+class PartOfADayTests(TestCase):
+    """A file holding part of a day - an upload corrects one product - leaves
+    the recipes agreeing with the day's till products: `record_sales` sets a
+    (recipe, day) to what it is handed, and handed the file alone it set the
+    recipe to the corrected product while the day kept its others."""
+
+    def setUp(self):
+        self.pinte = make_recipe(name="Pinte Exemple")
+        self.pinte.happy_hour_name = "Pinte Exemple HH"
+        self.pinte.save()
+
+    def recipe_sales(self) -> list[tuple]:
+        return sorted(RecipeSale.objects.values_list("source", "sold_on", "quantity"))
+
+    def day(self) -> dict:
+        return dict(PosProductDailyQuantity.objects.values_list("product__name", "quantity"))
+
+    def test_a_product_corrected_alone_keeps_the_recipe_at_the_day_s_total(self):
+        store_reading(sales_of(("Pinte Exemple", june(3), 2), ("Pinte Exemple HH", june(3), 3)), lambda line: None)
+        store_reading(sales_of(("Pinte Exemple", june(3), 4)), lambda line: None)
+        self.assertEqual(self.day(), {"Pinte Exemple": 4, "Pinte Exemple HH": 3})
+        self.assertEqual(self.recipe_sales(), [(TILL_SOURCE, june(3), 7)])
+
+    def test_the_recipes_agree_with_a_rebuild_from_the_days(self):
+        from recipes.sales import resync_recipe_from_daily_quantities
+
+        store_reading(sales_of(("Pinte Exemple", june(3), 2), ("Pinte Exemple HH", june(3), 3)), lambda line: None)
+        store_reading(sales_of(("Pinte Exemple HH", june(3), 1), ("Pinte Exemple", june(4), 5)), lambda line: None)
+        written = self.recipe_sales()
+        resync_recipe_from_daily_quantities(self.pinte)
+        self.assertEqual(written, [(TILL_SOURCE, june(3), 3), (TILL_SOURCE, june(4), 5)])
+        self.assertEqual(self.recipe_sales(), written)
+
+    def test_another_day_and_a_sale_typed_by_hand_are_left_alone(self):
+        from recipes.sales import MANUAL_SALE_SOURCE
+
+        store_reading(sales_of(("Pinte Exemple", june(2), 6)), lambda line: None)
+        RecipeSale.objects.create(recipe=self.pinte, sold_on=june(3), quantity=9, source=MANUAL_SALE_SOURCE)
+        store_reading(sales_of(("Pinte Exemple HH", june(3), 1)), lambda line: None)
+        self.assertEqual(
+            self.recipe_sales(),
+            sorted([(MANUAL_SALE_SOURCE, june(3), 9), (TILL_SOURCE, june(2), 6), (TILL_SOURCE, june(3), 1)]),
+        )
+
+    def test_only_the_reading_s_own_products_are_said_to_have_no_recipe(self):
+        store_reading(sales_of(("Pinte Exemple", june(3), 2), ("Inconnue Exemple", june(3), 1)), lambda line: None)
+        lines = []
+        stored_reading = store_reading(sales_of(("Pinte Exemple", june(3), 4)), lines.append)
+        self.assertEqual(stored_reading.unmatched, 0)
+        self.assertNotIn("sans recette", "\n".join(lines))
+        self.assertEqual(self.recipe_sales(), [(TILL_SOURCE, june(3), 4)])

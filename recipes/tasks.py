@@ -21,6 +21,7 @@ traceback is added to the job's log in the server-accounts espace only
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import traceback
@@ -294,6 +295,37 @@ def _sync_pos_products(export) -> int:
     return len(export.products)
 
 
+def till_entries(export) -> list[tuple[str, date, int]]:
+    """What `record_sales` is handed for a reading: the reading's own
+    (product, day) quantities, then every OTHER till product's quantity
+    already on file (`PosProductDailyQuantity`) for the days it touched.
+
+    `record_sales` sets each (recipe, day) to the sum it is handed, while
+    `sync_pos_products` replaces only the products a reading holds. Handed
+    the reading alone, a file holding one product of a day set the recipe to
+    that product's quantity while the day kept its others: a pint corrected
+    to 4 beside its happy-hour name's 3 left the recipe at 4 - « Vendu » and
+    « Écarts » read 4, Marges read 7, and the next link changed went back to
+    7. So the recipe's day is what the day's till products say, which is
+    what `resync_recipe_from_daily_quantities` rebuilds too. A fetch reads
+    whole days: beside its own entries it finds only a product an earlier
+    reading of the day held and this one no longer prints."""
+    entries = list(export.entries)
+    days = {day for _name, day, _quantity in entries}
+    if not days:
+        return entries
+    read = {(name, day) for name, day, _quantity in entries}
+    beside = (
+        PosProductDailyQuantity.objects.filter(sold_on__range=(min(days), max(days)))
+        .order_by("sold_on", "product__name")
+        .values_list("product__name", "sold_on", "quantity")
+    )
+    entries.extend(
+        (name, day, quantity) for name, day, quantity in beside.iterator() if day in days and (name, day) not in read
+    )
+    return entries
+
+
 @dataclass
 class StoredReading:
     """What `store_reading` wrote."""
@@ -317,12 +349,20 @@ def store_reading(export, log, *, payments_beside_sales: bool = False) -> Stored
     A reading of payments alone (`export.sales_read` False: a file of
     « Encaissements ») writes no sales and says nothing of them.
     `payments_beside_sales`: its days are written only where « Ventes » holds
-    a sale (recipes.payments.record_payments), the others said."""
+    a sale (recipes.payments.record_payments), the others said.
+
+    The recipes' sales of the days read are worked out from every till
+    product of those days, the reading's and those already on file
+    (`till_entries`): a file holding part of a day leaves the recipes
+    agreeing with the day. The products said to have no recipe are the
+    reading's own."""
     stored = StoredReading()
     if getattr(export, "sales_read", True):
         stored.seen = sync_pos_products(export)
         log(f"{stored.seen} produits de caisse vus.")
-        stored.sales = record_sales(export.entries, source=TILL_SOURCE)
+        stored.sales = record_sales(till_entries(export), source=TILL_SOURCE)
+        named = {str(name).strip() for name, _day, _quantity in export.entries}
+        stored.sales.unmatched = [name for name in stored.sales.unmatched if name in named]
         log(
             f"{stored.sales.recorded} totaux recette/jour enregistrés "
             f"({stored.sales.created} nouveaux, {stored.sales.updated} mis à jour)."
@@ -419,9 +459,16 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
 
 #: Where a till's files are kept once read: L'Addition's own export goes to
 #: the espace's downloads/ (the backfills glob downloads/*.xlsx), any other
-#: till's file to downloads/caisse/, the newest KEPT_FILES of them.
+#: till's file to downloads/caisse/ - the newest KEPT_FILES uploads of each,
+#: each content once.
 TILL_FILES = "caisse"
 KEPT_FILES = 50
+#: What a kept upload's name starts with: in downloads/ it tells the uploads
+#: from the fetch's own downloads, which are never pruned.
+UPLOADED = "televerse"
+#: How much of the file's SHA-256 its kept name carries: the same file
+#: uploaded again is kept once (downloads/ is in every backup).
+DIGEST_CHARS = 16
 #: How long a kept file's name may be: Windows' paths are short.
 KEPT_NAME_LENGTH = 80
 
@@ -441,16 +488,25 @@ def staged_uploads_dir() -> Path:
     return folder
 
 
-def _kept_name(folder: Path, file_name: str) -> Path:
-    """« 20261004-153012-export_caisse.csv », free in `folder`: the moment,
-    then the file's own name made safe and cut, its suffix kept."""
+def _digest(path: Path) -> str:
+    sha = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            sha.update(chunk)
+    return sha.hexdigest()[:DIGEST_CHARS]
+
+
+def _kept_name(folder: Path, file_name: str, digest: str) -> Path:
+    """« televerse-20261004-153012-<empreinte>-export_caisse.csv », free in
+    `folder`: the mark, the moment, the content's digest, then the file's own
+    name made safe and cut, its suffix kept."""
     original = Path(str(file_name or "")).name
     suffix = Path(original).suffix.lower()[:5]
     try:
         safe = get_valid_filename(Path(original).stem)
     except SuspiciousFileOperation:
         safe = "fichier"
-    stem = f"{timezone.localtime():%Y%m%d-%H%M%S}-{safe[:KEPT_NAME_LENGTH]}"
+    stem = f"{UPLOADED}-{timezone.localtime():%Y%m%d-%H%M%S}-{digest}-{safe[:KEPT_NAME_LENGTH]}"
     target = folder / f"{stem}{suffix}"
     number = 2
     while target.exists():
@@ -461,16 +517,25 @@ def _kept_name(folder: Path, file_name: str) -> Path:
 
 def keep_upload(staged: Path, file_name: str, laddition: bool) -> Path:
     """Move a file read whole into its place - `downloads/` for
-    L'Addition's export, `downloads/caisse/` for any other - and keep only
-    the newest KEPT_FILES of the latter."""
+    L'Addition's export, `downloads/caisse/` for any other - and keep the
+    newest KEPT_FILES uploads there. The same content already kept (its
+    digest is in the name) is kept once: the staged copy goes. In
+    downloads/ only the uploads are pruned, never the fetch's downloads."""
     folder = downloads_dir() if laddition else till_files_dir()
-    target = _kept_name(folder, file_name)
+    digest = _digest(staged)
+    same = sorted(path for path in folder.glob(f"{UPLOADED}-*-{digest}-*") if path.is_file())
+    if same:
+        staged.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            os.utime(same[-1])
+        return same[-1]
+    target = _kept_name(folder, file_name, digest)
     os.replace(staged, target)
-    if not laddition:
-        kept = sorted((path for path in folder.iterdir() if path.is_file()), key=lambda path: path.stat().st_mtime)
-        for old in kept[:-KEPT_FILES]:
-            with contextlib.suppress(OSError):
-                old.unlink()
+    uploads = folder.glob(f"{UPLOADED}-*") if laddition else folder.iterdir()
+    kept = sorted((path for path in uploads if path.is_file()), key=lambda path: path.stat().st_mtime)
+    for old in kept[:-KEPT_FILES]:
+        with contextlib.suppress(OSError):
+            old.unlink()
     return target
 
 
@@ -532,12 +597,20 @@ def import_till_file_task(
     job.status = SalesImportJob.Status.RUNNING
     job.save(update_fields=["status"])
     staged = Path(staged_path)
+
+    def alive() -> None:
+        # The reading is silent, and a run silent for ten minutes is reaped
+        # (common's STALE_AFTER): a second upload or fetch could then start
+        # beside it. A heartbeat every few thousand rows, and a cancel heard.
+        job.beat()
+        _raise_if_cancelled(job)
+
     try:
         job.append_log(f"Fichier « {Path(file_name).name} »." + (f" Importé par {uploaded_by}." if uploaded_by else ""))
         _raise_if_cancelled(job)
         choice = resolve(choice_value, file_name)
         job.append_log(f"Format « {choice.label} »." + (f" Jour des ventes : {day:%d/%m/%Y}." if day else ""))
-        export = read_upload(staged, choice, file_name=file_name, day=day)
+        export = read_upload(staged, choice, file_name=file_name, day=day, progress=alive)
         _raise_if_cancelled(job)
         keep_upload(staged, file_name, choice.laddition)
         job.range_start, job.range_end = _covered(export)
