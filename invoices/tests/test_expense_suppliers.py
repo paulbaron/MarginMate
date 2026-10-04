@@ -168,7 +168,7 @@ class ChargeItemByChargeItemTests(TestCase):
         Invoice.objects.filter(pk=invoice.pk).update(source_text=STATEMENT)
         Supplier.objects.filter(pk=plain.pk).update(expenses_only=True)
         plain.refresh_from_db()
-        self.assertEqual(redo_as_expenses(plain), 1)
+        self.assertEqual(redo_as_expenses(plain), (1, []))
         invoice.refresh_from_db()
         self.assertEqual(
             [(line.raw_name, line.total_ht) for line in invoice.lines.all()],
@@ -334,8 +334,8 @@ class MarkingTheSupplierTests(TestCase):
     def test_redoing_is_safe_to_run_twice(self):
         self.supplier.expenses_only = True
         self.supplier.save()
-        self.assertEqual(redo_as_expenses(self.supplier), 1)
-        self.assertEqual(redo_as_expenses(self.supplier), 0)
+        self.assertEqual(redo_as_expenses(self.supplier), (1, []))
+        self.assertEqual(redo_as_expenses(self.supplier), (0, []))
 
     def test_a_document_a_count_was_priced_from_is_left_alone_and_leaves_no_charge_item(self):
         """Its lines cannot be replaced (InvoiceLinesInUseError), so it is
@@ -352,7 +352,7 @@ class MarkingTheSupplierTests(TestCase):
         self.supplier.expenses_only = True
         self.supplier.save()
 
-        self.assertEqual(redo_as_expenses(self.supplier), 0)
+        self.assertEqual(redo_as_expenses(self.supplier), (0, []))
         self.assertFalse(Product.objects.filter(raw_name="Free Exemple").exists())
         self.assertEqual(Invoice.objects.get(pk=self.invoice.pk).lines.count(), 2)
         # Only redo_as_expenses' own last step touched the products: the
@@ -361,6 +361,32 @@ class MarkingTheSupplierTests(TestCase):
             set(Product.objects.values_list("pk", "raw_name", "is_expense")),
             {(pk, name, True) for pk, name, _is_expense in products},
         )
+
+    def test_a_document_whose_charge_no_column_holds_is_left_alone_and_said(self):
+        """Ten at 200 000 fit their columns; refiled as one line at a count
+        of 1, 2 000 000 does not (LineTooWideError). Raised past the view, the
+        page answered 500 with the box already saved, the documents after
+        it never refiled and no confirmation able to finish the job."""
+        ten = line("Abonnement mobile", "2000000.00")
+        ten.quantity, ten.unit_cost_ht = 10, D("200000")
+        wide = import_parsed_invoice(self.supplier, parsed(lines=[ten], total=D("2400000.00"), number="F-2"))
+
+        response = self.client.post(self.url, {"expenses_only": "1", "confirme": "1"})
+        self.assertRedirects(response, reverse("invoices:supplier_detail", args=[self.supplier.pk]))
+        self.supplier.refresh_from_db()
+        self.assertTrue(self.supplier.expenses_only)
+        self.assertEqual(
+            [(line.raw_name, line.quantity) for line in wide.lines.all()], [("Abonnement mobile", D("10.000"))]
+        )
+        # The other document is refiled all the same.
+        self.assertEqual(
+            sorted(line.raw_name for line in Invoice.objects.get(pk=self.invoice.pk).lines.all()),
+            ["Free Exemple", "Free Exemple"],
+        )
+        said = " ".join(messages_of(response))
+        self.assertIn("1 document(s) déjà enregistré(s) refaits ainsi", said)
+        self.assertIn("1 document(s) gardent leurs lignes", said)
+        self.assertIn("Free Exemple n° F-2 du 19/05/2026", said)
 
 
 class ReadAgainTests(TestCase):
@@ -418,6 +444,19 @@ class ReadAgainTests(TestCase):
         self.invoice.refresh_from_db()
         before = [(line.raw_name, line.total_ht) for line in self.invoice.lines.all()]
         self.assertFalse(reread_receipt(self.invoice))
+        self.invoice.refresh_from_db()
+        self.assertEqual([(line.raw_name, line.total_ht) for line in self.invoice.lines.all()], before)
+
+    def test_a_charge_reading_no_column_holds_keeps_the_old_one(self):
+        """`manage.py tenant <x> reread_receipts` runs every re-read in one
+        transaction: a charge read again into a figure too wide raised out
+        of it, and the whole command stopped on a traceback."""
+        from invoices.importing import LineTooWideError
+
+        before = [(line.raw_name, line.total_ht) for line in self.invoice.lines.all()]
+        refusal = LineTooWideError("« LOYER » : le prix unitaire (2 000 000.00) dépasse ce que MarginMate peut")
+        with mock.patch("invoices.importing.replace_invoice_lines", side_effect=refusal):
+            self.assertFalse(reread_receipt(self.invoice))
         self.invoice.refresh_from_db()
         self.assertEqual([(line.raw_name, line.total_ht) for line in self.invoice.lines.all()], before)
 

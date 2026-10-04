@@ -291,12 +291,14 @@ def refile_as_charge(invoice: Invoice, parsed: ParsedInvoice) -> bool:
     return charge_state(invoice, total) or changed
 
 
-def redo_as_expenses(supplier: Supplier) -> int:
+def redo_as_expenses(supplier: Supplier) -> tuple[int, list[Invoice]]:
     """File the documents already in as charges: their charge items, or the
     one line their total makes, and the products their old lines named go with
     them (remove_orphan_products). Returns how many documents changed - one
     whose lines a stock take was priced from is left alone, since it was
-    stock after all.
+    stock after all - and the documents left alone because their charge
+    reading holds a figure no column does (LineTooWideError: ten at
+    200 000 fit, one line of 2 000 000 does not), for the page to name.
 
     Each document is **read again from its own text** where it kept some,
     rather than from the lines it is filed as: a rent statement filed at
@@ -309,15 +311,22 @@ def redo_as_expenses(supplier: Supplier) -> int:
     settled by the move rather than left flagged with nothing to say.
     """
     done = 0
+    left = []
     for invoice in Invoice.objects.filter(supplier=supplier).prefetch_related("lines"):
-        done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
+        # Refused, its savepoint takes back what it wrote: raised past here,
+        # the page answered 500 with the box saved and the documents after
+        # this one never refiled.
+        try:
+            done += refile_as_charge(invoice, _as_parsed(invoice, list(invoice.lines.all())))
+        except LineTooWideError:
+            left.append(invoice)
     # Whatever the documents needed, what this supplier sends is a charge:
     # unticked and ticked again, not one line changes, so nothing else
     # would put the flag back on its charge items. Not a product a stock item
     # claimed - it is stock after all, which is the same reason a document
     # a stock take was priced from is left alone above.
     Product.objects.filter(supplier=supplier, is_expense=False, stock_type__isnull=True).update(is_expense=True)
-    return done
+    return done, left
 
 
 def charge_credits(supplier: Supplier):

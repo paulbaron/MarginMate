@@ -1088,11 +1088,19 @@ def supplier_expenses(request, pk):
                 + (f" {freed} poste(s) repassent à classer." if freed else "")
             )
         else:
-            done = redo_as_expenses(supplier)
+            done, left = redo_as_expenses(supplier)
             said = (
                 f"{supplier.name} : ses documents sont des charges - une ligne par taux de TVA, aucun produit à classer"
                 + (f" ({done} document(s) déjà enregistré(s) refaits ainsi)." if done else ".")
             )
+            if left:
+                from .receipts import _describe
+
+                said += (
+                    f" {len(left)} document(s) gardent leurs lignes, un montant y dépassant ce que MarginMate peut "
+                    f"enregistrer : {', '.join(_describe(invoice) for invoice in left)} - corrigez-les document "
+                    "par document."
+                )
         supplier_changes.record(
             supplier, SupplierChange.Kind.CHARGES, said, data={"expenses_only": supplier.expenses_only}
         )

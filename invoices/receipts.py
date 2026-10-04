@@ -2006,8 +2006,13 @@ def reread_receipt(invoice: Invoice) -> bool:
     except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
         return False
     if charge:
-        # Not the lines a ticket reader makes of it: what it charges.
-        return refile_as_charge(invoice, parsed)
+        # Not the lines a ticket reader makes of it: what it charges. A
+        # figure too wide keeps the old reading, as below: raised, it stopped
+        # the reread_receipts command on a traceback.
+        try:
+            return refile_as_charge(invoice, parsed)
+        except LineTooWideError:
+            return False
     dated = date_check(parsed.invoice_date or invoice.invoice_date)
     checks = [_as_dict(check) for check in parsed.checks + ([dated] if dated else [])]
     if not parsed.lines or not _sum_check_passed(checks) or _failures(checks) >= _failures(invoice.parse_checks):
