@@ -5746,9 +5746,11 @@ fires on them):
   refusal is an `XlsxError` in French naming no path, and every member is
   closed when its reading ends or is given up (on Windows a file held open
   cannot be deleted).
-- `laddition_xlsx` refuses a number `Decimal` reads but no export writes (an
-  exponent, NaN, Infinity, digits that are not ASCII: `PLAIN_NUMBER`) and a
-  day outside 2000-2099; bounds a (product, day)'s revenue to its (10, 2)
+- `laddition_xlsx` refuses a number `Decimal` reads but no export writes
+  (NaN, Infinity, digits that are not ASCII, an exponent making it 1 or more:
+  `_plain`) and a day outside 2000-2099 - a float's tiny noise printed with an
+  exponent (« 5.5511151231258E-17 », PHP's way below 1e-4) still reads as
+  before, so no export the owner reads today is refused for it; bounds a (product, day)'s revenue to its (10, 2)
   columns and a (day, method)'s payments to (12, 2) (« A figure wider than
   the column », under « The electronic invoice ») and quantities
   (`MAX_LINE_QUANTITY`, `MAX_DAY_QUANTITY`) - the file refused, naming the

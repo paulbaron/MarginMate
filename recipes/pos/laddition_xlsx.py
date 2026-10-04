@@ -24,9 +24,10 @@ bar - so every figure is bounded by the column that stores it (« A figure
 wider than the column behind it is refused, at the door », CLAUDE.md): a
 (product, day)'s revenue fits `PosProductDailyQuantity`'s (10, 2), a (day,
 method)'s payments `PosDailyPayment`'s (12, 2), a quantity a sane count. A
-number written with an exponent, « NaN » or « Infinity » - which `Decimal`
-reads, and which then made every later read of the row raise - refuses the
-file, as does a day outside 2000-2099; a name is cut to 255 (a name is not
+number « NaN », « Infinity » or written with an exponent making it 1 or more
+- which `Decimal` reads, and which then made every later read of the row
+raise - refuses the file, as does a day outside 2000-2099 (a float's tiny
+noise, « 5.5E-17 », still reads as before: `_plain`); a name is cut to 255 (a name is not
 money). Every refusal is a `LadditionExportError` in French naming no path;
 the owner's downloaded exports never come near any of it.
 """
@@ -321,14 +322,19 @@ def _to_date(value) -> date | None:
 def _plain(text: str) -> Decimal | None:
     """`text` as a Decimal when it is a plain number (PLAIN_NUMBER), None
     when it is no number at all. One Decimal reads but is no plain number -
-    an exponent, NaN, Infinity, digits that are not ASCII - refuses the
-    file: summed, it made the stored row unreadable for good."""
+    NaN, Infinity, digits that are not ASCII, an exponent making it 1 or
+    more (« 1E+20 », « 1e5 ») - refuses the file: summed, it made the stored
+    row unreadable for good. A finite exponent below 1 is read as before: it
+    is a float's noise (PHP prints 5.5511151231258E-17 for 0.1 + 0.2 - 0.3),
+    harmless, and refusing it would refuse an export the owner reads today."""
     if PLAIN_NUMBER.fullmatch(text):
         return Decimal(text)
     try:
-        Decimal(text)
+        number = Decimal(text)
     except (InvalidOperation, ValueError):
         return None
+    if number.is_finite() and text.isascii() and abs(number) < 1:
+        return number
     raise LadditionExportError(f"Nombre refusé dans le fichier : « {text[:40]} » (ni exposant, ni NaN, ni infini).")
 
 

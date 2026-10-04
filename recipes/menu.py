@@ -403,9 +403,9 @@ def _sales(
     for sale in shown:
         sale.recipe_url = recipe_url(sale.recipe_id)
         sale.source_label = source_label(sale.source)
-    # Each row keeps its stored `source` beside the words the page says.
     allowed = till_allowed()
     choices = upload_choices() if owner else []
+    # Each row keeps its stored `source` beside the words the page says.
     totals = [
         {**row, "label": source_label(row["source"])}
         for row in recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")

@@ -347,6 +347,7 @@ CHOOSE_A_FILE = "Choisissez un fichier."
 ALREADY_RUNNING = "Une récupération est déjà en cours."
 DAY_UNREAD = "Jour des ventes illisible."
 DAY_NEEDED = "Indiquez le jour des ventes : ce format n'a pas de colonne du jour."
+DAY_TO_COME = "Le jour des ventes est à venir : vérifiez-le."
 
 
 def _uploader(request) -> str:
@@ -386,6 +387,9 @@ def upload_sales_file(request):
     day = read_date(posted_day) if posted_day else None
     if posted_day and day is None:
         messages.error(request, DAY_UNREAD)
+        return back
+    if day is not None and day > timezone.localdate():
+        messages.error(request, DAY_TO_COME)
         return back
     reads_a_day = choice.laddition or choice.layout.has(till_file.DAY)
     if day is not None and reads_a_day:

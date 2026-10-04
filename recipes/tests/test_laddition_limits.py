@@ -49,6 +49,16 @@ class NumbersNoExportWritesTests(SimpleTestCase):
             with self.subTest(quantity=quantity):
                 refused([line("2026-06-01", "Pinte Exemple", "7.50", "20%", quantity=quantity)])
 
+    def test_a_float_s_tiny_noise_in_exponent_notation_reads_as_before(self):
+        """PHP prints 0.1 + 0.2 - 0.3 as 5.5511151231258E-17: an owner's
+        export holding one is read as it always was, never refused."""
+        result = parse_rows(
+            [HEADER, line("2026-06-01", "Pinte Exemple", "7.50", "20%", discount="5.5511151231258E-17")]
+        )
+        money = result.money[("Pinte Exemple", date(2026, 6, 1))]
+        self.assertEqual(money.revenue_ttc, Decimal("7.50") - Decimal("5.5511151231258E-17"))
+        self.assertEqual(result.discounted_lines, 1)
+
     def test_what_is_no_number_at_all_reads_as_before(self):
         """« sept euros » is an amount nobody can read (the day left unread),
         « - » the Total row's quantity (skipped): neither is new."""

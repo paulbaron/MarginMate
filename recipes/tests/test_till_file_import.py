@@ -34,7 +34,7 @@ from recipes.sales import MANUAL_SALE_SOURCE, TILL_SOURCE
 from recipes.tests.test_pos_payments import TICKET_HEADER, ticket
 from recipes.tests.test_pos_revenue import HEADER, line, write_workbook
 from recipes.tests.till_support import LADDITION_ACCOUNT
-from recipes.till_views import ALREADY_RUNNING, CHOOSE_A_FILE, DAY_NEEDED
+from recipes.till_views import ALREADY_RUNNING, CHOOSE_A_FILE, DAY_NEEDED, DAY_TO_COME
 from recipes.views import LADDITION_NOT_READY
 from tests.factories import make_recipe
 from tests.runner import employee_of_the_test_tenant
@@ -292,6 +292,7 @@ class RefusedAtTheDoorTests(UploadCase):
             ({"fichier": csv(SALES), "format": "²"}, connectors.FORMAT_UNKNOWN),
             ({"fichier": csv(SALES), "format": "999999"}, connectors.FORMAT_GONE),
             ({"fichier": csv(SALES), "format": str(fmt.pk), "jour": "hier"}, "Jour des ventes illisible."),
+            ({"fichier": csv(SALES), "format": str(fmt.pk), "jour": "2099-01-01"}, DAY_TO_COME),
         )
         for data, said in cases:
             with self.subTest(said=said), mock.patch("recipes.till_views.threading.Thread") as thread:
