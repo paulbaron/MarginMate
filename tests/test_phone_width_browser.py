@@ -75,6 +75,7 @@ from tests.factories import (
     make_supplier,
 )
 from tests.runner import log_in_the_browser
+from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, make_shopping_history
 
 #: The widths of the review: a small phone, the owner's, a large one.
 WIDTHS = (320, 375, 430)
@@ -426,6 +427,11 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             date=date(2026, 5, 20), amount=Decimal("-1234.56"), reason="Frais de tenue de compte exemple"
         )
         self.treasury = f"{reverse('bank:treasury')}?tout=1"
+        # « Prévoir les courses » with every section it draws (invented),
+        # and « Rythme d'achat » for one store: its eleven columns as cards.
+        shopping = make_shopping_history()
+        self.shopping = f"{reverse('inventory:shopping_list')}?fournisseur={shopping.wholesaler.pk}"
+        self.rhythm = f"{reverse('inventory:shopping_rhythm')}?fournisseur={shopping.wholesaler.pk}"
 
     def test_no_page_is_wider_than_the_phone(self):
         """Measured on the code of 29/09 with this data, every page but
@@ -453,6 +459,8 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "Combler les écarts": f"{reverse('inventory:stock_gap_filler')}?depuis={self.opening.pk}",
             "les entrées d'argent": self.income,
             "la trésorerie": self.treasury,
+            "Prévoir les courses": self.shopping,
+            "le rythme d'achat": self.rhythm,
         }
         problems = []
         for width in WIDTHS:
@@ -517,6 +525,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             (self.treasury, "#ecarts .card form.inline-form", "Ajouter un ajustement de"),
             (self.treasury, "table[data-table-label='soldes saisis']", "à résoudre"),
             (self.treasury, "table[data-table-label='ajustements']", "ne compte pas"),
+            (self.shopping, "table[data-table-label='à acheter']", SHOPPING_BEER_PRODUCT),
+            (self.shopping, "#exclusions", "Exclure la catégorie « Consignes exemple »"),
+            (self.rhythm, 'table[data-table-label="rythme d\'achat"]', "Habitude ici"),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)

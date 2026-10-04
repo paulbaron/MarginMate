@@ -1514,6 +1514,12 @@ tr.is-new > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .exclusion-list form { display: inline; margin-left: var(--s2); }
 /* « Recettes vendues il y a moins de [3] [mois] »: a count of three digits. */
 .recent-sales input[type="number"] { width: 5rem; }
+/* « Prévoir les courses »: « … jusqu'au passage suivant, dans [7] jours »,
+   « à partir de [25] % », « il y a [6] mois » - two digits each. */
+.shopping-form input[type="number"] { width: 5rem; }
+/* « Valeurs par défaut » is a form of its own under the settings' (one busy
+   button each): a gap between the two rows of buttons. */
+.shopping-defaults { margin-top: var(--s2); }
 .sub-table-wrap { overflow-x: auto; }
 
 /* A charge item is a row under its supplier's, and sorting keeps the two
@@ -1676,6 +1682,10 @@ body:has(.container-wide) .topbar-inner { max-width: calc(var(--content-width) +
     .page-header .actions-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: var(--s2); width: 100%; }
     .page-header .actions-compact > form { display: flex; margin: 0; }
     .page-header .actions-compact .btn { width: 100%; min-height: 44px; justify-content: center; text-align: center; white-space: normal; }
+    /* An odd count (« Supprimer les articles vides », « Prévoir les
+       courses », « + Nouvel article »): the last takes the row across,
+       rather than half of it beside nothing. Two still share a row. */
+    .page-header .actions-compact > :last-child:nth-child(odd) { grid-column: 1 / -1; }
     /* The headline figures two to a row: one to a row, the cards of some
        200 px each came before anything to act on. */
     .stat-row-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
@@ -2386,6 +2396,10 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
     /* A label beside its field goes above it when the two do not fit
        (« Texte imprimé en tête » and its box, on a ticket's check). */
     .inline-label { flex-wrap: wrap; white-space: normal; }
+    /* « Ces achats doivent tenir jusqu'au passage suivant, dans [7] jours »
+       is a sentence wider than a phone: it wraps. `.filter-row label` keeps
+       a filter's label on one line and outweighs the rule above. */
+    .filter-row.shopping-form label { white-space: normal; }
     /* Fields sized for a laptop: 18rem is wider than a card at 320 px. */
     .add-identifier input[type="text"],
     .sale-line-row .inline-form select { min-width: 0; width: 100%; }

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load assets %}
+{% block title %}Rythme d'achat - MarginMate{% endblock %}
+{% block container_class %} container-wide{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'inventory:shopping_list' %}{% if store %}?{{ store_param }}={{ store.store_id }}{% endif %}">← Prévoir les courses</a></p>
+            <h1>Rythme d'achat</h1>
+            <p class="page-subtitle">Tous vos articles : à quel rythme et où vous les achetez.</p>
+        </div>
+    </div>
+
+    {% if choices %}
+    <form method="get" class="filter-row">
+        <label class="inline-label">Enseigne
+            <select name="{{ store_param }}">
+                <option value="">Toutes les enseignes</option>
+                {% for choice in choices %}<option value="{{ choice.store_id }}"{% if store and choice.store_id == store.store_id %} selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+            </select>
+        </label>
+        <button class="btn btn-secondary" type="submit" data-busy-label="Calcul…">Afficher</button>
+    </form>
+    {% endif %}
+    {% if store_not_found %}
+        <div class="message message-warning">Enseigne introuvable : voici toutes les enseignes.</div>
+    {% endif %}
+    {% if till_note.stale %}
+        <div class="message message-warning">Ventes de la caisse à jour au {{ till_note.covered_until|date:"d/m/Y" }} : « Caisse / semaine » s'arrête à cette date.</div>
+    {% endif %}
+
+    {% if rows %}
+    <p class="muted">{{ rows|length }} article{{ rows|length|pluralize }}{% if store %} acheté{{ rows|length|pluralize }} chez {{ store.name }}{% endif %}.</p>
+    <div class="table-wrap">
+    <table data-table data-table-label="rythme d'achat" class="phone-cards">
+        <thead>
+            <tr>
+                <th>Article</th>
+                <th>État</th>
+                <th>Rythme</th>
+                <th>Dernier achat</th>
+                <th>Prochain achat estimé</th>
+                <th>Où</th>
+                {% if store %}<th>Habitude ici</th>{% endif %}
+                <th class="num">Quantité habituelle</th>
+                <th>Tendance</th>
+                <th class="num">Caisse / semaine</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for drawn in rows %}
+            <tr>
+                <td>{{ drawn.row.name }}{% if drawn.row.category %} <span class="muted small">{{ drawn.row.category }}</span>{% endif %}</td>
+                <td data-label="État">{{ drawn.row.state }}</td>
+                <td data-label="Rythme" data-sort="{{ drawn.row.median_gap|default_if_none:'' }}">{{ drawn.rhythm }}</td>
+                <td data-label="Dernier achat" data-sort="{{ drawn.row.last_day|date:'Y-m-d' }}">{{ drawn.row.last_day|date:"d/m/Y" }}</td>
+                <td data-label="Prochain achat estimé" data-sort="{{ drawn.row.next_day|date:'Y-m-d' }}">{% if drawn.row.due %}à racheter{% elif drawn.row.next_day %}{{ drawn.row.next_day|date:"d/m/Y" }}{% endif %}</td>
+                <td data-label="Où">{{ drawn.where }}</td>
+                {% if store %}<td data-label="Habitude ici">{{ drawn.habit }}</td>{% endif %}
+                <td class="num" data-label="Quantité habituelle" data-sort="{{ drawn.row.usual_qty }}">{{ drawn.usual }}</td>
+                <td data-label="Tendance">{{ drawn.row.trend|default_if_none:"" }}</td>
+                <td class="num" data-label="Caisse / semaine" data-sort="{{ drawn.row.till_per_week|default_if_none:'' }}">{{ drawn.till }}</td>
+                <td class="row-actions">
+                    {% if drawn.row.excluded %}<span class="muted small">jamais proposé</span>{% else %}
+                    <form method="post" action="{% url 'inventory:shopping_exclude' %}" data-confirm="Ne plus proposer « {{ drawn.row.name }} » dans aucune enseigne ?">
+                        {% csrf_token %}
+                        <input type="hidden" name="{{ article_param }}" value="{{ drawn.row.article_id }}">
+                        {% if store %}<input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">{% endif %}
+                        <input type="hidden" name="{{ landing_param }}" value="{{ rhythm_landing }}">
+                        <button class="btn btn-small btn-secondary" type="submit">Ne jamais proposer</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+        <div class="empty-state">
+            <p>Aucun article acheté : le rythme part de vos factures d'achat.</p>
+            {% if can.invoices or can.invoices_add %}<a class="btn" href="{% url 'invoices:invoice_add' %}">Ajouter des factures</a>{% endif %}
+        </div>
+    {% endif %}
+{% endblock %}

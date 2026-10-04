@@ -31,7 +31,7 @@ from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory.models import StockType, UnitChoices
+from inventory.models import ShoppingExclusion, StockType, UnitChoices
 from recipes.sales import record_sales
 from tests.factories import (
     make_ingredient,
@@ -44,7 +44,7 @@ from tests.factories import (
     make_stock_take_line,
     make_supplier,
 )
-from tests.test_views_smoke import make_gaps_to_fill
+from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history
 
 
 class BaseTemplateTests(TestCase):
@@ -271,6 +271,32 @@ class SearchableSortableTableTests(TestCase):
         self.assertIn('data-sort="70.00"', earlier)
         self.assertRegex(earlier, r'<td data-sort="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}">')
 
+    def test_shopping_list_and_rhythm(self):
+        """« Prévoir les courses »: each section a list like any other - the
+        chance sorts by the bare figure it is drawn from, not « 98 % ·
+        presque sûr » read as text, the money by its bare amount - and
+        « Rythme d'achat »'s dates sort as dates."""
+        made = make_shopping_history()
+        html = self.assertEnhancedTable("inventory:shopping_list").content.decode()
+        for label in (
+            "à acheter",
+            "peut-être",
+            "nouveaux ici",
+            "plus acheté",
+            "acheté ailleurs",
+            "les plus achetés ici",
+        ):
+            with self.subTest(table=label):
+                self.assertIn(f'<table data-table data-table-label="{label}" class="phone-cards">', html)
+        self.assertRegex(html, r'<td class="num" data-label="Chance" data-sort="0\.\d{4}">\d+ % · ')
+        self.assertIn('data-label="Total HT" data-sort="1170.00"', html)
+        response = self.client.get(reverse("inventory:shopping_rhythm"), {"fournisseur": made.wholesaler.pk})
+        self.assertContains(response, '<table data-table data-table-label="rythme d\'achat" class="phone-cards">')
+        last = timezone.localdate() - timedelta(days=7)
+        self.assertContains(
+            response, f'<td data-label="Dernier achat" data-sort="{last:%Y-%m-%d}">{last:%d/%m/%Y}</td>'
+        )
+
     def test_stock_list_sorts_without_a_second_search_box(self):
         """It already has a server-backed fuzzy search; a second box filtering
         the same rows by a different rule would be worse than none."""
@@ -481,6 +507,9 @@ class PageChromeTests(TestCase):
             "inventory:stock_take_list",
             # No count in this database: its empty state still says it.
             "inventory:stock_gap_filler",
+            # Nothing bought in this database: both say what they are for all the same.
+            "inventory:shopping_list",
+            "inventory:shopping_rhythm",
             "margins:margins_home",
             "bank:income_home",
             # With no balance typed yet: its subtitle says it all the same.
@@ -511,6 +540,23 @@ class PageChromeTests(TestCase):
             '<p class="page-subtitle">Les ventes à encaisser pour réduire chaque écart de stock dans la même '
             "proportion, montant après montant.</p>",
             count=1,
+        )
+
+    def test_the_shopping_list_explains_itself_with_a_list(self):
+        """With purchases, not only in its empty state: one subtitle, the
+        figures at its head, and « Comment c'est calculé » folded."""
+        make_shopping_history()
+        response = self.client.get(reverse("inventory:shopping_list"))
+        self.assertContains(
+            response,
+            '<p class="page-subtitle">Ce que vous rachetez d\'habitude dans une enseigne, sans inventaire.</p>',
+            count=1,
+        )
+        self.assertContains(response, 'class="stat-row"')
+        self.assertContains(response, "<summary>Comment c'est calculé</summary>")
+        response = self.client.get(reverse("inventory:shopping_rhythm"))
+        self.assertContains(
+            response, '<p class="page-subtitle">Tous vos articles : à quel rythme et où vous les achetez.</p>', count=1
         )
 
     def test_the_stock_page_leads_with_its_headline_figures(self):
@@ -1941,6 +1987,60 @@ class PhoneCardsLabelTests(TestCase):
             # One action cell a row: the figures keep their labels.
             self.assertEqual(sum("row-actions" in cell["classes"] for cell in row), 1, f"row {number}")
 
+    def assertActionCellLast(self, table, words):
+        """Every row ends on its one action (« Pas ici », « Ne plus
+        proposer »…): a .row-actions cell, drawn across at the card's foot,
+        under no label."""
+        for number, row in enumerate(table["rows"]):
+            last = row[-1]
+            self.assertEqual(last["classes"], ["row-actions"], f"row {number}")
+            self.assertIsNone(last["label"], f"row {number}")
+            self.assertEqual(last["text"].strip(), words, f"row {number}")
+            self.assertEqual(sum("row-actions" in cell["classes"] for cell in row), 1, f"row {number}")
+
+    def assertReasonAcross(self, table):
+        """A sentence is no figure: the « Pourquoi » cell runs across the
+        card (.phone-card-wide), never squeezed into a third of it beside
+        the quantity and the chance."""
+        headers = [" ".join(cell["text"].split()) for cell in table["head"]]
+        self.assertIn("Pourquoi", headers)
+        column = headers.index("Pourquoi")
+        for number, row in enumerate(table["rows"]):
+            self.assertEqual(row[column]["label"], "Pourquoi", f"row {number}")
+            self.assertIn("phone-card-wide", row[column]["classes"], f"row {number}")
+
+    def test_the_shopping_list_its_folds_and_the_rhythm(self):
+        """« Prévoir les courses »: the list and every fold drawn as a table,
+        each figure under its own header's words, the line's action last;
+        « Rythme d'achat », for every store and for one (its « Habitude ici »
+        column then). Invented data (make_shopping_history)."""
+        made = make_shopping_history()
+        page = reverse("inventory:shopping_list")
+        for label, rows, action in (
+            ("à acheter", 2, "Pas ici"),
+            ("peut-être", 1, "Pas ici"),
+            ("nouveaux ici", 1, "Pas ici"),
+            ("plus acheté", 1, "Ne plus proposer"),
+            ("acheté ailleurs", 1, None),
+            ("à acheter ailleurs", 1, "Ne plus proposer"),
+            ("les plus achetés ici", 7, None),
+        ):
+            with self.subTest(table=label):
+                table = self.cards(page, "data-table-label", label)
+                self.assertLabelled(table, rows)
+                if action:
+                    self.assertActionCellLast(table, action)
+                if label != "les plus achetés ici":
+                    self.assertReasonAcross(table)
+        rhythm = reverse("inventory:shopping_rhythm")
+        for query, rows in (("", 9), (f"?fournisseur={made.wholesaler.pk}", 7)):
+            with self.subTest(rhythm=query):
+                table = self.cards(f"{rhythm}{query}", "data-table-label", "rythme d'achat")
+                self.assertLabelled(table, rows)
+                self.assertActionCellLast(table, "Ne jamais proposer")
+                headers = [" ".join(cell["text"].split()) for cell in table["head"]]
+                self.assertEqual("Habitude ici" in headers, bool(query))
+
     def test_the_gaps_with_something_excluded(self):
         """An article left out of the gaps - alone, or with its category -
         leaves the table: what remains is still one card a row, each figure
@@ -2030,6 +2130,103 @@ class GapExclusionListTests(TestCase):
         self.assertRegex(html, r'id="exclusions" open>\s*<summary>[^<]*</summary>\s*<ul class="messages">')
         classes = [re.findall(r'<li class="([^"]*)">', found) for found in lists]
         self.assertEqual(classes, [["message message-success"], ["message message-success", "message message-error"]])
+
+
+class ShoppingExclusionListTests(TestCase):
+    """« Exclusions » on « Prévoir les courses » (#exclusions), like « Exclus
+    des écarts »: a list, not a table - each line its words and its own
+    « Réinclure », a button of the page's kind -, the category picked like
+    any other form of the page, and the messages said there drawn like any
+    other. Data invented (make_shopping_history)."""
+
+    def setUp(self):
+        self.made = make_shopping_history()
+        self.page = f"{reverse('inventory:shopping_list')}?fournisseur={self.made.wholesaler.pk}"
+
+    def fold(self) -> str:
+        html = self.client.get(self.page).content.decode()
+        found = re.search(r'<details class="explainer" id="exclusions"[^>]*>.*?</details>', html, flags=re.DOTALL)
+        self.assertIsNotNone(found)
+        return found.group(0) if found else ""
+
+    def test_each_line_its_words_and_its_button(self):
+        ShoppingExclusion.objects.create(category="Consignes exemple")
+        ShoppingExclusion.objects.create(stock_type=self.made.rum)
+        ShoppingExclusion.objects.create(stock_type=self.made.syrup, supplier=self.made.grocer)
+        fold = self.fold()
+        self.assertNotIn("<table", fold)
+        lists = re.findall(r'<ul class="exclusion-list">(.*?)</ul>', fold, flags=re.DOTALL)
+        self.assertEqual(len(lists), 1)
+        items = re.findall(r"<li>(.*?)</li>", lists[0], flags=re.DOTALL)
+        self.assertEqual(len(items), 3)
+        include = reverse("inventory:shopping_include")
+        for item in items:
+            with self.subTest(item=item[:40]):
+                forms = re.findall(r"<form\b[^>]*>.*?</form>", item, flags=re.DOTALL)
+                self.assertEqual(len(forms), 1)
+                self.assertIn(f'<form method="post" action="{include}">', forms[0])
+                self.assertIn('<button class="btn btn-small btn-secondary" type="submit">Réinclure</button>', forms[0])
+                # Its words come first, the button after them on the line.
+                self.assertTrue(item.lstrip().startswith(("Catégorie", "Rhum exemple", "Sirop exemple")), item)
+
+    def test_the_category_is_picked_like_any_other_form(self):
+        form = re.search(
+            r'<form method="post" action="[^"]*" class="inline-form"[^>]*>.*?</form>', self.fold(), flags=re.DOTALL
+        )
+        self.assertIsNotNone(form)
+        markup = form.group(0) if form else ""
+        self.assertIn('<label class="inline-label">Ne jamais proposer la catégorie', markup)
+        self.assertIn('<select name="categorie">', markup)
+        self.assertIn('<button class="btn btn-secondary" type="submit">Exclure</button>', markup)
+
+    def test_nothing_excluded_is_said_and_folded(self):
+        fold = self.fold()
+        self.assertTrue(fold.startswith('<details class="explainer" id="exclusions">'), fold[:80])
+        self.assertNotIn("exclusion-list", fold)
+        self.assertIn("Rien d'exclu : tout article déjà acheté peut être proposé.", unescape(fold))
+
+    def test_a_message_said_in_place_is_drawn_like_any_other(self):
+        """Said above « À acheter » and first in the fold, each `message
+        message-<level>` - the level alone, never the tag that placed it -,
+        none at the top."""
+        exclude = reverse("inventory:shopping_exclude")
+        store = self.made.wholesaler.pk
+        for data in (
+            {"article": self.made.syrup.pk, "chez": store, "retour": "liste"},
+            {"categorie": "Consignes exemple"},
+            {"categorie": "Inconnue exemple"},
+        ):
+            self.assertEqual(self.client.post(exclude, {"fournisseur": store, **data}).status_code, 302)
+        html = self.client.get(self.page).content.decode()
+        lists = re.findall(r'<ul class="messages">(.*?)</ul>', html, flags=re.DOTALL)
+        self.assertEqual(len(lists), 2)
+        self.assertRegex(html, r'<h2 id="a-acheter">À acheter</h2>\s*<ul class="messages">')
+        self.assertRegex(html, r'id="exclusions" open>\s*<summary>[^<]*</summary>\s*<ul class="messages">')
+        classes = [re.findall(r'<li class="([^"]*)">', found) for found in lists]
+        self.assertEqual(classes, [["message message-success"], ["message message-success", "message message-error"]])
+
+
+class ShoppingStylesheetTests(StylesheetTestCase):
+    def test_a_third_header_button_takes_the_row_on_a_phone(self):
+        """« Produits & charges »' header on a phone is a grid of two: with
+        « Prévoir les courses » it may hold three, and the last of an odd
+        count takes the row across rather than half of it beside nothing."""
+        self.assertDeclares(
+            ".page-header .actions-compact > :last-child:nth-child(odd)",
+            "(max-width: 860px)",
+            {"grid-column": "1 / -1"},
+        )
+
+    def test_the_counts_typed_are_narrow(self):
+        self.assertDeclares('.shopping-form input[type="number"]', None, {"width": "5rem"})
+
+    def test_the_days_label_wraps_on_a_phone(self):
+        """« Ces achats doivent tenir jusqu'au passage suivant, dans [7]
+        jours » is a sentence: on a phone it wraps around its field rather
+        than run off the screen. `.filter-row label` keeps every other
+        filter's label on one line, and outweighs `.inline-label`'s own
+        phone rule: this one names both."""
+        self.assertDeclares(".filter-row.shopping-form label", "(max-width: 600px)", {"white-space": "normal"})
 
 
 class GapExclusionListStylesheetTests(StylesheetTestCase):

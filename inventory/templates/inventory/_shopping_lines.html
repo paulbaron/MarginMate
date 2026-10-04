@@ -1,0 +1,46 @@
+{% comment %}
+One section of « Prévoir les courses », read as cards on a phone. Given:
+`rows` (views._line_rows), `label` (the table's data-table-label),
+`quantity` and `chance` (whether those columns are drawn), `words` (the
+confidence word beside the chance), `action` ("here": « Pas ici » at this
+store; "everywhere": « Ne plus proposer » anywhere; "": none) and `landing`
+(where the action's message is said: views.SHOPPING_ANCHORS). On a phone the
+sentence (« Pourquoi ») runs across the card: squeezed beside the figures
+it took a third of it.
+{% endcomment %}
+<div class="table-wrap">
+<table data-table data-table-label="{{ label }}" class="phone-cards">
+    <thead>
+        <tr>
+            <th>Article</th>
+            {% if quantity %}<th>Quantité</th>{% endif %}
+            {% if chance %}<th class="num">Chance</th>{% endif %}
+            <th>Pourquoi</th>
+            {% if action %}<th></th>{% endif %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr>
+            <td>{{ row.line.name }}{% for word, kind in row.badges %} <span class="status-pill {{ kind }}">{{ word }}</span>{% endfor %}</td>
+            {% if quantity %}<td data-label="Quantité">{{ row.quantity }}{% if row.article_quantity %}<br><span class="muted small">{{ row.article_quantity }}</span>{% endif %}</td>{% endif %}
+            {% if chance %}<td class="num" data-label="Chance" data-sort="{{ row.chance_sort }}">{{ row.percent }} %{% if words %} · {{ row.line.confidence }}{% endif %}</td>{% endif %}
+            <td class="phone-card-wide" data-label="Pourquoi">{{ row.line.sentence }}</td>
+            {% if action %}
+            <td class="row-actions">
+                <form method="post" action="{% url 'inventory:shopping_exclude' %}"{% if action == "everywhere" %} data-confirm="Ne plus proposer « {{ row.line.name }} » dans aucune enseigne ?"{% endif %}>
+                    {% csrf_token %}
+                    <input type="hidden" name="{{ article_param }}" value="{{ row.line.article_id }}">
+                    {% if action == "here" %}<input type="hidden" name="{{ excluded_store_param }}" value="{{ store.store_id }}">{% endif %}
+                    <input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">
+                    {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+                    <input type="hidden" name="{{ landing_param }}" value="{{ landing }}">
+                    {% if action == "here" %}<button class="btn btn-small btn-secondary" type="submit" title="Ne plus proposer cet article chez {{ store.name }}">Pas ici</button>{% else %}<button class="btn btn-small btn-secondary" type="submit">Ne plus proposer</button>{% endif %}
+                </form>
+            </td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
