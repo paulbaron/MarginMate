@@ -1,0 +1,18 @@
+{% comment %}
+The file « Tester » reads with the format as typed (till_views.TEST_FILE):
+read, never kept. Inside the format's form, which posts multipart. The day
+is for a format with no day column (a daily report): the day its rows are
+read at.
+{% endcomment %}
+<div class="form-grid">
+    <div class="form-field form-field-file">
+        <label for="id_{{ test_file }}">Tester sur un fichier</label>
+        <input type="file" name="{{ test_file }}" id="id_{{ test_file }}" accept=".csv,.txt,.xlsx">
+        <p class="help">Un export de la caisse (CSV ou Excel) : lu avec le format ci-dessus, jamais gardé.</p>
+    </div>
+    <div class="form-field form-field-date">
+        <label for="id_{{ test_day }}">Jour des ventes (essai)</label>
+        <input type="date" name="{{ test_day }}" id="id_{{ test_day }}">
+        <p class="help">Pour un format sans colonne du jour. Vide : aujourd'hui.</p>
+    </div>
+</div>

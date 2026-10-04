@@ -120,6 +120,18 @@ INFO: dict[str, SectionInfo] = {
             reasons={"ventes": "Ventes"},
             clear_note="les recettes perdent leurs ventes venues de la caisse ; les ventes par jour de la caisse restent",
         ),
+        # How a bar's own till export is read (sections/till_formats.py): a
+        # format names no row, so it requires nothing, and « Ventes » never
+        # required it - it stores none of what it read.
+        _info(
+            "formats_caisse",
+            "Formats des fichiers de caisse",
+            Group.CONFIG,
+            52,
+            description=(
+                "Comment lire les fichiers exportés de la caisse (CSV ou Excel) : colonnes, dates, moyens de paiement."
+            ),
+        ),
         # What reads one bank's statements, apart from the lines it read
         # (sections/bank_rules.py): another bar on the same bank takes it
         # alone. It requires nothing - none of the three has a foreign key -
@@ -295,6 +307,7 @@ SECTION_MODULES = (
     "bank_rules",
     "returnables",
     "returnable_types",
+    "till_formats",
 )
 
 _SECTIONS: dict[str, type[Section]] = {}

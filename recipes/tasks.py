@@ -3,26 +3,70 @@
 Runs on a plain thread (same as invoices/tasks.py) because driving a browser
 through two date windows takes minutes, which is far too long to hold a
 request open. The page polls SalesImportJob for progress.
+
+`store_reading` is the ONE writer of a till reading, whoever read it - the
+job fetching L'Addition, `laddition_import`, a file uploaded on « Ventes »:
+the till products and their days (« Ventes », with the day's money), the
+recipes' sales under `sales.TILL_SOURCE`, then the payments - in that
+order, each said in the log.
+
+The job's log is drawn on the sales page of whichever espace ran it, so a
+failure says what `common.error_for_page` lets a page say (LB-3): the
+till's own French refusals as they are, anything else one fixed sentence.
+The exception and its traceback always go to the server's log; the
+traceback is added to the job's log in the server-accounts espace only
+(`accounts.tenancy.server_accounts_allowed`, the owner's - as before).
 """
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import logging
+import os
 import traceback
+from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
+from django.core.exceptions import SuspiciousFileOperation
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.text import get_valid_filename
 
-from accounts.paths import downloads_dir
-from common import format_money
+from accounts.paths import downloads_dir, imports_dir
+from accounts.tenancy import server_accounts_allowed
+from common import error_for_page, format_money
 
 from .integration import refusal, till_allowed
 from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
-from .payments import by_method, oddities, record_payments
-from .pos.laddition_download import DownloadCancelled, download_sales_lines
-from .pos.laddition_xlsx import parse_sales_exports
-from .sales import recipe_lookup, record_sales
+from .payments import RecordedPayments, by_method, oddities, record_payments
+from .pos.connectors import read_upload, resolve
+from .pos.laddition_download import DownloadCancelled, LadditionDownloadError, download_sales_lines
+from .pos.laddition_session import LadditionAuthError
+from .pos.laddition_xlsx import LadditionExportError, parse_sales_exports
+from .pos.till_file import TillFileError
+from .pos.xlsx_reader import XlsxError
+from .sales import TILL_SOURCE, SalesImportResult, recipe_lookup, record_sales
+
+logger = logging.getLogger(__name__)
+
+
+class TillImportError(RuntimeError):
+    """A till import that cannot go on, said in French for the job's log."""
+
+
+#: The till's own refusals: French, naming no path - a job's log says them
+#: as they are (`common.error_for_page`). Anything else is one fixed sentence.
+TILL_REFUSALS: tuple[type[BaseException], ...] = (
+    TillImportError,
+    LadditionExportError,
+    LadditionAuthError,
+    LadditionDownloadError,
+    XlsxError,
+    TillFileError,
+)
 
 
 class _Cancelled(Exception):
@@ -251,6 +295,107 @@ def _sync_pos_products(export) -> int:
     return len(export.products)
 
 
+def till_entries(export) -> list[tuple[str, date, int]]:
+    """What `record_sales` is handed for a reading: the reading's own
+    (product, day) quantities, then every OTHER till product's quantity
+    already on file (`PosProductDailyQuantity`) for the days it touched.
+
+    `record_sales` sets each (recipe, day) to the sum it is handed, while
+    `sync_pos_products` replaces only the products a reading holds. Handed
+    the reading alone, a file holding one product of a day set the recipe to
+    that product's quantity while the day kept its others: a pint corrected
+    to 4 beside its happy-hour name's 3 left the recipe at 4 - « Vendu » and
+    « Écarts » read 4, Marges read 7, and the next link changed went back to
+    7. So the recipe's day is what the day's till products say, which is
+    what `resync_recipe_from_daily_quantities` rebuilds too. A fetch reads
+    whole days: beside its own entries it finds only a product an earlier
+    reading of the day held and this one no longer prints."""
+    entries = list(export.entries)
+    days = {day for _name, day, _quantity in entries}
+    if not days:
+        return entries
+    read = {(name, day) for name, day, _quantity in entries}
+    beside = (
+        PosProductDailyQuantity.objects.filter(sold_on__range=(min(days), max(days)))
+        .order_by("sold_on", "product__name")
+        .values_list("product__name", "sold_on", "quantity")
+    )
+    entries.extend(
+        (name, day, quantity) for name, day, quantity in beside.iterator() if day in days and (name, day) not in read
+    )
+    return entries
+
+
+@dataclass
+class StoredReading:
+    """What `store_reading` wrote."""
+
+    #: Till products the reading named (sync_pos_products).
+    seen: int = 0
+    sales: SalesImportResult = field(default_factory=SalesImportResult)
+    paid: RecordedPayments = field(default_factory=RecordedPayments)
+
+    @property
+    def unmatched(self) -> int:
+        return len(set(self.sales.unmatched))
+
+
+def store_reading(export, log, *, payments_beside_sales: bool = False) -> StoredReading:
+    """Write one till reading, in the one order every writer keeps: the till
+    products and their days (« Ventes », with the day's money), the
+    recipes' sales (`TILL_SOURCE`, never a sale typed by hand), then the
+    payments - each step said through `log` in French.
+
+    A reading of payments alone (`export.sales_read` False: a file of
+    « Encaissements ») writes no sales and says nothing of them.
+    `payments_beside_sales`: its days are written only where « Ventes » holds
+    a sale (recipes.payments.record_payments), the others said.
+
+    The recipes' sales of the days read are worked out from every till
+    product of those days, the reading's and those already on file
+    (`till_entries`): a file holding part of a day leaves the recipes
+    agreeing with the day. The products said to have no recipe are the
+    reading's own."""
+    stored = StoredReading()
+    if getattr(export, "sales_read", True):
+        stored.seen = sync_pos_products(export)
+        log(f"{stored.seen} produits de caisse vus.")
+        stored.sales = record_sales(till_entries(export), source=TILL_SOURCE)
+        named = {str(name).strip() for name, _day, _quantity in export.entries}
+        stored.sales.unmatched = [name for name in stored.sales.unmatched if name in named]
+        log(
+            f"{stored.sales.recorded} totaux recette/jour enregistrés "
+            f"({stored.sales.created} nouveaux, {stored.sales.updated} mis à jour)."
+        )
+        if stored.unmatched:
+            log(f"{stored.unmatched} produits de caisse sans recette - à traiter dans « À lier ».")
+    # After the sales, and on its own: what the bank is paid from, per day
+    # and per means of payment (recipes/payments.py).
+    stored.paid = record_payments(export, beside_sales=payments_beside_sales)
+    if export.payments_read:
+        log(
+            f"Paiements enregistrés : {stored.paid.days_written} jour(s) de caisse remplacé(s), "
+            f"{stored.paid.days_unchanged} déjà à jour."
+        )
+        if stored.paid.days_without_sales:
+            log(
+                f"{len(stored.paid.days_without_sales)} jour(s) laissé(s) de côté : aucune vente enregistrée ces "
+                "jours-là. Importez d'abord les ventes de ces jours."
+            )
+    return stored
+
+
+def fail(job: SalesImportJob, exc: BaseException, what: str) -> None:
+    """The job's failure line: the till's own French refusal as it is, else
+    one fixed sentence - the exception always in the server's log, its
+    traceback in the job's log in the server-accounts espace only."""
+    logger.warning("%s : échec", what, exc_info=(type(exc), exc, exc.__traceback__))
+    job.status = SalesImportJob.Status.FAILED
+    job.append_log("Échec : " + error_for_page(exc, said=TILL_REFUSALS))
+    if server_accounts_allowed():
+        job.append_log("".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=3)))
+
+
 def import_laddition_sales_task(job_id: int, start: date, end: date, download_dir: str | None = None) -> None:
     """The thread's body, started as ``target=bound(import_laddition_sales_task)``
     (views.trigger_sales_import): it runs bound to the tenant that asked, so
@@ -284,7 +429,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
 
         paths = download_sales_lines(start, end, download_dir, log=job.append_log, should_cancel=still_wanted)
         if not paths:
-            raise RuntimeError("Aucun fichier téléchargé.")
+            raise TillImportError("Aucun fichier téléchargé.")
         _raise_if_cancelled(job)
 
         export = parse_sales_exports(paths)
@@ -295,36 +440,200 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         for message in payments_log(export):
             job.append_log(message)
 
-        seen = sync_pos_products(export)
-        job.append_log(f"{seen} produits de caisse vus.")
-
-        result = record_sales(export.entries, source="laddition")
-        job.recorded = result.recorded
-        job.unmatched = len(set(result.unmatched))
-        job.append_log(
-            f"{result.recorded} totaux recette/jour enregistrés "
-            f"({result.created} nouveaux, {result.updated} mis à jour)."
-        )
-        if job.unmatched:
-            job.append_log(f"{job.unmatched} produits de caisse sans recette - à traiter dans « Produits caisse ».")
-
-        # After the sales, and on its own: what the bank is paid from, per
-        # day and per means of payment (recipes/payments.py).
-        paid = record_payments(export)
-        if export.payments_read:
-            job.append_log(
-                f"Paiements enregistrés : {paid.days_written} jour(s) de caisse remplacé(s), "
-                f"{paid.days_unchanged} déjà à jour."
-            )
+        stored = store_reading(export, job.append_log)
+        job.recorded = stored.sales.recorded
+        job.unmatched = stored.unmatched
         job.status = SalesImportJob.Status.SUCCESS
 
     except (_Cancelled, DownloadCancelled):
         job.status = SalesImportJob.Status.CANCELLED
         job.append_log("Annulé.")
     except Exception as exc:  # noqa: BLE001 - the job record IS the error report
-        job.status = SalesImportJob.Status.FAILED
-        job.append_log(f"Échec : {exc}")
-        job.append_log(traceback.format_exc(limit=3))
+        fail(job, exc, "Import des ventes de L'Addition")
     finally:
         job.finished_at = timezone.now()
         job.save(update_fields=["status", "finished_at", "items_sold", "recorded", "unmatched"])
+
+
+# -- a file of the till, uploaded on « Ventes » --------------------------------------------
+
+#: Where a till's files are kept once read: L'Addition's own export goes to
+#: the espace's downloads/ (the backfills glob downloads/*.xlsx), any other
+#: till's file to downloads/caisse/ - the newest KEPT_FILES uploads of each,
+#: each content once.
+TILL_FILES = "caisse"
+KEPT_FILES = 50
+#: What a kept upload's name starts with: in downloads/ it tells the uploads
+#: from the fetch's own downloads, which are never pruned.
+UPLOADED = "televerse"
+#: How much of the file's SHA-256 its kept name carries: the same file
+#: uploaded again is kept once (downloads/ is in every backup).
+DIGEST_CHARS = 16
+#: How long a kept file's name may be: Windows' paths are short.
+KEPT_NAME_LENGTH = 80
+
+
+def till_files_dir() -> Path:
+    folder = downloads_dir() / TILL_FILES
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def staged_uploads_dir() -> Path:
+    """Where an upload waits for its reading: the espace's imports/, never
+    downloads/ - a half-read file there would be read by the backfills, or
+    taken for L'Addition's download by a fetch."""
+    folder = imports_dir() / TILL_FILES
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def _digest(path: Path) -> str:
+    sha = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            sha.update(chunk)
+    return sha.hexdigest()[:DIGEST_CHARS]
+
+
+def _kept_name(folder: Path, file_name: str, digest: str) -> Path:
+    """« televerse-20261004-153012-<empreinte>-export_caisse.csv », free in
+    `folder`: the mark, the moment, the content's digest, then the file's own
+    name made safe and cut, its suffix kept."""
+    original = Path(str(file_name or "")).name
+    suffix = Path(original).suffix.lower()[:5]
+    try:
+        safe = get_valid_filename(Path(original).stem)
+    except SuspiciousFileOperation:
+        safe = "fichier"
+    stem = f"{UPLOADED}-{timezone.localtime():%Y%m%d-%H%M%S}-{digest}-{safe[:KEPT_NAME_LENGTH]}"
+    target = folder / f"{stem}{suffix}"
+    number = 2
+    while target.exists():
+        target = folder / f"{stem}-{number}{suffix}"
+        number += 1
+    return target
+
+
+def keep_upload(staged: Path, file_name: str, laddition: bool) -> Path:
+    """Move a file read whole into its place - `downloads/` for
+    L'Addition's export, `downloads/caisse/` for any other - and keep the
+    newest KEPT_FILES uploads there. The same content already kept (its
+    digest is in the name) is kept once: the staged copy goes. In
+    downloads/ only the uploads are pruned, never the fetch's downloads."""
+    folder = downloads_dir() if laddition else till_files_dir()
+    digest = _digest(staged)
+    same = sorted(path for path in folder.glob(f"{UPLOADED}-*-{digest}-*") if path.is_file())
+    if same:
+        staged.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            os.utime(same[-1])
+        return same[-1]
+    target = _kept_name(folder, file_name, digest)
+    os.replace(staged, target)
+    uploads = folder.glob(f"{UPLOADED}-*") if laddition else folder.iterdir()
+    kept = sorted((path for path in uploads if path.is_file()), key=lambda path: path.stat().st_mtime)
+    for old in kept[:-KEPT_FILES]:
+        with contextlib.suppress(OSError):
+            old.unlink()
+    return target
+
+
+def reading_log(export) -> list[str]:
+    """What a till's file read, for the job's log - the sales' or the
+    payments', in French."""
+    lines = []
+    if export.sales_read:
+        lines.append(f"{len(export.entries)} totaux produit/jour lus ({export.total_quantity} unités vendues).")
+        if export.skipped:
+            lines.append(f"{export.skipped} ligne(s) sans jour ou sans produit passée(s).")
+        if export.quantities_rounded:
+            lines.append(
+                f"{export.quantities_rounded} (produit, jour) à une quantité fractionnaire, arrondie à l'unité la "
+                "plus proche."
+            )
+        lines.extend(money_log(export))
+        return lines
+    methods = ", ".join(
+        f"{PosDailyPayment.label_for(method)} {_euros(payment.amount)}"
+        for method, payment in by_method(export.payments_by_method())
+    )
+    lines.append(
+        f"Paiements lus : {_euros(export.payments_total)} sur {len(export.payment_days)} jour(s), "
+        f"{export.tickets} paiement(s)" + (f" ({methods})." if methods else ".")
+    )
+    if export.skipped:
+        lines.append(f"{export.skipped} ligne(s) sans jour ou sans paiement passée(s).")
+    if export.unread_payment_tickets:
+        lines.append(
+            f"{export.unread_payment_tickets} paiement(s) sans moyen : classé(s) "
+            f"« {PosDailyPayment.LABELS[PosDailyPayment.UNREAD]} »."
+        )
+    if export.unmapped_methods:
+        printed = ", ".join(f"« {method} »" for method in export.unmapped_methods)
+        lines.append(
+            f"Moyens de paiement gardés tels qu'imprimés : {printed} - à faire correspondre dans le format pour "
+            "qu'ils comptent comme Carte, Espèces…"
+        )
+    return lines
+
+
+def _covered(export) -> tuple[date | None, date | None]:
+    days = [day for _name, day, _quantity in export.entries] or list(export.payment_days)
+    return (min(days), max(days)) if days else (None, None)
+
+
+def import_till_file_task(
+    job_id: int, staged_path: str, choice_value: str, file_name: str, day: date | None = None, uploaded_by: str = ""
+) -> None:
+    """The thread's body, started as ``target=bound(import_till_file_task)``
+    (till_views.upload_sales_file): a file uploaded on « Ventes », waiting
+    under `staged_path`, read with its choice - L'Addition's export or a
+    format - then written by `store_reading`, the payments beside the days
+    « Ventes » holds. Read whole, the file is moved into its place
+    (`keep_upload`); refused, it is deleted. The choice is resolved again
+    here: the format may have been edited or deleted since the upload."""
+    job = SalesImportJob.objects.get(pk=job_id)
+    job.status = SalesImportJob.Status.RUNNING
+    job.save(update_fields=["status"])
+    staged = Path(staged_path)
+
+    def alive() -> None:
+        # The reading is silent, and a run silent for ten minutes is reaped
+        # (common's STALE_AFTER): a second upload or fetch could then start
+        # beside it. A heartbeat every few thousand rows, and a cancel heard.
+        job.beat()
+        _raise_if_cancelled(job)
+
+    try:
+        job.append_log(f"Fichier « {Path(file_name).name} »." + (f" Importé par {uploaded_by}." if uploaded_by else ""))
+        _raise_if_cancelled(job)
+        choice = resolve(choice_value, file_name)
+        job.append_log(f"Format « {choice.label} »." + (f" Jour des ventes : {day:%d/%m/%Y}." if day else ""))
+        export = read_upload(staged, choice, file_name=file_name, day=day, progress=alive)
+        _raise_if_cancelled(job)
+        keep_upload(staged, file_name, choice.laddition)
+        job.range_start, job.range_end = _covered(export)
+        job.items_sold = export.total_quantity
+        for message in reading_log(export):
+            job.append_log(message)
+        if choice.laddition:
+            for message in payments_log(export):
+                job.append_log(message)
+        stored = store_reading(export, job.append_log, payments_beside_sales=True)
+        job.recorded = stored.sales.recorded
+        job.unmatched = stored.unmatched
+        job.status = SalesImportJob.Status.SUCCESS
+    except _Cancelled:
+        job.status = SalesImportJob.Status.CANCELLED
+        job.append_log("Annulé.")
+    except Exception as exc:  # noqa: BLE001 - the job record IS the error report
+        fail(job, exc, "Import d'un fichier de caisse")
+    finally:
+        # A file not moved into its place was not read whole: it goes.
+        with contextlib.suppress(OSError):
+            staged.unlink(missing_ok=True)
+        job.finished_at = timezone.now()
+        job.save(
+            update_fields=["status", "finished_at", "items_sold", "recorded", "unmatched", "range_start", "range_end"]
+        )

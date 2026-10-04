@@ -17,6 +17,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from recipes.models import SalesImportJob
+from recipes.tests.till_support import LADDITION_ACCOUNT
 
 
 def make_job(**kwargs):
@@ -75,6 +76,7 @@ class StaleJobTests(TestCase):
         self.assertEqual(job.status, SalesImportJob.Status.RUNNING)
 
 
+@LADDITION_ACCOUNT
 class TriggerGuardTests(TestCase):
     """The guard that stops two runs overlapping must not stop ALL runs."""
 

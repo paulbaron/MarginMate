@@ -29,12 +29,10 @@ from django.core.management.base import BaseCommand, CommandError
 from accounts import paths
 from recipes.integration import refusal, require_tenant_for_command, till_allowed
 from recipes.models import SalesImportJob
-from recipes.payments import record_payments
 from recipes.pos.laddition_download import LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
-from recipes.sales import record_sales
-from recipes.tasks import payments_log, sync_pos_products
+from recipes.tasks import payments_log, store_reading
 
 
 def _as_date(value: str) -> date:
@@ -134,31 +132,14 @@ class Command(BaseCommand):
             self._report_unmatched(unknown)
             return
 
-        # The job's order exactly (tasks.import_laddition_sales_task): the
-        # till products and their days - « Ventes », the day's money - then
-        # the recipes' sales, then the payments. Without the first, this
-        # command stored a day's card and cash with no takings behind them:
-        # the very day the backfill refuses to write and « Remplacer »
-        # prunes. One rule for every writer.
-        seen = sync_pos_products(export)
-        self.stdout.write(f"{seen} till product(s) seen.")
-
-        result = record_sales(export.entries, source="laddition")
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Recorded {result.recorded} recipe/day totals ({result.created} new, {result.updated} updated)."
-            )
-        )
-        self._report_unmatched(sorted(set(result.unmatched)))
-
-        if export.payments_read:
-            paid = record_payments(export)
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"Recorded the payments of {paid.days_written} till day(s) "
-                    f"({paid.days_unchanged} already up to date)."
-                )
-            )
+        # The job's writer exactly (tasks.store_reading): the till products
+        # and their days - « Ventes », the day's money - then the recipes'
+        # sales, then the payments, each said in the job's own words.
+        # Without the first, this command once stored a day's card and cash
+        # with no takings behind them: the very day the backfill refuses to
+        # write and « Remplacer » prunes. One writer for every reading.
+        stored = store_reading(export, self.stdout.write)
+        self._report_unmatched(sorted(set(stored.sales.unmatched)))
 
     def _report_unmatched(self, names):
         if not names:

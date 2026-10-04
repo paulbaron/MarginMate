@@ -33,6 +33,7 @@ import time
 from datetime import date
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -54,7 +55,14 @@ DOWNLOAD_TIMEOUT_SECONDS = 180
 
 
 class LadditionDownloadError(RuntimeError):
-    pass
+    """Why the export did not come, in French: no address, no folder - the
+    job's log is drawn on a page."""
+
+
+#: What a page waiting for L'Addition, or a browser that could not reach it,
+#: is said as - Selenium's own text names the page's address.
+NO_ANSWER = "L'Addition n'a pas répondu à temps : réessayez plus tard."
+NO_BROWSER = "Le navigateur n'a pas pu ouvrir L'Addition : réessayez plus tard."
 
 
 def with_dates(template: str, start: date, end: date) -> str:
@@ -100,13 +108,16 @@ def capture_export_template(driver, log=print) -> str:
                     break
             if template:
                 break
-            log(f"Export button not wired up yet (attempt {attempt}/{CAPTURE_ATTEMPTS}).")
+            log(f"Le bouton d'export n'est pas encore prêt (essai {attempt}/{CAPTURE_ATTEMPTS}).")
 
     if not template:
-        raise LadditionDownloadError("Pressing 'Exporter en XLS' opened no URL - the export button may have changed.")
+        raise LadditionDownloadError(
+            "L'export de L'Addition n'a ouvert aucune adresse : le bouton « Exporter en XLS » a peut-être changé."
+        )
     if "date_start" not in template or "date_end" not in template:
-        raise LadditionDownloadError(f"Export URL has no date parameters to rewrite: {template}")
-    log("Captured a signed export URL.")
+        # The address itself is never said: it is signed.
+        raise LadditionDownloadError("L'adresse d'export de L'Addition ne porte pas de dates à remplacer.")
+    log("Adresse d'export obtenue.")
     return template
 
 
@@ -132,7 +143,7 @@ def _wait_for_new_xlsx(download_dir: str, before: set[str], on_wait=None) -> str
         if on_wait is not None:
             on_wait()
         time.sleep(2)
-    raise LadditionDownloadError(f"No .xlsx appeared in {download_dir} within {DOWNLOAD_TIMEOUT_SECONDS}s.")
+    raise LadditionDownloadError(f"Aucun fichier .xlsx n'est arrivé en {DOWNLOAD_TIMEOUT_SECONDS} s.")
 
 
 def download_sales_lines(start: date, end: date, download_dir: str, log=print, should_cancel=None) -> list[str]:
@@ -155,17 +166,22 @@ def download_sales_lines(start: date, end: date, download_dir: str, log=print, s
 
     paths = []
     check()
-    with laddition_session(download_dir, path=SALES_LINES_PATH, log=log) as driver:
-        check()
-        template = capture_export_template(driver, log=log)
-        for index, (window_start, window_end) in enumerate(windows, start=1):
+    try:
+        with laddition_session(download_dir, path=SALES_LINES_PATH, log=log) as driver:
             check()
-            label = f"{window_start} to {window_end}"
-            if len(windows) > 1:
-                label = f"[{index}/{len(windows)}] {label}"
-            before = set(os.listdir(download_dir))
-            driver.get(with_dates(template, window_start, window_end))
-            path = _wait_for_new_xlsx(download_dir, before, on_wait=check)
-            log(f"{label}: {os.path.basename(path)}")
-            paths.append(path)
+            template = capture_export_template(driver, log=log)
+            for index, (window_start, window_end) in enumerate(windows, start=1):
+                check()
+                label = f"Du {window_start:%d/%m/%Y} au {window_end:%d/%m/%Y}"
+                if len(windows) > 1:
+                    label = f"[{index}/{len(windows)}] {label}"
+                before = set(os.listdir(download_dir))
+                driver.get(with_dates(template, window_start, window_end))
+                path = _wait_for_new_xlsx(download_dir, before, on_wait=check)
+                log(f"{label} : {os.path.basename(path)}")
+                paths.append(path)
+    except TimeoutException:
+        raise LadditionDownloadError(NO_ANSWER) from None
+    except WebDriverException:
+        raise LadditionDownloadError(NO_BROWSER) from None
     return paths

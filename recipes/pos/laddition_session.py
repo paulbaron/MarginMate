@@ -110,7 +110,7 @@ def navigate(driver, url: str, log=print, attempts: int = NAVIGATION_ATTEMPTS, s
             if not _is_transient(exc) or attempt == attempts:
                 raise
             delay = 2 ** (attempt - 1)
-            log(f"Network hiccup reaching {url} (attempt {attempt}/{attempts}), retrying in {delay}s.")
+            log(f"Réseau instable pour joindre L'Addition (essai {attempt}/{attempts}), nouvel essai dans {delay} s.")
             sleep(delay)
 
 
@@ -166,9 +166,9 @@ def log_in(driver, log=print) -> None:
         # Already signed in: auth bounces straight through to the app rather
         # than rendering a form. Not an error.
         if "auth.laddition.com" not in driver.current_url:
-            log("Already signed in to L'Addition.")
+            log("Déjà connecté à L'Addition.")
             return
-        raise LadditionAuthError(f"The L'Addition login form never appeared (still at {driver.current_url}).") from None
+        raise LadditionAuthError("Le formulaire de connexion de L'Addition n'est pas apparu.") from None
 
     driver.find_element(*IDENTIFIER_FIELD).send_keys(email)
     driver.find_element(*PASSWORD_FIELD).send_keys(password)
@@ -179,7 +179,7 @@ def log_in(driver, log=print) -> None:
         wait.until(lambda d: d.find_element(*SUBMIT_BUTTON).is_enabled())
     except TimeoutException:
         raise LadditionAuthError(
-            "The L'Addition sign-in button never became clickable - the login form may have changed."
+            "Le bouton de connexion de L'Addition n'est jamais devenu cliquable : le formulaire a peut-être changé."
         ) from None
     driver.find_element(*SUBMIT_BUTTON).click()
 
@@ -191,7 +191,7 @@ def log_in(driver, log=print) -> None:
         raise LadditionAuthError(
             "L'Addition a refusé la connexion : vérifiez l'identifiant et le mot de passe sur la page Identifiants."
         ) from None
-    log("Signed in to L'Addition.")
+    log("Connecté à L'Addition.")
 
 
 def normalise_path(path: str) -> str:
@@ -241,7 +241,7 @@ def open_report(driver, path: str, log=print) -> None:
     WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
         lambda d: len((d.find_element(By.TAG_NAME, "body").text or "").strip()) > 40
     )
-    log(f"Opened {url}")
+    log("Page de L'Addition ouverte.")
 
 
 REPORT_FRAME = (By.TAG_NAME, "iframe")
