@@ -15,7 +15,7 @@ Every file, name and figure is invented.
 from __future__ import annotations
 
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -23,12 +23,21 @@ from unittest import mock
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts import paths
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
-from recipes import tasks
-from recipes.models import PosDailyPayment, PosProduct, PosProductDailyQuantity, RecipeSale, SalesImportJob, TillFormat
+from recipes import auto_sales, importing, sales_sources, tasks
+from recipes.models import (
+    AutoSalesImport,
+    PosDailyPayment,
+    PosProduct,
+    PosProductDailyQuantity,
+    RecipeSale,
+    SalesImportJob,
+    TillFormat,
+)
 from recipes.pos import connectors, laddition_xlsx, till_file
 from recipes.sales import MANUAL_SALE_SOURCE, TILL_SOURCE
 from recipes.tests.test_pos_payments import TICKET_HEADER, ticket
@@ -520,3 +529,69 @@ class MoneyNotReadTests(UploadCase):
         }
         self.assertEqual(days[date(2026, 7, 3)], (3, Decimal("13.00"), True))
         self.assertEqual(days[date(2026, 7, 4)][::2], (1, False))
+
+
+class OneLockTests(UploadCase):
+    """GitHub's main's automatic sales imports share one lock with every
+    import (recipes/importing.py): an upload takes it too, its job says it
+    read a file (`SalesImportJob.source`), and a file is never L'Addition's
+    coverage - nor makes a rule waiting behind it skip its slot."""
+
+    def setUp(self):
+        super().setUp()
+        self.fmt = sales_format()
+
+    def test_an_upload_waits_for_an_automatic_import(self):
+        running = SalesImportJob.objects.create(
+            status=SalesImportJob.Status.RUNNING, trigger=SalesImportJob.Trigger.AUTOMATIC
+        )
+        running.beat()
+        response, job = self.upload(csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20 %"), self.fmt.pk)
+        self.assertIsNone(job)
+        self.assertIn(ALREADY_RUNNING, self.messages(response))
+        self.assertEqual(kept(tasks.staged_uploads_dir()), [])
+
+    def test_an_import_started_between_the_check_and_the_job_refuses_the_upload(self):
+        """The check before the file is written, again with the job's
+        creation (importing.claim_sales_import): an automatic slot arriving
+        in between wins, and the staged file goes."""
+        with mock.patch("recipes.importing.claim_sales_import", return_value=None):
+            response, job = self.upload(csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20 %"), self.fmt.pk)
+        self.assertIsNone(job)
+        self.assertIn(ALREADY_RUNNING, self.messages(response))
+        self.assertEqual(kept(tasks.staged_uploads_dir()), [])
+        self.assertFalse(SalesImportJob.objects.exists())
+
+    def test_an_upload_takes_the_lock_while_it_runs(self):
+        with mock.patch("recipes.till_views.threading.Thread"):
+            self.client.post(
+                UPLOAD, {"fichier": csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20 %"), "format": self.fmt.pk}
+            )
+        job = SalesImportJob.objects.get()
+        self.assertEqual((job.source, job.trigger), (SalesImportJob.FILE, SalesImportJob.Trigger.MANUAL))
+        with mock.patch("recipes.importing.threading.Thread") as thread:
+            self.assertIsNone(importing.start_sales_import(date(2026, 7, 1), date(2026, 7, 3)))
+        thread.assert_not_called()
+
+    def test_a_file_is_never_l_addition_s_coverage(self):
+        _response, job = self.upload(csv(SALES, "03/07/2026;Pinte Exemple;2;13,00;20 %"), self.fmt.pk)
+        self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertEqual(job.source, SalesImportJob.FILE)
+        # Read from the history, the upload's days would have read as
+        # fetched from L'Addition, and the automatic import skipped them.
+        self.assertIsNone(auto_sales.covered_until(sales_sources.LADDITION))
+        SalesImportJob.objects.filter(pk=job.pk).update(source=sales_sources.LADDITION)
+        self.assertEqual(auto_sales.covered_until(sales_sources.LADDITION), date(2026, 7, 3))
+
+    def test_a_refused_file_never_makes_a_waiting_rule_skip_its_slot(self):
+        rule = AutoSalesImport.objects.create(
+            name="Ventes exemple", source=sales_sources.LADDITION, weekdays="0,1,2,3,4,5,6", times="07:00"
+        )
+        rule.last_result = auto_sales.WAITING
+        slot = timezone.now() - timedelta(minutes=5)
+        SalesImportJob.objects.create(
+            status=SalesImportJob.Status.FAILED, source=SalesImportJob.FILE, finished_at=timezone.now()
+        )
+        self.assertFalse(auto_sales._ended_while_waiting(rule, slot))
+        SalesImportJob.objects.create(status=SalesImportJob.Status.FAILED, finished_at=timezone.now())
+        self.assertTrue(auto_sales._ended_while_waiting(rule, slot))

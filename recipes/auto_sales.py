@@ -7,8 +7,9 @@ invoices and bons (invoices/auto_gather.py), on the same slot machinery
 
 What each tick does for the bound espace:
 
-- nothing at all where the server's L'Addition account may not be used
-  (`integration.till_allowed`: the owner's espace);
+- nothing at all unbound (`integration.till_allowed`: any bound espace
+  since 04/10/2026, each fetching with its own « Identifiants » - the
+  server's .env stands in for the platform owner's espace alone);
 - every active rule, each on its own: its due slot is the latest instant of
   its CALENDAR days × times (no night) in (`last_slot_at` or `created_at`,
   now], caught up within CATCH_UP_LIMIT (12 h: an import is idempotent per
@@ -16,7 +17,8 @@ What each tick does for the bound espace:
   a deploy exactly as the gathers' (automation.run_rule); then:
   - « sautée : source inconnue » - its source is no key of
     recipes/sales_sources.py any more; « sautée : source indisponible » -
-    that source's `available()` says no;
+    that source's `available()` says no (another bar whose « Identifiants »
+    hold no L'Addition account: nothing signs in, no browser starts);
   - « à jour : ventes importées jusqu'au JJ/MM » - nothing new to import
     (below): no job, no sign-in to the site. This is what keeps L'Addition's
     sign-ins to about one a day whatever the rule's times;
@@ -53,7 +55,8 @@ What each tick does for the bound espace:
   up to today has not seen tonight's sales). A source never recorded is
   read once from the history: the furthest any finished SUCCESS sales job
   reached (its `range_end`, never past the last complete day when it
-  finished) - L'Addition's alone, the only source before this.
+  finished) - L'Addition's alone (`SalesImportJob.source`): a till's
+  file uploaded on « Ventes » is no proof L'Addition's days were imported.
 - Nothing new when the day after the coverage is past END. Otherwise START
   is the coverage less OVERLAP_DAYS (3, re-read: a day imported again
   replaces itself), or - never covered - the source's own start
@@ -161,11 +164,12 @@ def lookback_floor(today: date) -> date:
     return today - timedelta(days=LOOKBACK_FLOOR_DAYS)
 
 
-def _from_history(night: time, exclude=None) -> date | None:
-    """The furthest the finished SUCCESS sales jobs reached - each its
-    `range_end`, never past the last complete day when it finished - or
-    None. `exclude`: a job's pk left out (the one being recorded)."""
-    jobs = SalesImportJob.objects.filter(status=SalesImportJob.Status.SUCCESS, range_end__isnull=False)
+def _from_history(night: time, exclude=None, key: str = sales_sources.LADDITION) -> date | None:
+    """The furthest the finished SUCCESS sales jobs of `key` reached - each
+    its `range_end`, never past the last complete day when it finished - or
+    None. `exclude`: a job's pk left out (the one being recorded). A till's
+    file uploaded on « Ventes » (`SalesImportJob.FILE`) is none of them."""
+    jobs = SalesImportJob.objects.filter(status=SalesImportJob.Status.SUCCESS, range_end__isnull=False, source=key)
     if exclude is not None:
         jobs = jobs.exclude(pk=exclude)
     furthest = None
@@ -186,7 +190,7 @@ def coverage_row(key: str, night: time | None = None, exclude=None):
     row = GatherCoverage.objects.filter(code=code).first()
     if row is None:
         night = night_ends_at() if night is None else night
-        history = _from_history(night, exclude=exclude) if key == sales_sources.LADDITION else None
+        history = _from_history(night, exclude=exclude, key=key) if key == sales_sources.LADDITION else None
         row, _ = GatherCoverage.objects.get_or_create(code=code, defaults={"searched_until": history})
     return row
 
@@ -200,7 +204,7 @@ def covered_until(key: str) -> date | None:
     row = GatherCoverage.objects.filter(code=coverage_code(key)).first()
     if row is not None:
         return row.searched_until
-    return _from_history(night_ends_at()) if key == sales_sources.LADDITION else None
+    return _from_history(night_ends_at(), key=key) if key == sales_sources.LADDITION else None
 
 
 @dataclass(frozen=True)
@@ -349,13 +353,14 @@ def _ended_while_waiting(rule: AutoSalesImport, slot) -> bool:
     """The rule gave this slot back behind another import (« en attente »)
     and a sales import has failed or been cancelled since the slot: the
     owner's « Annuler », or a refused sign-in, is not to be repeated a
-    minute later. Jobs carry no source yet: once a second source exists,
-    add one and filter on it."""
+    minute later. Only an import of the rule's own source: a till's file
+    refused on « Ventes » says nothing of L'Addition's sign-in."""
     if slot is None or rule.last_result != WAITING:
         return False
     return SalesImportJob.objects.filter(
         status__in=(SalesImportJob.Status.FAILED, SalesImportJob.Status.CANCELLED),
         finished_at__gte=slot,
+        source=rule.source,
     ).exists()
 
 

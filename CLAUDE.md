@@ -3034,7 +3034,9 @@ its own - the views, the task bodies, each connector last:
   - **What a failure says** (`generic_email.failure_said`, in the gather's
     mailbox and slips lines and « Tester »): another bar never reads the
     library's words (English, its server's host, a certificate's details -
-    LB-3): the app's own refusals as they are, imaplib/ssl/socket errors as
+    LB-3): the app's own refusals as they are (a search the server refused
+    or left incomplete too, `SearchRefused`, `IncompleteSearch` - GitHub's
+    main's), imaplib/ssl/socket errors as
     fixed sentences by kind (`LOGIN_REFUSED`, `CERTIFICATE_REFUSED`,
     `NO_ANSWER`…), anything else `common.SERVER_ERROR`; the line with its
     traceback goes whole to the server's log (`job_line`). A gather failing
@@ -3080,6 +3082,39 @@ its own - the views, the task bodies, each connector last:
   « Identifiants », never `LADDITION_EMAIL` nor « .env ». A new hosted
   espace has no mailbox source nor slip format of its own (`invoices.seeds`):
   a test of its mailbox gives it one (`HostedMailboxTests.beta_s_sources`).
+- **The automatic gathers and sales imports** (GitHub's main, merged
+  04/10/2026: « Notifications, rappels et récupération automatique ») run in
+  every espace under the same gates - their code was written when
+  `integrations_allowed()` meant the owner's espace alone:
+  - another bar's rules search ITS mailbox only, and only once its
+    « Identifiants » hold it (`auto_gather._start`: « sautée : boîte mail à
+    renseigner sur la page Identifiants », `MAILBOX_TO_FILL`, no job, no
+    sign-in - never the .env's), its sources being `workspace.gather_sources`
+    (this branch's gates inside: Metro and the portals the owner's only,
+    the mailbox's sources and slips once filled in, ONE `vault.load()` a
+    page or a slot); the run is `gather_invoices_task(unattended=True)`,
+    whose mailbox goes through the guarded patterns, the egress check, the
+    byte budgets, `failure_said` and `job_line` like a gather by hand; the
+    run's alert names its failed sources by their labels only. The rules'
+    page says `MAILBOX_TO_FILL` and `integrations.METRO` / `PORTALS` there;
+  - another bar's automatic sales import runs only once its own L'Addition
+    account is on its « Identifiants » (`sales_sources._laddition_ready`:
+    `till_allowed()` and not `till_login_missing()`; else « sautée : source
+    indisponible » and the page says `TILL_LOGIN_MISSING`, no form): the
+    task signs in with that account, headless and in a browser slot of its
+    own (chrome.py), writes through `store_reading`, and fails through
+    `tasks.fail` - the job's log and the alert (`auto_sales._notify`) say the
+    till's refusal or `common.SERVER_ERROR`, never the exception's words,
+    which `fail` returns to the alert in the owner's espace alone, as on
+    GitHub's main;
+  - one sales import at a time includes a till's file uploaded on
+    « Ventes » (`claim_sales_import`, its job's `SalesImportJob.source`
+    « fichier »), which never counts as L'Addition's coverage nor makes a
+    waiting rule skip its slot (`auto_sales._from_history`,
+    `_ended_while_waiting` filter on the source).
+  Tests: `invoices/tests/test_tenancy.py::AutomaticGatherGateTests`,
+  `recipes/tests/test_tenants.py::AutomaticSalesImportGateTests`,
+  `recipes/tests/test_till_file_import.py::OneLockTests`.
 - **Not done, on purpose**: a kill switch per espace, an egress proxy that
   would let the portals open, a server-wide Metro throttle, fair OCR between
   bars, several mailboxes per espace. Every bar's store sits on the owner's
@@ -6540,8 +6575,11 @@ all when that is already in - see « L'import automatique des ventes » under
 hand or automatic, starts through `recipes/importing.start_sales_import`;
 `laddition_import` downloading takes the same lock
 (`importing.claim_sales_import`: a manual job, RUNNING and beating while it
-runs, cancellable from the Ventes tab, its SUCCESS recording the coverage),
-so no import starts beside it.
+runs, cancellable from the Ventes tab, its SUCCESS recording the coverage,
+its failure said by `tasks.fail`), and so does a till's file uploaded on
+« Ventes » (its job's `source` « fichier »), so no import starts beside it.
+In another bar's espace the automatic import waits for its own L'Addition
+account (« Every espace's connectors », under « Gathering invoices »).
 
 Four things that cost real debugging time:
 
@@ -6849,8 +6887,11 @@ L'Addition's export must be an .xlsx; a format by `common.is_id`, which must
 exist and pass the check now), the day, a job already running - each refused
 before anything is kept. Then the file is staged under the espace's
 `imports/caisse/` (never `downloads/`: the backfills glob `downloads/*.xlsx`
-and a fetch takes the first new .xlsx landing there) and a `SalesImportJob`
-thread (`target=bound(tasks.import_till_file_task)`) reads it: the same
+and a fetch takes the first new .xlsx landing there), the one sales import's
+lock taken (`importing.claim_sales_import`, the job's `source` « fichier »:
+an automatic import's slot arriving meanwhile refuses the upload and the
+staged file goes; a file is never L'Addition's coverage) and a
+`SalesImportJob` thread (`target=bound(tasks.import_till_file_task)`) reads it: the same
 status card, cancel, reaper and « Données » busy check as the fetch. The job
 resolves the choice again (a format deleted or edited meanwhile is said),
 reads, and only a file **read whole** is moved into place - L'Addition's
@@ -6905,10 +6946,12 @@ every format written through the model's check, its refusal in French.
   after a backup, `migrate_tenants`; `serve` refuses to start until then).
   Written as 0018 and renumbered after GitHub's main's
   `recipes/0018_auto_sales_import`, which it depends on. One new empty
-  table: nothing existing is read or rewritten, in any espace or the
-  `_template`. Until it is applied, « Ventes » (it lists the formats for the
-  owner), the formats pages and « Données » (it counts them) answer « no
-  such table ».
+  table, and a column of the sales jobs with its default
+  (`SalesImportJob.source`, « laddition » - what every job before it read):
+  nothing existing is read or rewritten, in any espace or the `_template`.
+  Until it is applied, « Ventes » (it lists the formats for the owner and
+  reads the jobs), the formats pages and « Données » (it counts them) answer
+  « no such table » or « no such column ».
 
 Not done, the owner's call: ready-made formats per till (no real export of
 any - collect one at onboarding, build its format with « Tester », publish it
@@ -9143,7 +9186,11 @@ never a lost bon.
   every source (a failing portal used to pull it 90 days back for the
   mailbox and Metro). Mailbox types keep the posted start; manual gathers
   are otherwise unchanged.
-- `run_due`: nothing without `integrations_allowed()`; on a dev server each
+- `run_due`: nothing without `integrations_allowed()` - any bound espace
+  since the merge with the connectors opened to every bar: another bar's
+  rules search its own mailbox, once on its « Identifiants » (« sautée :
+  boîte mail à renseigner sur la page Identifiants »), never Metro nor a
+  portal (« Every espace's connectors », under « Gathering invoices »); on a dev server each
   due slot is claimed and says « sautée : serveur de développement ». A due
   slot is the latest instant in `(last_slot_at or created_at, now]`, claimed
   by a conditional UPDATE on the `last_slot_at` read. **Catch-up**
@@ -9254,13 +9301,17 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   `last_slot_at`, `last_result`, `last_failed` (the last failure's local
   day, cleared by a success). Cap 5. Catch-up 12 h: an import is idempotent
   per day, late is fine. `run_due` is the scheduler's third JOB; nothing
-  outside the owner's espace (`till_allowed`).
+  unbound (`till_allowed`: any bound espace since the merge with the
+  connectors opened to every bar).
 - **The sources** (`recipes/sales_sources.py`): `SalesSource(key, label,
   available, unavailable_reason, job_label, task)`. Another site is an
   entry whose task (`(job_id, start, end)`) records the same day-level
   sales (`record_sales`, `PosProductDailyQuantity`) and ends with
   `auto_sales.finish` - nothing else in the scheduling changes. A key the
   registry no longer has is « sautée : source inconnue », never a 500.
+  L'Addition is `available()` where the espace may fetch with its own
+  account: in the owner's espace as on GitHub's main, in another once its
+  « Identifiants » hold the login and password (`till_login_missing`).
 - **One sales import at a time** (`recipes/importing.start_sales_import`,
   used by the Ventes tab's `trigger_sales_import` and the automatic run):
   reap, active check and create in one `transaction.atomic()`, the bound
@@ -9286,8 +9337,9 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   annulé », the slot kept): only when its last result was « en attente » and
   a failed or cancelled sales job finished at or after the slot. The owner's
   « Annuler », a refused sign-in, are not repeated a minute later; its next
-  slot runs. Jobs carry no source: filter on one once a second source
-  exists.
+  slot runs. Only a job of the rule's own source counts
+  (`SalesImportJob.source`, recipes 0019: « laddition », or « fichier » for
+  a till's file uploaded on « Ventes »).
 - **The period** (`period_for`): END the last COMPLETE till day
   (`last_complete_day`: yesterday once the local time is past
   « La nuit se termine à » - 00:00 = yesterday at any hour -, else the day
@@ -9297,8 +9349,8 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   import COMPLETES - by hand from the Ventes tab too, never failed,
   cancelled or killed - up to the last complete day when it FINISHED (an
   import up to today has not seen tonight's sales). Unknown, it is read once
-  from the SUCCESS sales jobs (L'Addition's only; the job being recorded
-  left out). **Nothing new when the day after the coverage is past END**:
+  from the SUCCESS sales jobs (L'Addition's only - `source` « laddition »,
+  never an uploaded file; the job being recorded left out). **Nothing new when the day after the coverage is past END**:
   the slot says « à jour : ventes importées jusqu'au JJ/MM », no job, no
   sign-in - two slots a day sign in once. Otherwise START = coverage − 3
   days, or (never covered) the newest sales day − 3, else today − 90; only

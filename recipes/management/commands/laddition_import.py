@@ -13,10 +13,13 @@ till day it read (recipes/payments.py) - which --dry-run reads and reports
 without writing. Ranges longer than two years are handled; --file skips the
 download and reads one already downloaded.
 
-In multi mode it runs for one tenant (`manage.py tenant <folder>
-laddition_import …`) and downloads into that tenant's own folder. Downloading
-uses the server's L'Addition account, the owner's: refused elsewhere, like
-the page's import (recipes/integration.py).
+It runs for one tenant (`manage.py tenant <folder> laddition_import …`)
+and downloads into that tenant's own folder, signing in with that espace's
+own L'Addition account - its « Identifiants », the .env standing in for the
+platform owner's espace alone -: refused unbound, like the page's import
+(recipes/integration.py). The job's failure line is the till's own French
+refusal or one fixed sentence (tasks.fail): the Ventes tab of the espace
+shows it.
 
 **A download holds the one sales import's lock** (importing.claim_sales_import,
 the Ventes tab's and the scheduler's): a manual SalesImportJob of the period,
@@ -46,12 +49,14 @@ from recipes.pos.laddition_download import DownloadCancelled, LadditionDownloadE
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
 from recipes.sales_sources import LADDITION
-from recipes.tasks import payments_log, store_reading
+from recipes.tasks import fail, payments_log, store_reading
 
 BUSY = "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
 #: The first line of the command's job, as the Ventes tab shows it.
 COMMAND_NOTE = "Lancé par la commande laddition_import."
 CANCELLED = "Annulé depuis l'application."
+#: What the server's log calls a failure of the command's job.
+COMMAND_FAILED = "Commande laddition_import"
 #: What the command's job saves when it ends.
 END_FIELDS = ["status", "finished_at", "items_sold", "recorded", "unmatched"]
 
@@ -123,7 +128,9 @@ class Command(BaseCommand):
             job.append_log("Annulé.")
             raise CommandError(CANCELLED) from None
         except Exception as exc:  # said in the job's log, then raised as it was
-            job.append_log(f"Échec : {exc}")
+            # A refused sign-in arrives wrapped in a CommandError: its own
+            # French words are what the Ventes tab says.
+            fail(job, exc.__cause__ if isinstance(exc, CommandError) and exc.__cause__ else exc, COMMAND_FAILED)
             raise
         finally:
             self._end(job, status, own, dry_run=options["dry_run"])

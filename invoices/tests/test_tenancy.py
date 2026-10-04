@@ -16,11 +16,14 @@ download folder would have been taken for the other's. Data invented.
 
 from __future__ import annotations
 
+import imaplib
+import logging
 import os
 import tempfile
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as wall_time
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -31,18 +34,31 @@ from django.core.management import call_command
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 
 from accounts import paths, vault
 from accounts.tenancy import NoTenantBound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from common import SERVER_ERROR
-from invoices import integrations
+from invoices import auto_gather, integrations
 from invoices.deletion import delete_invoice
 from invoices.integrations import TO_CONFIGURE_PLURAL
-from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier, WebsiteInvoiceSource
+from invoices.models import (
+    AutoGather,
+    EmailInvoiceSource,
+    Invoice,
+    InvoiceType,
+    ReceiptBatch,
+    ScrapeJob,
+    Supplier,
+    WebsiteInvoiceSource,
+)
+from invoices.scrapers import egress, generic_email
 from invoices.scrapers.generic_email import MAILBOX_MISSING
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
 from invoices.tests.pdf_files import write_pdf
+from invoices.tests.test_email_search import fake_mailbox
+from invoices.tests.test_mailbox_guards import a_mail, answers
 from tests.factories import make_invoice, make_invoice_type, make_supplier
 
 START, END = date(2026, 1, 1), date(2026, 1, 31)
@@ -699,3 +715,180 @@ class StartupReaperTests(TwoTenantsTestCase):
             self.assertIn("Interrompu par un redémarrage du serveur.", job.log)
         nobodys.refresh_from_db()
         self.assertEqual(nobodys.status, ScrapeJob.Status.RUNNING)
+
+
+class AutomaticGatherGateTests(TwoTenantsTestCase):
+    """GitHub's main's automatic gathers (invoices/auto_gather.py) in every
+    espace since the connectors opened to every bar: Bar Alpha is the
+    platform owner's espace, Bar Beta another bar. Beta's rules search ITS
+    mailbox alone - never Metro nor a portal, whatever a rule names -,
+    signed in with what its « Identifiants » hold and never the server's
+    .env values in the settings, and only once they are typed; its patterns
+    go through the guard, its server through the egress check, and its log
+    and alert say no library's words."""
+
+    owner_a = True
+    #: Wednesday 07/10/2026, 06:01 in Paris (CEST).
+    NOW = datetime(2026, 10, 7, 4, 1, tzinfo=UTC)
+
+    def setUp(self):
+        super().setUp()
+        # No deploy mark of this checkout's: a slot would say « mise à jour ».
+        self.enterContext(override_settings(BASE_DIR=Path(tempfile.mkdtemp())))
+        # The whole line goes to the server's log (common.job_line): quiet here.
+        for name in ("marginmate.jobs", "invoices.tasks"):
+            logger = logging.getLogger(name)
+            self.enterContext(mock.patch.object(logger, "propagate", False))
+            handler = logging.NullHandler()
+            logger.addHandler(handler)
+            self.addCleanup(logger.removeHandler, handler)
+
+    def beta_s_rule(self, sender_pattern="traiteur"):
+        """Beta's mailbox source, and a rule naming it - and Metro and a
+        portal, as an archive or the admin could write it."""
+        with bound_tenant(self.bar_b):
+            supplier = make_supplier(code="TRAITEUR_B", name="Traiteur Beta", parser_key="")
+            mailbox = InvoiceType.objects.create(
+                name="Traiteur Beta - Factures", supplier=supplier, source_kind=InvoiceType.SourceKind.EMAIL
+            )
+            EmailInvoiceSource.objects.create(invoice_type=mailbox, sender_pattern=sender_pattern)
+            box = make_supplier(code="BOX_B", name="Box Beta", parser_key="")
+            portal = InvoiceType.objects.create(
+                name="Box Beta - Factures", supplier=box, source_kind=InvoiceType.SourceKind.WEBSITE
+            )
+            WebsiteInvoiceSource.objects.create(
+                invoice_type=portal,
+                login_url="https://box.exemple.invalid/login",
+                username_env="BOX_LOGIN",
+                password_env="BOX_PASSWORD",
+            )
+            Supplier.objects.filter(code="METRO").update(is_scrapable=True)
+            self.mailbox_code = f"type-{mailbox.pk}"
+            self.rule = AutoGather.objects.create(
+                name="Factures Beta",
+                sources=[self.mailbox_code, "METRO", f"type-{portal.pk}"],
+                weekdays="2",
+                start_time=wall_time(6, 0),
+                end_time=wall_time(14, 0),
+                every_minutes=60,
+                created_at=self.NOW - timedelta(days=7),
+            )
+
+    def type_beta_s_mailbox(self):
+        with bound_tenant(self.bar_b):
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
+
+    def tick(self, tenant):
+        with (
+            bound_tenant(tenant),
+            mock.patch("notifications.webpush.sending_enabled", return_value=True),
+            mock.patch("invoices.gathering.threading.Thread") as thread,
+        ):
+            auto_gather.run_due(self.NOW)
+        return thread
+
+    def run_beta_s_gather(self, *, resolve="8.8.8.8", login_error=None):
+        """The automatic run's body in Beta, as its thread runs it - handed
+        what the rule's slot hands it (its mailbox source alone: the test
+        above), imaplib, the resolver and the alert replaced. Returns (job,
+        IMAP client, alert)."""
+        with bound_tenant(self.bar_b):
+            job = ScrapeJob.objects.create(trigger=ScrapeJob.Trigger.AUTOMATIC, auto_gather_id=self.rule.pk)
+            with (
+                mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL") as client,
+                mock.patch.object(egress, "resolve", answers(resolve)),
+                mock.patch("invoices.tasks._GatherHeartbeat"),
+                mock.patch("notifications.events.emit") as alert,
+            ):
+                fake_mailbox(client, a_mail(sender="grossiste@autre.invalid"))
+                if login_error is not None:
+                    client.return_value.login.side_effect = login_error
+                gather_invoices_task(job.pk, None, None, {self.mailbox_code}, False, unattended=True)
+            job.refresh_from_db()
+        return job, client, alert
+
+    @override_settings(**SERVER_ENV)
+    def test_another_bar_s_rule_waits_for_its_own_mailbox_never_the_server_s(self):
+        self.beta_s_rule()
+        thread = self.tick(self.bar_b)
+        thread.assert_not_called()
+        with bound_tenant(self.bar_b):
+            self.rule.refresh_from_db()
+            self.assertEqual(self.rule.last_result, auto_gather.MAILBOX_TO_FILL)
+            self.assertFalse(ScrapeJob.objects.exists())
+        # Its page says where the mailbox is filled in - never a variable,
+        # nor the .env - and that Metro and the portals are not its own.
+        self.client.force_login(self.user_b)
+        page = self.client.get(reverse("invoices:auto_gathers")).content.decode()
+        self.assertIn(integrations.MAILBOX_TO_FILL, page)
+        self.assertIn(escape(integrations.METRO), page)
+        self.assertIn(escape(integrations.PORTALS), page)
+        for server_word in ("INVOICE_EMAIL", ".env", "manage.py", SERVER_ENV["INVOICE_EMAIL_ADDRESS"]):
+            self.assertNotIn(server_word, page)
+        # The owner's espace: his .env stands, as on GitHub's main.
+        self.client.force_login(self.user_a)
+        page = self.client.get(reverse("invoices:auto_gathers")).content.decode()
+        self.assertNotIn(integrations.MAILBOX_TO_FILL, page)
+        self.assertNotIn(escape(integrations.PORTALS), page)
+
+    @override_settings(**SERVER_ENV)
+    def test_another_bar_s_rule_starts_its_mailbox_alone_in_a_thread_bound_to_it(self):
+        self.beta_s_rule()
+        self.type_beta_s_mailbox()
+        thread = self.tick(self.bar_b)
+        thread.assert_called_once()
+        target = thread.call_args.kwargs["target"]
+        self.assertIs(target.__wrapped__, gather_invoices_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        # Metro and the portal the rule names are dropped: never automatic,
+        # and never another bar's.
+        self.assertEqual(thread.call_args.kwargs["args"][3], {self.mailbox_code})
+        self.assertEqual(thread.call_args.kwargs["kwargs"], {"unattended": True})
+        with bound_tenant(self.bar_a):
+            self.assertFalse(ScrapeJob.objects.exists())
+
+    @override_settings(**SERVER_ENV)
+    def test_another_bar_s_automatic_run_signs_in_with_its_own_account(self):
+        self.beta_s_rule()
+        self.type_beta_s_mailbox()
+        job, client, _alert = self.run_beta_s_gather()
+        self.assertEqual(job.status, ScrapeJob.Status.SUCCESS, job.log)
+        self.assertEqual(client.call_args.args[0], "imap.beta.invalid")
+        client.return_value.login.assert_called_once_with("beta@exemple.invalid", "secret-beta")
+        self.assertEqual(list(job.progress), [self.mailbox_code])
+        self.assertNotIn(SERVER_ENV["INVOICE_EMAIL_ADDRESS"], job.log)
+
+    def test_another_bar_s_automatic_run_guards_its_patterns_and_its_server(self):
+        # A pattern the guard refuses, saved before it knew (an archive).
+        self.beta_s_rule(sender_pattern="x{500}")
+        self.type_beta_s_mailbox()
+        job, client, _alert = self.run_beta_s_gather()
+        client.assert_not_called()
+        self.assertEqual(
+            job.progress[self.mailbox_code]["error"], "Motif d'expéditeur : répétition trop grande : 100 fois au plus."
+        )
+        # Its server leading to the local network is never connected.
+        with bound_tenant(self.bar_b):
+            EmailInvoiceSource.objects.update(sender_pattern="traiteur")
+        job, client, _alert = self.run_beta_s_gather(resolve="192.168.1.20")
+        client.assert_not_called()
+        error = job.progress[self.mailbox_code]["error"]
+        self.assertTrue(error.startswith("Boîte mail : "), error)
+        self.assertIn("imap.beta.invalid", error)
+
+    def test_another_bar_s_automatic_run_logs_and_alerts_no_library_s_words(self):
+        self.beta_s_rule()
+        self.type_beta_s_mailbox()
+        refused = imaplib.IMAP4.error(r"b'[AUTHENTICATIONFAILED] Invalid credentials C:\MarginMate\data\x'")
+        job, _client, alert = self.run_beta_s_gather(login_error=refused)
+        self.assertEqual(job.progress[self.mailbox_code]["error"], f"Boîte mail : {generic_email.LOGIN_REFUSED}")
+        self.assertNotIn("AUTHENTICATIONFAILED", job.log)
+        self.assertNotIn("Traceback", job.log)
+        self.assertNotIn("MarginMate", job.log)
+        # The run's alert names the source in error, nothing of the library.
+        alert.assert_called_once()
+        self.assertEqual(alert.call_args.args[1], "failed")
+        self.assertEqual(alert.call_args.kwargs["body"], "Échec : Traiteur Beta - Factures.")

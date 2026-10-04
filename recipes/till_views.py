@@ -367,8 +367,12 @@ def upload_sales_file(request):
     weight, its kind, its choice (L'Addition's export or a format, which
     must pass the check) and its day - then staged under the espace's
     imports/ and read by a job, like the fetch: the same status card, cancel
-    and « Données » busy check. Nothing is kept here: the job moves a file
-    read whole into place, and deletes a refused one."""
+    and « Données » busy check - and the same lock: one sales import at a
+    time, whoever starts it (importing.claim_sales_import, the job's
+    `source` « fichier »), so an automatic import's slot never starts beside
+    it. Nothing is kept here: the job moves a file read whole into place,
+    and deletes a refused one."""
+    from .importing import active_import, claim_sales_import
     from .menu import sales_list_url
     from .models import SalesImportJob
     from .pos.connectors import resolve
@@ -405,17 +409,20 @@ def upload_sales_file(request):
     if day is None and not reads_a_day:
         messages.error(request, DAY_NEEDED)
         return back
-    # A dead run is reaped first, or one killed thread locks the page out.
-    SalesImportJob.reap_stale()
-    if SalesImportJob.objects.filter(
-        status__in=[SalesImportJob.Status.PENDING, SalesImportJob.Status.RUNNING]
-    ).exists():
+    # A dead run is reaped first, or one killed thread locks the page out;
+    # asked before the file is written, and again with the job's creation.
+    if active_import() is not None:
         messages.error(request, ALREADY_RUNNING)
         return back
     staged = staged_uploads_dir() / f"{uuid.uuid4().hex}.part"
     with open(staged, "wb") as handle:
         handle.writelines(upload.chunks())
-    job = SalesImportJob.objects.create()
+    job = claim_sales_import(trigger=SalesImportJob.Trigger.MANUAL, source=SalesImportJob.FILE)
+    if not isinstance(job, SalesImportJob):
+        # An import started meanwhile - an automatic one's slot, say.
+        staged.unlink(missing_ok=True)
+        messages.error(request, ALREADY_RUNNING)
+        return back
     # bound(): the thread works for this request's tenant - its job row, its
     # sales, its folders - and closes its connections when it ends.
     threading.Thread(

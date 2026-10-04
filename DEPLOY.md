@@ -1059,6 +1059,12 @@ Un bar invité dans son propre espace n'a plus seulement l'import à la main :
   OFX et CAMT.053, et « Partir d'un modèle » sur « Format du relevé ».
 - **Ses fournisseurs** : un nouvel espace ne reçoit plus UBA, Sabbh Oriental ni Wing Seng ; votre
   espace les garde.
+- **Ses récupérations et imports automatiques** (section 14) : avec ses propres comptes, une fois
+  renseignés sur sa page Identifiants. Tant que sa boîte mail n'y est pas, sa récupération
+  automatique dit « sautée : boîte mail à renseigner sur la page Identifiants » ; tant que son
+  compte L'Addition n'y est pas, sa page « Import automatique des ventes » le demande et rien ne
+  part. Metro et les espaces clients ne sont jamais les siens. Un import de fichier de caisse et un
+  import automatique des ventes ne tournent jamais en même temps.
 
 **L'analyse IA est retirée** : elle n'avait jamais servi. L'import d'un PDF ne propose plus
 « Autre (analyse IA) », et la page Identifiants n'a plus de carte « Analyse IA (Anthropic) ». Le

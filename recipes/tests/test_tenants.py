@@ -17,9 +17,10 @@ browser are patched, and the exports are hand-written workbooks
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import threading
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -29,12 +30,16 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils.html import escape
 
 from accounts import paths
 from accounts.tenancy import bound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
+from common import SERVER_ERROR
+from recipes import auto_sales
+from recipes.integration import TILL_LOGIN_MISSING
 from recipes.management.commands.laddition_open import OWNER_ONLY
-from recipes.models import PosProduct, PosProductDailyQuantity, SalesImportJob
+from recipes.models import AutoSalesImport, PosProduct, PosProductDailyQuantity, SalesImportJob
 from recipes.pos import laddition_session as session_module
 from recipes.tasks import import_laddition_sales_task
 from recipes.tests.test_pos_revenue import HEADER, line, write_workbook
@@ -448,3 +453,163 @@ class ImportCommandBusyTests(TestCase):
         ):
             self.run_import("--from", "2026-06-01", "--to", "2026-06-30")
             self.assertEqual(Path(seen["folder"]), paths.downloads_dir())
+
+
+#: What the platform owner's .env holds on the server, in the settings of the
+#: process every espace runs in. Invented.
+SERVER_TILL = {"LADDITION_EMAIL": "caisse@example.invalid", "LADDITION_PASSWORD": "mot-de-passe-essai"}
+
+
+class AutomaticSalesImportGateTests(TwoTenantsTestCase):
+    """GitHub's main's automatic sales imports (recipes/auto_sales.py) in
+    every espace since the connectors opened to every bar: Bar Alpha is the
+    platform owner's espace, Bar Beta another bar. Beta's rules run only once
+    ITS L'Addition account is on its « Identifiants » - the .env values in
+    the settings are the owner's alone -, sign in with it in a headless
+    browser, and leave a log and an alert another bar may read: the till's
+    own refusal or one fixed sentence, no traceback, no server path."""
+
+    owner_a = True
+    #: Wednesday 18/11/2026, 07:00 in Paris (06:00 UTC).
+    SEVEN = datetime(2026, 11, 18, 6, 0, tzinfo=UTC)
+
+    def setUp(self):
+        super().setUp()
+        # No deploy mark of this checkout's: a slot would say « mise à jour ».
+        self.enterContext(override_settings(BASE_DIR=Path(tempfile.mkdtemp())))
+        # The whole line goes to the server's log (common.job_line, tasks.fail).
+        for name in ("marginmate.jobs", "recipes.tasks"):
+            logger = logging.getLogger(name)
+            self.enterContext(mock.patch.object(logger, "propagate", False))
+            handler = logging.NullHandler()
+            logger.addHandler(handler)
+            self.addCleanup(logger.removeHandler, handler)
+
+    def rule_in(self, tenant) -> AutoSalesImport:
+        with bound_tenant(tenant):
+            return AutoSalesImport.objects.create(
+                name="Ventes de la veille",
+                source="laddition",
+                weekdays="0,1,2,3,4,5,6",
+                times="07:00",
+                created_at=self.SEVEN - timedelta(days=7),
+            )
+
+    def type_beta_s_account(self):
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+
+    def tick(self, tenant):
+        with (
+            bound_tenant(tenant),
+            mock.patch("notifications.webpush.sending_enabled", return_value=True),
+            mock.patch("recipes.importing.threading.Thread") as thread,
+        ):
+            auto_sales.run_due(self.SEVEN)
+        return thread
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_for_its_own_account_never_the_server_s(self):
+        rule = self.rule_in(self.bar_b)
+        thread = self.tick(self.bar_b)
+        thread.assert_not_called()
+        with bound_tenant(self.bar_b):
+            rule.refresh_from_db()
+            self.assertEqual(rule.last_result, auto_sales.SOURCE_UNAVAILABLE)
+            self.assertFalse(SalesImportJob.objects.exists())
+        # Its page says where the account is typed - never a variable, nor
+        # the .env -, and draws no form.
+        self.client.force_login(self.user_b)
+        page = self.client.get(reverse("recipes:auto_sales")).content.decode()
+        self.assertIn(escape(TILL_LOGIN_MISSING), page)
+        for server_word in ("LADDITION_", ".env", "manage.py", SERVER_TILL["LADDITION_EMAIL"]):
+            self.assertNotIn(server_word, page)
+        self.assertNotIn('name="nouveau-name"', page)
+        # The owner's espace: his .env stands, as on GitHub's main.
+        self.rule_in(self.bar_a)
+        thread = self.tick(self.bar_a)
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs["target"].tenant.pk, self.bar_a.pk)
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_imports_in_a_thread_bound_to_it_once_its_account_is_typed(self):
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        thread = self.tick(self.bar_b)
+        thread.assert_called_once()
+        target = thread.call_args.kwargs["target"]
+        self.assertIs(target.__wrapped__, import_laddition_sales_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.get()
+            self.assertEqual((job.trigger, job.source), (SalesImportJob.Trigger.AUTOMATIC, "laddition"))
+        with bound_tenant(self.bar_a):
+            self.assertFalse(SalesImportJob.objects.exists())
+
+    @override_settings(**SERVER_TILL, SCRAPER_HEADLESS=False)
+    def test_another_bar_s_automatic_import_signs_in_headless_with_its_own_account_and_fails_cleanly(self):
+        rule = self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        typed, options = [], []
+
+        def chrome_started(*args, **kwargs):
+            options.append(kwargs["options"].arguments)
+            driver = mock.Mock()
+            driver.find_element.return_value.send_keys.side_effect = typed.append
+            return driver
+
+        def report(driver, path, log=print):
+            with mock.patch.object(session_module, "navigate"), mock.patch.object(session_module, "WebDriverWait"):
+                session_module.log_in(driver, log=log)
+            # The till's page then breaks, as a library says it: English, a
+            # path of the server's.
+            raise RuntimeError(r"chrome not reachable C:\MarginMate\app\chromedriver.exe")
+
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create(
+                trigger=SalesImportJob.Trigger.AUTOMATIC,
+                auto_rule_id=rule.pk,
+                range_start=date(2026, 11, 14),
+                range_end=date(2026, 11, 17),
+            )
+            with (
+                mock.patch.object(session_module.webdriver, "Chrome", side_effect=chrome_started),
+                mock.patch.object(session_module, "ChromeDriverManager"),
+                mock.patch.object(session_module, "Service"),
+                mock.patch.object(session_module, "open_report", side_effect=report),
+                mock.patch("notifications.events.emit") as alert,
+            ):
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            job.refresh_from_db()
+        # Its own account, never the .env's; a window never opens on the
+        # server's desktop (invoices/scrapers/chrome.py).
+        self.assertEqual(typed, ["caisse-beta@example.invalid", "secret-beta"])
+        self.assertIn("--headless=new", options[0])
+        # Its log: the fixed sentence, no traceback, no path, no English.
+        self.assertEqual(job.status, SalesImportJob.Status.FAILED)
+        self.assertIn(f"Échec : {SERVER_ERROR}", job.log)
+        for word in ("Traceback", "MarginMate", "chrome not reachable"):
+            self.assertNotIn(word, job.log)
+        # Its alert says the same sentence (auto_sales._notify), never the
+        # library's words.
+        alert.assert_called_once()
+        self.assertEqual(alert.call_args.args[1], "failed")
+        self.assertEqual(alert.call_args.kwargs["body"], f"Échec : {SERVER_ERROR}")
+
+    def test_the_owner_s_automatic_import_still_says_its_exception(self):
+        """GitHub's main's alert, in the platform owner's espace: the
+        exception's own first line, any address masked."""
+        rule = self.rule_in(self.bar_a)
+        with bound_tenant(self.bar_a):
+            job = SalesImportJob.objects.create(trigger=SalesImportJob.Trigger.AUTOMATIC, auto_rule_id=rule.pk)
+            with (
+                mock.patch(
+                    "recipes.tasks.download_sales_lines",
+                    side_effect=RuntimeError("export refusé par https://app.laddition.invalid/x"),
+                ),
+                mock.patch("notifications.events.emit") as alert,
+            ):
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+        self.assertEqual(alert.call_args.kwargs["body"], "Échec : export refusé par (adresse masquée)")

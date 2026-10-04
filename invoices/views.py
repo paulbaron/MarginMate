@@ -19,7 +19,7 @@ from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
 import common
-from accounts import sudo
+from accounts import sudo, vault
 from accounts.access import access_of, refused
 from accounts.tenancy import bound, integrations_allowed, is_owner, server_accounts_allowed
 from accounts.views import file_response, open_stored
@@ -2007,7 +2007,14 @@ def _auto_gather_page(request, bound=None, new_form=None, status=200):
     if context["refused"]:
         return render(request, "invoices/auto_gathers.html", context, status=status)
 
-    offered, _ = gather_sources(for_auto=True)
+    # Another bar's rules search its own mailbox, once on its « Identifiants »
+    # (auto_gather._start), and Metro and the portals are the owner's: said
+    # here, never a server variable - its store read once for the page.
+    server = server_accounts_allowed()
+    state = None if server else vault.load()
+    context["gather_to_fill"] = "" if integrations.mailbox_offered(state) else integrations.MAILBOX_TO_FILL
+    context["not_here"] = [] if server else [integrations.METRO, integrations.PORTALS]
+    offered, _ = gather_sources(for_auto=True, state=state)
     labels = {source["code"]: source["label"] for source in offered}
     now = timezone.now()
     rules = list(AutoGather.objects.order_by("pk"))

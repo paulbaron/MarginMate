@@ -4,8 +4,11 @@ own address with its card's fragment (the automatic gathers' page, the
 precedent).
 
 The espace owner's alone, and only where a sales source may be used
-(sales_sources: L'Addition's `available()`, the owner's espace) - anywhere
-else the page says why and draws no form, and every POST gets the 403 page.
+(sales_sources: L'Addition's `available()` - any bound espace whose own
+account is ready, its « Identifiants » or, in the platform owner's alone,
+the .env) - anywhere else the page says why (« à renseigner sur la page
+Identifiants », never a server variable) and draws no form, and every POST
+gets the 403 page.
 A member reads the rules without a form. A GET on a POST-only route goes
 back to the page and writes nothing; saving never runs an import at once
 (creating, re-activating or a new schedule sets `last_slot_at = now`

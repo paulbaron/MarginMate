@@ -11,9 +11,9 @@
 
 {% if refused %}
     {% comment %}
-    The mailbox is one of the server's own accounts (invoices/integrations.py):
-    an espace that may not use it gets the sentence and no form - the POST
-    routes answer 403 all the same.
+    Unbound (invoices/integrations.py): the sentence and no form - the POST
+    routes answer 403 all the same. Another bar whose mailbox is not on its
+    « Identifiants » gets the page with `gather_to_fill`.
     {% endcomment %}
     <div class="message">{{ refused }}</div>
 {% else %}
@@ -21,7 +21,9 @@
         <p class="message message-warning">Serveur de développement : aucune récupération ne part d'ici.</p>
     {% endif %}
     {% if owner_only %}<p class="muted">{{ owner_only }}</p>{% endif %}
-    <p class="muted">Metro et les espaces clients : à la main seulement. Chaque source reprend là où sa dernière récupération réussie s'est arrêtée, {{ lookback_days }} jours au plus.</p>
+    {% if gather_to_fill %}<p class="message message-warning">{{ gather_to_fill }}</p>{% endif %}
+    {% for sentence in not_here %}<p class="muted">{{ sentence }}</p>{% endfor %}
+    <p class="muted">{% if not not_here %}Metro et les espaces clients : à la main seulement. {% endif %}Chaque source reprend là où sa dernière récupération réussie s'est arrêtée, {{ lookback_days }} jours au plus.</p>
     <p class="muted">Les ventes de la caisse ont leur propre import automatique : <a href="{% url 'recipes:auto_sales' %}">Import automatique des ventes</a>.</p>
 
     {% for card in cards %}

@@ -838,6 +838,9 @@ class SalesImportJob(JobLogMixin):
         MANUAL = "manual", "à la main"
         AUTOMATIC = "automatic", "automatique"
 
+    #: `source` of a till's file uploaded on « Ventes » (till_views.upload_sales_file).
+    FILE = "fichier"
+
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     range_start = models.DateField(null=True, blank=True)
     range_end = models.DateField(null=True, blank=True)
@@ -845,6 +848,14 @@ class SalesImportJob(JobLogMixin):
     #: The AutoSalesImport an automatic import was started for - a plain id:
     #: deleting the rule keeps its runs.
     auto_rule_id = models.PositiveIntegerField(null=True, blank=True)
+    #: What the job reads: a sales source's fetch - its key in
+    #: recipes/sales_sources.py, « laddition » for every job before the
+    #: till's file import - or a till's file uploaded on « Ventes »
+    #: (`FILE`). Only a source's own fetches tell how far its sales are
+    #: imported (recipes/auto_sales.py): a file - any till's, part of a day -
+    #: never moves L'Addition's coverage, nor makes a rule waiting behind it
+    #: skip its slot.
+    source = models.CharField(max_length=20, default="laddition")
     # A thread can't be killed safely, so cancelling is cooperative: this is
     # checked between date windows and the run stops itself.
     cancel_requested = models.BooleanField(default=False)

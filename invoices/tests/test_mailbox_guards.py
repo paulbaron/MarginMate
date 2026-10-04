@@ -501,6 +501,13 @@ class HostedMailboxTests(TwoTenantsTestCase):
                 (ValueError("C:\\Serveur\\x.py"), "Erreur inattendue sur le serveur"),
                 (egress.EgressRefused("Le serveur IMAP « x » …"), "Le serveur IMAP « x » …"),
                 (generic_email.MessageTooBig(generic_email.SEARCH_TOO_BIG), generic_email.SEARCH_TOO_BIG),
+                # GitHub's main's: a search the server refused or answered in
+                # part is the app's own sentence, never « erreur inattendue ».
+                (
+                    generic_email.SearchRefused(generic_email.SEARCH_REFUSED.format(status="NO")),
+                    "Recherche refusée par le serveur mail (NO).",
+                ),
+                (generic_email.IncompleteSearch(2, []), "Recherche incomplète : 2 e-mail(s) non lu(s)"),
             ):
                 with self.subTest(exc=exc):
                     self.assertTrue(generic_email.failure_said(exc).startswith(sentence))

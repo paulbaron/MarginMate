@@ -188,6 +188,12 @@ LOG_EVERY = 500  # scanned messages between liveness log lines, so a big date ra
 SEARCH_REFUSED = "Recherche refusée par le serveur mail ({status})."
 
 
+class SearchRefused(RuntimeError):
+    """The date range's SEARCH answered with anything but OK (SEARCH_REFUSED,
+    the status IMAP's own word): the app's sentence, which every espace's
+    line says as it is (`failure_said`)."""
+
+
 class IncompleteSearch(RuntimeError):
     """The server left `unread` mails of the range unread (a FETCH answered
     NO, or timed out): the search read the rest - `matches` - and is not a
@@ -371,8 +377,9 @@ def failure_said(exc: BaseException, *, log=None) -> str:
     exception's own words. In any other the library's words - English, the
     server's host, a certificate's details - never reach the page (security
     audit LB-3): the app's own refusals as they are (a pattern refused, a
-    server that is not public, a message too big, a mailbox missing), a
-    library's error as a fixed sentence by kind, anything else
+    server that is not public, a message too big, a mailbox missing, a
+    search the server refused or left incomplete), a library's error as a
+    fixed sentence by kind, anything else
     `common.SERVER_ERROR`, its detail to `log` (a logger)."""
     import socket
 
@@ -385,7 +392,7 @@ def failure_said(exc: BaseException, *, log=None) -> str:
 
     if current_tenant() is None or server_accounts_allowed():
         return str(exc).strip() or exc.__class__.__name__
-    if isinstance(exc, (PatternError, EgressRefused, MessageTooBig)):
+    if isinstance(exc, (PatternError, EgressRefused, MessageTooBig, SearchRefused, IncompleteSearch)):
         return str(exc).strip()
     if type(exc) is RuntimeError and str(exc) in (*OWN_SENTENCES, integrations.MAILBOX):
         return str(exc)
@@ -541,7 +548,7 @@ def find_matching_emails(
         if status != "OK":
             # A refusal (« NO [UNAVAILABLE] ») is no empty range: taken for
             # one, the gather recorded the range searched.
-            raise RuntimeError(SEARCH_REFUSED.format(status=status))
+            raise SearchRefused(SEARCH_REFUSED.format(status=status))
         if not messages or not messages[0]:
             log("Aucun e-mail sur cette période.")
             return matches
