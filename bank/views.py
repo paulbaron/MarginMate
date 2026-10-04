@@ -61,7 +61,7 @@ from common import (
 from inventory.templatetags.assets import money
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
-from recipes.integration import TILL_TO_CONFIGURE, till_allowed
+from recipes.integration import TILL_REIMPORT, till_commands_shown
 from returnables.patterns import PatternError
 
 from . import income, invoice_files, matching, recognition, reconcile, spending, statements, treasury
@@ -615,8 +615,8 @@ def income_home(request):
             # What the till could not read is said everywhere; the commands
             # that fill it only where they can be used (recipes/integration.py).
             "balance_reason": _balance_reason(report.balance.reason),
-            "till_allowed": till_allowed(),
-            "till_to_configure": TILL_TO_CONFIGURE,
+            "till_commands": till_commands_shown(),
+            "till_reimport": TILL_REIMPORT,
             "chart_svg": _build_balance_svg(report.balance_points),
             "known_categories": income.known_categories(),
             "no_category": spending.NO_CATEGORY,
@@ -2185,11 +2185,11 @@ def _covered_url(report, window: DateRange) -> str:
 def _balance_reason(reason: str) -> str:
     """Why « Ventes carte pas encore versées » has no balance, as this tenant
     can act on it. NO_CARD_DAYS names the command that re-reads the till's
-    exports - a command on the server, reading the till the server imports:
-    the owner's (recipes/integration.py). Another tenant is told « à
-    configurer » rather than handed a command it cannot run."""
-    if reason == income.NO_CARD_DAYS and not till_allowed():
-        return income.NO_CARD_DAYS_TO_CONFIGURE
+    exports - a command on the server, named in the platform owner's espace
+    only (recipes/integration.py). Another espace is told to fetch or import
+    its sales again rather than handed a command it cannot run."""
+    if reason == income.NO_CARD_DAYS and not till_commands_shown():
+        return income.NO_CARD_DAYS_HOSTED
     return reason
 
 

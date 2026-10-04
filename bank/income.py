@@ -88,7 +88,7 @@ from django.db import transaction
 from django.db.models import Max, Min
 
 from common import DateRange, search_key
-from recipes.integration import TILL_TO_CONFIGURE
+from recipes.integration import TILL_REIMPORT
 from recipes.models import PosDailyPayment, PosProductDailyQuantity
 
 from . import matching, recognition
@@ -591,10 +591,10 @@ NO_CARD_DAYS = (
     "aucun paiement par carte n'est lu en caisse. Les moyens de paiement se relisent depuis les exports "
     "déjà téléchargés : manage.py laddition_backfill_payments."
 )
-#: NO_CARD_DAYS where that command is not this tenant's to run: it reads the
-#: exports of the till the server imports, the owner's (recipes/integration.py).
-#: Chosen by the view (`views._balance_reason`), which knows the tenant.
-NO_CARD_DAYS_TO_CONFIGURE = f"aucun paiement par carte n'est lu en caisse, et {TILL_TO_CONFIGURE}."
+#: NO_CARD_DAYS where that command is not this espace's to run: it runs on the
+#: server, named in the platform owner's espace only (recipes/integration.py).
+#: Chosen by the view (`views._balance_reason`), which knows the espace.
+NO_CARD_DAYS_HOSTED = f"aucun paiement par carte n'est lu en caisse : {TILL_REIMPORT}."
 NO_PAYOUT = "aucun versement carte sur le relevé après le premier jour de caisse lu."
 
 

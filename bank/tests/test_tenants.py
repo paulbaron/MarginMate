@@ -1,12 +1,12 @@
 """« Entrées d'argent » in multi mode: what the till could not read is said
 in every tenant, and the commands that re-read its exports only in the
-owner's.
+platform owner's.
 
 Three places name one of those commands: the day with sales and no means of
 payment read, the day with no price read, and « Pas de solde » when no card
-payment is read at all. Another bar can neither run a server command nor has
-any export to re-read (its till is « à configurer »), so each says that
-instead. Data invented; two real tenants in temporary files
+payment is read at all. Another bar runs no command on the server, so each
+tells it to fetch or import its sales again (recipes.integration.
+TILL_REIMPORT) instead. Data invented; two real tenants in temporary files
 (accounts/tests/support.py).
 """
 
@@ -14,12 +14,14 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from html import unescape
 
 from django.urls import reverse
 
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from bank.models import BankTransaction
+from recipes.integration import TILL_REIMPORT
 from recipes.models import PosProduct, PosProductDailyQuantity
 
 JUNE = {"du": "2026-06-01", "au": "2026-06-30"}
@@ -48,7 +50,7 @@ class TillRemediesTests(TwoTenantsTestCase):
 
     def page(self, user) -> str:
         self.client.force_login(user)
-        return self.client.get(reverse("bank:income_home"), JUNE).content.decode()
+        return unescape(self.client.get(reverse("bank:income_home"), JUNE).content.decode())
 
     def test_another_bar_is_not_handed_a_server_command(self):
         self.unread_day(self.bar_b)
@@ -58,8 +60,9 @@ class TillRemediesTests(TwoTenantsTestCase):
         self.assertIn("Pas de solde", page)
         self.assertNotIn("laddition_backfill", page)
         self.assertNotIn("manage.py", page)
+        self.assertNotIn("à configurer", page)
         # Said once per warning, and in the balance's reason.
-        self.assertEqual(page.count("à configurer — disponible prochainement dans les réglages de votre espace"), 3)
+        self.assertEqual(page.count(TILL_REIMPORT), 3)
 
     def test_the_owner_s_tenant_is_given_the_commands(self):
         self.unread_day(self.bar_a)
@@ -67,3 +70,4 @@ class TillRemediesTests(TwoTenantsTestCase):
         self.assertIn("manage.py laddition_backfill_payments", page)
         self.assertIn("manage.py laddition_backfill_revenue", page)
         self.assertNotIn("à configurer", page)
+        self.assertNotIn(TILL_REIMPORT, page)

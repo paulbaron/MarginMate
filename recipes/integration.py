@@ -31,7 +31,7 @@ from __future__ import annotations
 from django.core.management.base import CommandError
 from django.utils.text import capfirst
 
-from accounts.tenancy import NoTenantBound, integrations_allowed, require_tenant
+from accounts.tenancy import NoTenantBound, integrations_allowed, require_tenant, server_accounts_allowed
 
 #: The till import where it is not the tenant's to use - as a clause, so a
 #: page can put it after « Pour le combler : ». `refusal()` is the sentence.
@@ -39,12 +39,27 @@ TILL_TO_CONFIGURE = (
     "la récupération des ventes de la caisse (L'Addition) est à configurer — disponible prochainement "
     "dans les réglages de votre espace"
 )
+#: What fills the till's days a page finds without their money or their
+#: means of payment, in an espace that runs no command on the server - as a
+#: clause, after « Pour le combler : ». The owner's pages name the commands
+#: instead (`till_commands_shown`).
+TILL_REIMPORT = "récupérez ou importez de nouveau les ventes de la caisse sur ces jours (Recettes & ventes › Ventes)"
 
 
 def till_allowed() -> bool:
     """Whether the server's L'Addition account may be used for the tenant
     this thread works for."""
     return integrations_allowed()
+
+
+def till_commands_shown() -> bool:
+    """Whether a page may hand this espace the till's server commands
+    (`manage.py laddition_backfill_revenue`, `laddition_backfill_payments`):
+    they run on the server and read its folders, so in the platform owner's
+    espace only (`accounts.tenancy.server_accounts_allowed`). Every other
+    espace is told to fetch or import its sales again (`TILL_REIMPORT`),
+    never a command it cannot run nor a file name of the server."""
+    return server_accounts_allowed()
 
 
 def refusal() -> str:

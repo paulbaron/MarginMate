@@ -30,10 +30,14 @@ absente du fichier .env » would tell which variables the server holds.
 """
 
 TO_CONFIGURE = "à configurer — disponible prochainement dans les réglages de votre espace"
+#: TO_CONFIGURE after a plural subject (« Les espaces clients … »).
+TO_CONFIGURE_PLURAL = "à configurer — disponibles prochainement dans les réglages de votre espace"
 
 
-def refused(feature: str) -> str:
-    return f"{feature} : {TO_CONFIGURE}."
+def refused(feature: str, *, plural: bool = False) -> str:
+    """« <feature> : à configurer — disponible(s) prochainement … », the
+    adjective agreeing with a plural `feature`."""
+    return f"{feature} : {TO_CONFIGURE_PLURAL if plural else TO_CONFIGURE}."
 
 
 #: « Récupérer depuis les sources », the whole of it.
@@ -44,9 +48,9 @@ GATHER = refused("Récupérer les factures depuis Metro, la boîte mail ou les e
 SLIPS = refused("Récupérer les bons de consignes depuis la boîte mail")
 METRO = refused("Metro")
 MAILBOX = refused("La boîte mail des factures")
-PORTALS = refused("Les espaces clients des fournisseurs")
+PORTALS = refused("Les espaces clients des fournisseurs", plural=True)
 #: The « Sources » tab and a source's form: both channels are the server's.
-SOURCES = refused("Les sources de factures (boîte mail, espaces clients)")
+SOURCES = refused("Les sources de factures (boîte mail, espaces clients)", plural=True)
 AI_READING = refused("L'analyse IA")
 #: The AI reading chosen where no key is typed (and, in the owner's tenant,
 #: none in the server's settings either).

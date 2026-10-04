@@ -56,7 +56,7 @@ from common import (
     safe_next,
 )
 from inventory.models import StockType
-from recipes.integration import TILL_TO_CONFIGURE, till_allowed
+from recipes.integration import TILL_REIMPORT, till_commands_shown
 from recipes.models import RecipeIngredient
 
 from .computation import NO_CATEGORY, Exclusion, Slice, known_left_out, margins_for
@@ -247,11 +247,11 @@ def margins_home(request):
             "clear_url": _page_url(DateRange(), showing_all=False, left_out=left_out),
             # This very page, for a form that answers back to it (`next`).
             "here_url": here_url,
-            # What fills the unread days is a command on the server, which
-            # reads the owner's till's exports: said only in that tenant,
-            # « à configurer » elsewhere (recipes/integration.py).
-            "till_allowed": till_allowed(),
-            "till_to_configure": TILL_TO_CONFIGURE,
+            # What fills the unread days is a command on the server, named
+            # in the platform owner's espace only; every other espace is told
+            # to fetch or import its sales again (recipes/integration.py).
+            "till_commands": till_commands_shown(),
+            "till_reimport": TILL_REIMPORT,
             # The panel's forms post there and come back here, on the panel.
             "count_articles_url": reverse("margins:count_articles"),
             "articles_next": f"{here_url}#{PANEL}",
