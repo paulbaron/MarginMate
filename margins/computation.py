@@ -67,7 +67,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import NamedTuple
 
-from django.db.models import Prefetch, Sum
+from django.db.models import Prefetch, Q, Sum
 
 from common import DateRange, is_id
 from inventory.models import MovementKind, StockMovement, StockType
@@ -1496,7 +1496,19 @@ def _bought_over(window: DateRange) -> dict[int, Money]:
     the bill.
     """
     found: dict[int, Money] = {}
-    values = StockMovement.objects.filter(kind=MovementKind.PURCHASE).values_list(*_MOVEMENT_COLUMNS)
+    purchases = StockMovement.objects.filter(kind=MovementKind.PURCHASE)
+    if window:
+        # Left in the database, what the day below can only put outside the
+        # window: a purchase invoiced outside it. One with no invoice date
+        # is still read, and dated by its own day. Change the two together.
+        field = "invoice_line__invoice__invoice_date"
+        dated = Q()
+        if window.start is not None:
+            dated &= Q(**{f"{field}__gte": window.start})
+        if window.end is not None:
+            dated &= Q(**{f"{field}__lte": window.end})
+        purchases = purchases.filter(dated | Q(**{f"{field}__isnull": True}))
+    values = purchases.values_list(*_MOVEMENT_COLUMNS)
     for (
         stock_type_id,
         quantity,

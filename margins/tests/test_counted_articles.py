@@ -29,7 +29,8 @@ from django.test.utils import CaptureQueriesContext
 
 from common import DateRange
 from inventory.models import MovementKind, StockType
-from margins.computation import NO_CATEGORY, margins_for
+from invoices.models import Invoice
+from margins.computation import NO_CATEGORY, _bought_over, margins_for
 from recipes.models import PosProduct, PosProductDailyQuantity
 from tests.factories import (
     make_ingredient,
@@ -298,3 +299,64 @@ class QueryCountTests(CountableFixture, TestCase):
             margins_for(MARCH)
 
         self.assertEqual(len(large), len(small), "une requête par article s'est glissée dans le panneau")
+
+
+class OnlyTheWindowIsReadTests(TestCase):
+    """`_bought_over` reads, of the ledger, only what the window can hold: a
+    purchase invoiced outside it stays in the database - years of history
+    were read and dropped in Python on every draw of the page - while one
+    with no invoice date to go by (typed by hand, or on an undated invoice)
+    is still read and dated by its own day."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.inside = make_stock_type(name="Facturé en mars")
+        bought(cls.inside, date(2026, 3, 10), "10.00")
+        cls.before = make_stock_type(name="Facturé en février")
+        bought(cls.before, date(2026, 2, 10), "20.00")
+        cls.after = make_stock_type(name="Facturé en avril")
+        bought(cls.after, date(2026, 4, 10), "40.00")
+        cls.undated = make_stock_type(name="Facture sans date")
+        movement = bought(cls.undated, date(2026, 3, 15), "15.00")
+        Invoice.objects.filter(pk=movement.invoice_line.invoice_id).update(invoice_date=None)
+        # Typed by hand today (October): only its own day puts it in March.
+        cls.by_hand = make_stock_type(name="Saisi à la main en mars")
+        make_movement(stock_type=cls.by_hand, quantity="1", unit_cost_ht="5", occurred_on=date(2026, 3, 20))
+        cls.by_hand_later = make_stock_type(name="Saisi à la main en mai")
+        make_movement(stock_type=cls.by_hand_later, quantity="1", unit_cost_ht="7", occurred_on=date(2026, 5, 2))
+
+    def read(self, window):
+        """(what was bought of each article, how many purchases the query
+        brought back)."""
+        with CaptureQueriesContext(connection) as queries:
+            found = _bought_over(window)
+        self.assertEqual(len(queries), 1)
+        with connection.cursor() as cursor:
+            cursor.execute(queries[0]["sql"])
+            rows = len(cursor.fetchall())
+        return {pk: money.ht for pk, money in found.items()}, rows
+
+    def test_a_closed_window(self):
+        found, rows = self.read(MARCH)
+        self.assertEqual(
+            found,
+            {self.inside.pk: Decimal("10.00"), self.undated.pk: Decimal("15.00"), self.by_hand.pk: Decimal("5")},
+        )
+        self.assertEqual(rows, 4, "les achats facturés hors de la période ont été lus")
+
+    def test_a_window_open_at_the_end(self):
+        found, rows = self.read(DateRange(date(2026, 3, 1), None))
+        self.assertEqual(
+            set(found), {self.inside.pk, self.after.pk, self.undated.pk, self.by_hand.pk, self.by_hand_later.pk}
+        )
+        self.assertEqual(rows, 5)
+
+    def test_a_window_open_at_the_start(self):
+        found, rows = self.read(DateRange(None, date(2026, 3, 31)))
+        self.assertEqual(set(found), {self.before.pk, self.inside.pk, self.undated.pk, self.by_hand.pk})
+        self.assertEqual(rows, 5)
+
+    def test_all_of_history_reads_every_purchase(self):
+        found, rows = self.read(DateRange())
+        self.assertEqual(len(found), 6)
+        self.assertEqual(rows, 6)
