@@ -7159,10 +7159,12 @@ reference; it never imports the views); the views are thin, at the end of
 
 **The rules** (`shopping_lists.py`):
 - The stores offered are the forecast's (`offered_stores()`: no supplier
-  of charges, not the AI pseudo-supplier, a positive PURCHASE movement -
-  one query); `store_of` also takes a store with a list in progress, so a
-  list stays reachable once its store's documents are gone. Ids through
-  `is_id`.
+  of charges, not the removed AI reading's - told by its code,
+  `receipts.RETIRED_CODES`, as « Prévoir les courses » tells it: invoices/0038
+  keeps it, its reader key emptied, where something names it -, a positive
+  PURCHASE movement - one query); `store_of` also takes a store with a list
+  in progress, so a list stays reachable once its store's documents are
+  gone. Ids through `is_id`.
 - **An open list with no item is no list in progress.** Emptied by
   « Retirer », it keeps no store reachable (`store_of` needs an item), it
   is not under « En cours » (the index filters `total > 0`), and its next
