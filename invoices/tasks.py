@@ -11,7 +11,7 @@ from django.db import DatabaseError
 from django.utils import timezone
 
 from accounts import paths
-from accounts.tenancy import bound, integrations_allowed
+from accounts.tenancy import bound, integrations_allowed, server_accounts_allowed
 
 from . import integrations
 from .importing import DuplicateInvoiceError, RoutedToReturnablesError, parse_and_import
@@ -215,10 +215,11 @@ def gather_invoices_task(
     batches (scrapers/generic_email.py), before each Metro window and
     download, before each portal download.
 
-    Every source it searches is one of the server's own accounts: in a
-    tenant that may not use them (integrations.py) nothing is searched, and
-    the job says why - whatever its rows say, since a mailbox source or
-    Metro can be switched back on by an import.
+    Unbound, nothing is searched and the job says why (integrations.py). In
+    an espace that is not the platform owner's, Metro and the portals are
+    not searched - whatever its rows say, since an import can switch them
+    back on -, and one asked for all the same is said on its own line; its
+    mailbox signs in with its own « Identifiants ».
 
     A gather of returnables slips alone (the Consignes page's: every code a
     « bons- » one) is told apart from the first moment (_name_slip_sources)
@@ -246,8 +247,12 @@ def gather_invoices_task(
         if slips_run:
             _name_slip_sources(job, slip_formats, source_codes)
         _raise_if_cancelled(job)
-        metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
-        if metro_supplier and source_codes is not None and "METRO" in source_codes:
+        # Metro is the platform owner's alone (integrations.py).
+        server = server_accounts_allowed()
+        metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first() if server else None
+        if not server and source_codes is not None and "METRO" in source_codes:
+            job.update_progress("METRO", label="Metro", error=integrations.METRO)
+        elif metro_supplier and source_codes is not None and "METRO" in source_codes:
             # From its own newest invoice at the latest: while Metro was
             # paused, gathers of the other sources moved the offered start
             # past it, and the days between were never searched on Metro.
@@ -312,6 +317,12 @@ def gather_invoices_task(
             _raise_if_cancelled(job)
             code = f"type-{invoice_type.id}"
             if source_codes is not None and code not in source_codes:
+                continue
+            if not server:
+                # The portals are the platform owner's alone (integrations.py):
+                # one asked for elsewhere fails on its own line, unsearched.
+                if source_codes is not None:
+                    job.update_progress(code, label=invoice_type.name, error=integrations.PORTALS)
                 continue
             source = getattr(invoice_type, "website_source", None)
             if source is None:
@@ -642,11 +653,11 @@ def _import_document_file(
 def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, start_date: date, end_date: date) -> None:
     """Dry run of a website source: signs in and lists what it would
     download, downloading nothing - how a new site's settings are checked
-    before a real gather. Its rows land in job.test_matches. The server's
-    .env names the credentials: another bar's tenant is refused before any
-    is read (integrations.py)."""
+    before a real gather. Its rows land in job.test_matches. The portals are
+    the platform owner's espace's alone: anywhere else refused before any
+    credential is read or a browser starts (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
-    if not integrations_allowed():
+    if not server_accounts_allowed():
         _refused(job, integrations.PORTALS)
         return
     job.status = ScrapeJob.Status.RUNNING
@@ -696,8 +707,8 @@ def test_email_pattern_task(
     gather run. Cancellable the same way gather_invoices_task is (see its
     docstring) - a wide test range can scan thousands of emails too.
 
-    The mailbox is the owner's: from another bar's tenant its senders and
-    subjects would be listed there (integrations.py)."""
+    The mailbox is the bound espace's own (its « Identifiants »): refused
+    unbound only (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
     if not integrations_allowed():
         _refused(job, integrations.MAILBOX)

@@ -286,8 +286,11 @@ def limiter_cache(app_configs=None, **kwargs):
 @register()
 def one_owner_tenant(app_configs=None, **kwargs):
     """At most ONE open tenant uses the server's own accounts
-    (`Tenant.uses_server_integrations`: Metro, the invoice mailbox,
-    L'Addition, the AI reading, the portals' .env credentials).
+    (`Tenant.uses_server_integrations`, accounts.tenancy.
+    server_accounts_allowed: Metro, the supplier portals, and the .env's
+    mailbox, L'Addition and AI values). Every other tenant runs the mailbox,
+    L'Addition and the AI reading with its own « Identifiants » - this rule
+    is about the server's, which stay one owner's.
 
     They are one set of accounts with one state. Metro's pause - 24 hours
     between two sign-ins, a week after a refusal - lives on the METRO row of

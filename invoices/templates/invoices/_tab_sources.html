@@ -26,6 +26,8 @@ The mailbox and the portals' credentials are the server's own accounts
 where somebody comes to ask where the invoices come from.
 {% endcomment %}
 <div class="message">{{ sources_refused }}</div>
+{% elif portals_refused %}
+<p class="muted">{{ portals_refused }}</p>
 {% endif %}
 
 {% comment %}

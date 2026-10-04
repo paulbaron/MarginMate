@@ -8,18 +8,26 @@ clicking is written: run it, watch it sign in and land on the page. With
 --no-headless you can see exactly what it sees, which is how the download
 steps for a given report get worked out in the first place.
 
-It signs in with the server's L'Addition account, the owner's: in multi mode
-it runs for the owner's tenant only (`manage.py tenant <folder>
-laddition_open`), like every other use of that account
-(recipes/integration.py).
+It runs for the platform owner's espace only (`manage.py tenant <folder>
+laddition_open`, accounts.tenancy.server_accounts_allowed): with
+--no-headless it shows the till on the server's desktop, and the operator
+does not browse a customer's till - every other espace's account is used by
+its own sales import alone (recipes/integration.py).
 """
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts import paths
-from recipes.integration import refusal, require_tenant_for_command, till_allowed
+from accounts.tenancy import server_accounts_allowed
+from recipes.integration import require_tenant_for_command
 from recipes.pos.laddition_session import LadditionAuthError, laddition_session
+
+#: Said to the operator who runs it for another espace than the owner's.
+OWNER_ONLY = (
+    "laddition_open ne s'ouvre que dans l'espace du propriétaire de la plateforme : la caisse d'un autre espace "
+    "ne se consulte pas depuis le serveur."
+)
 
 
 class Command(BaseCommand):
@@ -43,8 +51,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         require_tenant_for_command("laddition_open")
-        if not till_allowed():
-            raise CommandError(refusal())
+        if not server_accounts_allowed():
+            raise CommandError(OWNER_ONLY)
         if options["no_headless"]:
             settings.SCRAPER_HEADLESS = False
         try:

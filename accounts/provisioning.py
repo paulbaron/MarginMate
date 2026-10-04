@@ -9,9 +9,10 @@ the tenant bound as `default` - none of them names a database, so a
 
 The seed migrations wire the OWNER's integrations into every database: an
 active mailbox source (UBA) and Metro marked to fetch. A new tenant that is
-not the owner's has both switched off right after creation - and the
-integrations gate (accounts.tenancy.integrations_allowed) refuses them
-anyway.
+not the owner's has both switched off right after creation (its
+HOSTED_ESPACE_STEPS): its mailbox signs in with its own « Identifiants »
+and searches what it sets up itself, and Metro stays the platform owner's
+whatever its row says (accounts.tenancy.server_accounts_allowed).
 
 The files come FIRST and the row last (`prepare_tenant`, then
 `create_tenant` or the signup's own transaction): copying and migrating take

@@ -1,10 +1,13 @@
-"""Whether this tenant may use the server's L'Addition account, and what it
-reads where it may not.
+"""Whether this tenant may fetch its sales from L'Addition, and what it reads
+where it may not.
 
-The credentials (the « Identifiants » page, else LADDITION_EMAIL /
-LADDITION_PASSWORD in .env) are the owner's own till. With one database per bar, they work in the owner's tenant
-only (`accounts.tenancy.integrations_allowed`). Everywhere else the import is « à configurer », a later
-step giving each tenant settings of its own.
+Every espace may (since 04/10/2026; before, the owner's only): each signs in
+with the L'Addition account typed on ITS « Identifiants » page - the .env's
+LADDITION_EMAIL / LADDITION_PASSWORD stand in for a value not typed in the
+platform owner's espace only (`accounts.vault.server_setting`). Refused
+unbound (`accounts.tenancy.integrations_allowed`). What stays the owner's:
+`laddition_open`, which shows a till in a browser of the server, and the
+names of the server's commands on a page (`till_commands_shown`).
 
 One rule, checked wherever the account can be reached, because each place is
 reachable on its own:
@@ -15,15 +18,15 @@ reachable on its own:
   thread's target can be called by anything;
 - the session refuses before a browser starts or a password is read
   (`pos/laddition_session.py`), whoever opened it - `laddition_open` too;
-- the commands refuse the download (`laddition_import`, `laddition_open`).
+- the commands refuse the download (`laddition_import`), and
+  `laddition_open` runs for the platform owner's espace only.
 
 Reading exports already on disk uses no account: the backfills and
 `laddition_import --file` read the tenant's own folder, or what the operator
 names, and are not refused.
 
-What a tenant that may not use the account is told is never the name of a
-server variable: « X est absente du fichier .env » would say which names
-exist on the server.
+What a tenant is told is never the name of a server variable: « X est
+absente du fichier .env » would say which names exist on the server.
 """
 
 from __future__ import annotations
@@ -47,8 +50,8 @@ TILL_REIMPORT = "récupérez ou importez de nouveau les ventes de la caisse sur 
 
 
 def till_allowed() -> bool:
-    """Whether the server's L'Addition account may be used for the tenant
-    this thread works for."""
+    """Whether the bound tenant may fetch its sales from L'Addition, with its
+    own « Identifiants » (`integrations_allowed`: any bound tenant)."""
     return integrations_allowed()
 
 

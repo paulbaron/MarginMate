@@ -146,6 +146,7 @@ parts trigger `documents-changed` when they end).
                     {% empty %}
                         <span class="muted">Aucune source configurée : voir l'onglet « Sources ».</span>
                     {% endfor %}
+                    {% for note in gather_notes %}<p class="muted sources-panel-note">{{ note }}</p>{% endfor %}
                 </div>
             </details>
             <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Récupérer les nouvelles factures</button>

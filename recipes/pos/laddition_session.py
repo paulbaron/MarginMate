@@ -4,9 +4,11 @@ Credentials come from the espace's « Identifiants » page (accounts/vault.py),
 else the environment (LADDITION_EMAIL / LADDITION_PASSWORD in .env), and are
 typed by the browser at run time - the same arrangement the Metro invoice
 scraper uses. They are never stored in the database, never logged, and
-never committed. They are the owner's own till, so in multi mode
-only the owner's tenant may open a session (recipes/integration.py): the
-refusal comes before a browser starts or a password is read.
+never committed. Each espace signs in to its own till with what it typed on
+its « Identifiants » page; the .env's values stand in for the platform
+owner's espace only (accounts.vault.settings_of). Unbound, the session is
+refused before a browser starts or a password is read
+(recipes/integration.py).
 
 This module deliberately stops at "you are logged in and looking at the page
 you asked for". What to click once you're there belongs in whatever module
@@ -58,9 +60,8 @@ class LadditionAuthError(RuntimeError):
 
 
 class LadditionNotAllowed(LadditionAuthError):
-    """This tenant may not use the server's L'Addition account
-    (recipes/integration.py). Carries a French sentence and no variable
-    name."""
+    """No tenant bound: no L'Addition account to use (recipes/integration.py).
+    Carries a French sentence and no variable name."""
 
 
 def _refuse_unless_allowed() -> None:
@@ -272,8 +273,7 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
         with laddition_session(dir) as driver:
             ...  # driver is on /v2/shift-details, signed in
 
-    Refused (LadditionNotAllowed) in a tenant that may not use the
-    server's account, before the browser starts.
+    Refused (LadditionNotAllowed) unbound, before the browser starts.
     """
     _refuse_unless_allowed()
     driver = build_driver(download_dir)

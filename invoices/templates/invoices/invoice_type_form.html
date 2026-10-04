@@ -69,6 +69,10 @@
 
             <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : espace client</h3>
+                {% if portals_refused %}
+                {% comment %}The portals are the platform owner's espace's alone (invoices/integrations.py): no field to send, and the view refuses a post naming the channel.{% endcomment %}
+                <div class="message">{{ portals_refused }}</div>
+                {% else %}
                 <p class="muted">
                     L'identifiant et le mot de passe se saisissent sur la page
                     <a href="{% url 'accounts:credentials' %}">Identifiants</a>, une fois la source enregistrée ; les
@@ -80,6 +84,7 @@
                     <summary class="muted">Réglages avancés (sélecteurs CSS)</summary>
                     {% include "_form_fields.html" with form=website_form only=website_form.advanced %}
                 </details>
+                {% endif %}
             </fieldset>
 
             <h3>Tester</h3>

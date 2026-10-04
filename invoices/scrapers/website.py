@@ -149,11 +149,12 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
     file itself at each run, so a line added there counts without
     restarting the server, then from the environment.
 
-    The .env and the environment are the server's, the owner's: a portal
-    typed in another bar's tenant could name any of them and send it to a
-    page of its own. So such a tenant is refused before anything is read,
-    and the refusal names no variable - « X est absente du fichier .env »
-    would say which ones exist (invoices/integrations.py).
+    The portals are the platform owner's espace's alone (accounts.tenancy.
+    server_accounts_allowed: the server's Chrome, on his home network, goes
+    wherever a portal's page sends it), and the .env and the environment are
+    his server's: any other tenant is refused before anything is read, and
+    the refusal names no variable - « X est absente du fichier .env » would
+    say which ones exist (invoices/integrations.py).
 
     Nothing is handed over for a login page that is not https (the password
     would travel in clear), nor for one name serving as both, nor while the
@@ -168,11 +169,7 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
     site of their own: each is given only to the host the owner confirmed
     for its name on that page (`VaultState.env_bindings`). A refusal may
     name a variable or a host, never a value."""
-    from accounts.tenancy import integrations_allowed
-    from invoices import integrations
-
-    if not integrations_allowed():
-        raise WebsiteError(integrations.PORTALS)
+    _refuse_unless_the_owner_s()
     from accounts import vault
     from invoices.models import APP_ENV_REFUSED, app_env_name, portal_host
 
@@ -220,8 +217,7 @@ def credentials(recipe: WebsiteRecipe, env_file=None, environ=None) -> tuple[str
             )
     values = {}
     # The .env and the environment are the server's: the owner's tenant may
-    # fall back on them, never another bar, whose portals sign in with what
-    # it typed on its own « Identifiants » page or not at all.
+    # fall back on them (and is the only one here: _refuse_unless_the_owner_s).
     from accounts.tenancy import server_accounts_allowed
 
     server = server_accounts_allowed()
@@ -2058,9 +2054,21 @@ class _Visit:
         return name
 
 
+def _refuse_unless_the_owner_s() -> None:
+    """The portals are the platform owner's espace's alone
+    (invoices/integrations.py): anywhere else, refused before a folder is
+    made, a credential read or a browser started."""
+    from accounts.tenancy import server_accounts_allowed
+    from invoices import integrations
+
+    if not server_accounts_allowed():
+        raise WebsiteError(integrations.PORTALS)
+
+
 def _visit(
     recipe, download_dir, start, end, known_numbers, log, should_cancel, driver_factory, headless, env_file, fetch
 ):
+    _refuse_unless_the_owner_s()
     os.makedirs(download_dir, exist_ok=True)
     # Every visit prunes the pages kept for every source, before anything
     # can fail: a source refused at each run, or never run again, kept its

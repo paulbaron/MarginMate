@@ -24,7 +24,7 @@ from django.utils import timezone
 from django.utils.http import urlencode
 
 import common
-from accounts.tenancy import integrations_allowed
+from accounts.tenancy import integrations_allowed, server_accounts_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
 from . import integrations
@@ -86,11 +86,11 @@ OWN_MODULE = Q(code="METRO", is_scrapable=True)
 
 
 def own_module_suppliers():
-    """The suppliers fetched by a module of their own (OWN_MODULE) - none in
-    a tenant that may not use the server's accounts (integrations.py): that
-    module signs in to the owner's Metro account, whatever the tenant's
-    METRO row says (an import can tick `is_scrapable` again)."""
-    if not integrations_allowed():
+    """The suppliers fetched by a module of their own (OWN_MODULE) - none
+    outside the platform owner's espace (integrations.py: Metro is his
+    alone), whatever the tenant's METRO row says (an import can tick
+    `is_scrapable` again)."""
+    if not server_accounts_allowed():
         return Supplier.objects.none()
     return Supplier.objects.filter(OWN_MODULE)
 
@@ -253,13 +253,18 @@ def _name_senders(request, batches) -> bool:
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
-    # Every source a gather searches is one of the server's own accounts:
-    # in a tenant that may not use them the panel says « à configurer »
-    # (_import_card.html), and nothing about them is read.
+    # Unbound the panel says « à configurer » (_import_card.html), and
+    # nothing about the sources is read. Metro and the customer portals are
+    # the platform owner's alone (integrations.py): another espace is offered
+    # its mailbox's sources only, and told so.
     allowed = integrations_allowed()
+    server = server_accounts_allowed()
     metro = own_module_suppliers().first()
     # The mailbox's types and the customer portals': both are gathered.
-    email_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier")) if allowed else []
+    active_types = InvoiceType.objects.filter(is_active=True).select_related("supplier")
+    if not server:
+        active_types = active_types.filter(source_kind=InvoiceType.SourceKind.EMAIL)
+    email_types = list(active_types) if allowed else []
     gather_sources = []
     if metro:
         from .scrapers.metro import metro_pause
@@ -345,6 +350,8 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "senders_shown": senders_shown,
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
+        # What another espace's gather does not search, said under its sources.
+        "gather_notes": [] if server or not allowed else [integrations.METRO, integrations.PORTALS],
         "ai_refused": None if allowed else integrations.AI_READING,
         # « Prendre une photo » stops what the form would post short of
         # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
@@ -847,8 +854,10 @@ def _sources() -> dict:
         invoice_type.channel = CHANNELS.get(invoice_type.source_kind, invoice_type.get_source_kind_display())
     return {
         "invoice_types": invoice_types,
-        # Both channels are the server's own accounts (integrations.py).
+        # Unbound, both channels are refused (integrations.py).
         "sources_refused": None if integrations_allowed() else integrations.SOURCES,
+        # A customer portal is the platform owner's espace's alone.
+        "portals_refused": None if server_accounts_allowed() else integrations.PORTALS,
     }
 
 

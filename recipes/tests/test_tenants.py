@@ -1,12 +1,14 @@
 """The till in multi mode: one tenant's sales never land in another's, and
-the server's L'Addition account works for the owner's tenant only.
+each fetches them with its own L'Addition account.
 
 `TwoTenantsTestCase` (accounts/tests/support.py) gives two real tenants in
-temporary files: bar A is the owner's (`owner_a`), bar B another bar. The
-rule is the spec's: the .env integrations are the owner's own accounts, so
-everywhere else the import is « à configurer », refused by the page, the
-thread, the session and the commands alike - each is reachable on its own
-(a stale page's POST, a thread's target called directly, laddition_open).
+temporary files: bar A is the platform owner's (`owner_a`), bar B another
+bar. Every espace fetches its sales with the account typed on its own
+« Identifiants » page; the server's .env values stand in for the owner's
+espace alone - B, with nothing typed, never signs in with them. Unbound,
+the page, the thread, the session and the commands refuse alike - each is
+reachable on its own. `laddition_open`, which shows a till in a browser of
+the server, is the owner's.
 
 Nothing is downloaded and nothing contacts L'Addition: the download and the
 browser are patched, and the exports are hand-written workbooks
@@ -31,6 +33,7 @@ from django.urls import reverse
 from accounts import paths
 from accounts.tenancy import bound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
+from recipes.management.commands.laddition_open import OWNER_ONLY
 from recipes.models import PosProduct, PosProductDailyQuantity, SalesImportJob
 from recipes.pos import laddition_session as session_module
 from recipes.tasks import import_laddition_sales_task
@@ -60,13 +63,11 @@ class SalesTabTests(TwoTenantsTestCase):
         self.client.force_login(user)
         return self.client.get(reverse("recipes:sales_list")).content.decode()
 
-    def test_another_bar_is_told_the_import_is_to_configure(self):
+    def test_another_bar_is_offered_the_import(self):
+        # Its own account (its « Identifiants »): the form is drawn there too.
         page = self.tab(self.user_b)
-        self.assertIn("à configurer — disponible prochainement dans les réglages de votre espace", page)
-        # No form to post, and nothing about the server's own settings.
-        self.assertNotIn(reverse("recipes:trigger_sales_import"), page)
-        self.assertNotIn("LADDITION_EMAIL", page)
-        self.assertNotIn(".env", page)
+        self.assertIn(reverse("recipes:trigger_sales_import"), page)
+        self.assertNotIn("à configurer", page)
 
     def test_the_owner_s_tenant_keeps_the_form(self):
         page = self.tab(self.user_a)
@@ -85,11 +86,13 @@ class TriggerTests(TwoTenantsTestCase):
             response = self.client.post(reverse("recipes:trigger_sales_import"), JUNE, follow=True)
         return response, thread
 
-    def test_another_bar_s_post_is_refused_and_starts_nothing(self):
-        response, thread = self.post(self.user_b)
-        thread.assert_not_called()
-        self.assertContains(response, "à configurer")
+    def test_another_bar_s_thread_works_for_another_bar(self):
+        _response, thread = self.post(self.user_b)
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs["target"].tenant.pk, self.bar_b.pk)
         with bound_tenant(self.bar_b):
+            self.assertTrue(SalesImportJob.objects.exists())
+        with bound_tenant(self.bar_a):
             self.assertFalse(SalesImportJob.objects.exists())
 
     def test_the_owner_s_thread_works_for_the_owner_s_tenant(self):
@@ -120,17 +123,32 @@ class TaskTests(TwoTenantsTestCase):
 
     owner_a = True
 
-    def test_the_task_refuses_in_another_bar_before_anything_is_downloaded(self):
-        with bound_tenant(self.bar_b):
-            job = SalesImportJob.objects.create()
-            with mock.patch("recipes.tasks.download_sales_lines") as download:
-                import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
-            job.refresh_from_db()
+    def test_the_task_refuses_unbound_before_anything_is_downloaded(self):
+        job = SalesImportJob.objects.create()
+        with mock.patch("recipes.tasks.download_sales_lines") as download:
+            import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
+        job.refresh_from_db()
         download.assert_not_called()
         self.assertEqual(job.status, SalesImportJob.Status.FAILED)
         self.assertIn("à configurer", job.log)
         self.assertNotIn("Traceback", job.log)
         self.assertIsNotNone(job.finished_at)
+
+    def test_another_bar_s_task_downloads_into_its_own_folder(self):
+        seen = {}
+
+        def download(start, end, download_dir, **kwargs):
+            seen["folder"] = Path(download_dir)
+            return [an_export(download_dir)]
+
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create()
+            own_folder = paths.downloads_dir()
+            with mock.patch("recipes.tasks.download_sales_lines", side_effect=download):
+                import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
+            job.refresh_from_db()
+            self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertEqual(seen["folder"], own_folder)
 
     def test_a_real_thread_imports_into_its_tenant_from_its_tenant_s_folder(self):
         seen = {}
@@ -171,30 +189,59 @@ class SessionTests(TwoTenantsTestCase):
 
     owner_a = True
 
-    def test_no_browser_starts_for_another_bar(self):
-        with bound_tenant(self.bar_b):
-            with (
-                mock.patch.object(session_module, "build_driver") as build,
-                mock.patch.object(session_module, "open_report") as open_report,
-                self.assertRaises(session_module.LadditionNotAllowed) as caught,
-            ):
-                with session_module.laddition_session(tempfile.mkdtemp()):
-                    pass
+    def test_no_browser_starts_unbound(self):
+        with (
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch.object(session_module, "open_report") as open_report,
+            self.assertRaises(session_module.LadditionNotAllowed) as caught,
+        ):
+            with session_module.laddition_session(tempfile.mkdtemp()):
+                pass
         build.assert_not_called()
         open_report.assert_not_called()
         self.assertIn("à configurer", str(caught.exception))
         self.assertNotIn("LADDITION", str(caught.exception))
 
-    def test_no_password_is_typed_for_another_bar(self):
+    def test_the_server_s_account_is_never_typed_for_another_bar(self):
+        """B typed nothing on its « Identifiants »: the .env's values - in
+        the settings of the one process every espace runs in - are the owner's
+        alone (accounts.vault.server_setting)."""
         driver = mock.Mock()
         with (
             bound_tenant(self.bar_b),
             override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
-            self.assertRaises(session_module.LadditionNotAllowed),
+            self.assertRaises(session_module.LadditionAuthError) as caught,
         ):
             session_module.log_in(driver, log=lambda *args: None)
         driver.get.assert_not_called()
         driver.find_element.assert_not_called()
+        self.assertIn("page Identifiants", str(caught.exception))
+        self.assertNotIn("LADDITION", str(caught.exception))
+
+    def test_another_bar_s_own_account_is_typed(self):
+        from accounts import vault
+
+        driver = mock.Mock()
+        typed = []
+        driver.find_element.return_value.send_keys.side_effect = typed.append
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+            with (
+                mock.patch.object(session_module, "navigate"),
+                mock.patch.object(session_module, "WebDriverWait"),
+                override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
+            ):
+                session_module.log_in(driver, log=lambda *args: None)
+        self.assertEqual(typed, ["caisse-beta@example.invalid", "secret-beta"])
+
+    def test_another_bar_opens_one(self):
+        with bound_tenant(self.bar_b):
+            with (
+                mock.patch.object(session_module, "build_driver") as build,
+                mock.patch.object(session_module, "open_report"),
+            ):
+                with session_module.laddition_session(tempfile.mkdtemp()) as driver:
+                    self.assertIs(driver, build.return_value)
 
     def test_the_owner_s_tenant_opens_one(self):
         with bound_tenant(self.bar_a):
@@ -256,13 +303,18 @@ class CommandsTests(TwoTenantsTestCase):
                 call_command(name, *arguments, stdout=StringIO())
             self.assertIn(f"manage.py tenant <dossier> {name}", str(caught.exception))
 
-    def test_the_import_downloads_nothing_for_another_bar(self):
-        with (
-            mock.patch("recipes.management.commands.laddition_import.download_sales_lines") as download,
-            self.assertRaisesMessage(CommandError, "à configurer"),
-        ):
+    def test_the_import_downloads_into_another_bar_s_own_folder(self):
+        seen = {}
+
+        def download(start, end, download_dir, **kwargs):
+            seen["folder"] = Path(download_dir)
+            return [an_export(download_dir)]
+
+        with mock.patch("recipes.management.commands.laddition_import.download_sales_lines", side_effect=download):
             self.run_for(self.bar_b, "laddition_import", "--from", "2026-06-01", "--to", "2026-06-30")
-        download.assert_not_called()
+        self.assertEqual(seen["folder"], self.downloads_of(self.bar_b))
+        with bound_tenant(self.bar_a):
+            self.assertFalse(PosProduct.objects.exists())
 
     def test_the_owner_s_import_downloads_into_the_owner_s_folder(self):
         seen = {}
@@ -289,10 +341,14 @@ class CommandsTests(TwoTenantsTestCase):
     def test_laddition_open_signs_in_for_nobody_but_the_owner(self):
         with (
             mock.patch("recipes.management.commands.laddition_open.laddition_session") as session,
-            self.assertRaisesMessage(CommandError, "à configurer"),
+            self.assertRaisesMessage(CommandError, OWNER_ONLY),
         ):
             self.run_for(self.bar_b, "laddition_open")
         session.assert_not_called()
+        with mock.patch("recipes.management.commands.laddition_open.laddition_session") as session:
+            session.return_value.__enter__.return_value.find_element.return_value.text = "Caisse"
+            self.run_for(self.bar_a, "laddition_open")
+        session.assert_called_once()
 
 
 class ImportCommandBusyTests(TestCase):
