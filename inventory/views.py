@@ -1525,6 +1525,13 @@ def assign_product(request, product_id):
         # needs review, and a charge never does), but the address took it:
         # classified, the rent became bottles, with a stock movement behind.
         error = f"« {product.raw_name} » est un poste de charge : il ne se range dans aucun article."
+    elif product.stock_type_id is not None:
+        # The panel lists only what is left to classify; a panel drawn before
+        # another tab classified this one still posts, and moves nothing.
+        error = (
+            f"« {product.raw_name} » est déjà rangé dans « {product.stock_type.name} » : retirez-le d'abord "
+            "ou changez son facteur depuis la page Stock."
+        )
     elif stock_equivalent is None:
         error = "« 1 produit = » doit être un nombre positif d'au plus 4 décimales."
     elif not name:

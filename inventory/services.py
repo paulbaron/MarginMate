@@ -384,6 +384,7 @@ def refresh_invoice_statuses_for_product(product: Product) -> None:
             invoice.save(update_fields=["status"])
 
 
+@transaction.atomic
 def link_product_to_stock_type(
     product: Product,
     stock_type: StockType,
@@ -391,7 +392,15 @@ def link_product_to_stock_type(
     stock_equivalent: Decimal,
 ) -> None:
     """Link a reviewed product to a stock type and backfill stock movements
-    for every invoice line already recorded against that product."""
+    for every invoice line already recorded against that product.
+
+    A product already classified otherwise has its purchase movements made
+    again, rebuild_purchase_movements' rule: create_stock_movement_for_line
+    keeps a line's existing movement, so they stayed on the old article with
+    the old factor while the product named the new one."""
+    was = (product.stock_type_id, product.unit, product.stock_equivalent)
+    if was[0] is not None and was != (stock_type.pk, unit, stock_equivalent):
+        StockMovement.objects.filter(invoice_line__product=product, kind=MovementKind.PURCHASE).delete()
     product.stock_type = stock_type
     product.unit = unit
     product.stock_equivalent = stock_equivalent
