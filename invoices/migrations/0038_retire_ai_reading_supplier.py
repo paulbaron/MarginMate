@@ -59,15 +59,16 @@ def retire_ai_supplier(apps, schema_editor):
 class Migration(migrations.Migration):
     # The latest migration, on 04/10/2026, of every app whose models point
     # at Supplier, so the historical model knows every relation it is walked
-    # for (GitHub's main brought inventory 0021's ShoppingExclusion), and of
-    # every app holding a plain id of one (PLAIN_IDS: GitHub's main's
-    # notifications 0001, whose reminders hold no key). Never add one once
-    # this has shipped: a dependency added to a migration an espace has
-    # applied stops `migrate` there (InconsistentMigrationHistory).
+    # for (GitHub's main brought inventory 0021's ShoppingExclusion, then
+    # inventory 0022's ShoppingList), and of every app holding a plain id of
+    # one (PLAIN_IDS: GitHub's main's notifications 0001, whose reminders
+    # hold no key). Never add one once this has shipped: a dependency added
+    # to a migration an espace has applied stops `migrate` there
+    # (InconsistentMigrationHistory).
     dependencies = [
         ("invoices", "0037_auto_gather"),
         ("bank", "0009_statement_format_file_type"),
-        ("inventory", "0021_shopping_forecast"),
+        ("inventory", "0022_shopping_lists"),
         ("returnables", "0002_seed_defaults"),
         ("notifications", "0001_initial"),
     ]

@@ -3,9 +3,9 @@ pseudo-supplier « Autre (analyse IA) » - code OTHER, reader key LLM, seeded by
 invoices/0002 - wherever nothing names it. Where something does - a document,
 a product, a payee name learnt, a known price, a line of its history, a slip
 format, a pickup, another supplier's history, an article left out of its
-shopping list, a reminder « repris par » it - it stays as an ordinary
-supplier, its name and every row naming it as they are. No other supplier is touched, and going back changes
-nothing.
+shopping list, a shopping list for it, a reminder « repris par » it - it
+stays as an ordinary supplier, its name and every row naming it as they are.
+No other supplier is touched, and going back changes nothing.
 
 Run the way the repository runs a data migration: its function, on the
 models as they stand (`django.apps.apps`). Data invented."""
@@ -21,7 +21,7 @@ from django.db.models import ForeignObjectRel
 from django.test import TestCase
 
 from bank.models import CounterpartyAlias
-from inventory.models import ShoppingExclusion
+from inventory.models import ShoppingExclusion, ShoppingList
 from invoices.models import InvoiceType, ShopItemPrice, Supplier, SupplierChange
 from notifications.models import Reminder
 from returnables.models import Pickup
@@ -45,8 +45,9 @@ RELATIONS_AT_0038 = {
     ("bank.counterpartyalias", "supplier"),
     ("returnables.slipformat", "supplier"),
     ("returnables.pickup", "supplier"),
-    # GitHub's main, merged before 0038 shipped (inventory 0021).
+    # GitHub's main, merged before 0038 shipped (inventory 0021, then 0022).
     ("inventory.shoppingexclusion", "supplier"),
+    ("inventory.shoppinglist", "supplier"),
 }
 
 
@@ -128,6 +129,8 @@ class RetireTests(TestCase):
             "un article écarté de ses courses": lambda: ShoppingExclusion.objects.create(
                 stock_type=make_stock_type(name="Article essai"), supplier=self.ai
             ),
+            # A shopping list for it (GitHub's main, inventory 0022): a CASCADE.
+            "une liste de courses": lambda: ShoppingList.objects.create(supplier=self.ai, created_by="essai"),
             # « Repris par » of a reminder (GitHub's main, notifications 0001):
             # a plain id, no key - deleted, it would never match again.
             "un rappel « repris par »": lambda: Reminder.objects.create(

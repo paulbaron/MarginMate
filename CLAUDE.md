@@ -10743,20 +10743,23 @@ walked, CASCADE and hidden ones included, and a reminder « repris par » it
 `PLAIN_IDS`; deleted under it, the reminder would never be skipped again) -
 and keeps it as an ordinary supplier, its reader key emptied, where
 something does; no other supplier is touched. Migrations `invoices/0038`
-and `accounts/0005` (which rewords
-the admin's help of « utilise les accès du serveur », no SQL), **WRITTEN and
-left to be applied** (the owner, after a backup, `migrate_tenants`; `serve`
-refuses to start until then). They were written as `invoices/0037` and
-`accounts/0004` and renumbered when GitHub's main brought its own
-(`0037_auto_gather`, `0004_pushdevice`, already published): 0038 depends on
+and `accounts/0006` (which rewords the admin's help of « utilise les accès
+du serveur », no SQL), **WRITTEN and left to be applied** (the owner, after
+a backup, `migrate_tenants`; `serve` refuses to start until then). They
+were written as `invoices/0037` and `accounts/0004` and renumbered as
+GitHub's main brought its own, already published (`0037_auto_gather` and
+`0004_pushdevice`, then `accounts/0005_shopping_area`: accounts' twice):
+0038 depends on
 `0037_auto_gather` and on the latest migration of every app pointing at
-Supplier then - bank 0009, inventory 0021 (its `ShoppingExclusion`),
-returnables 0002 - or holding a plain id of one (notifications 0001), 0005
-on `0004_pushdevice`. A dev copy migrated under the old names is restored
-from a backup (`refresh_dev_data.cmd`) and migrated again. **0038's test
-compares the
-relations it walks with that day's literal list** (`RELATIONS_AT_0038`, the
-merge's `inventory.ShoppingExclusion` included), never with the live model:
+Supplier then - bank 0009, inventory 0022 (its `ShoppingExclusion`, 0021,
+and `ShoppingList`, 0022), returnables 0002 - or holding a plain id of one
+(notifications 0001); accounts 0006 on `0005_shopping_area`. A dev copy
+migrated under an old name is restored from a backup (`refresh_dev_data.cmd`)
+and migrated again. **0038's test compares the relations it walks with that
+day's literal list** (`RELATIONS_AT_0038`, the merges'
+`inventory.ShoppingExclusion` and `inventory.ShoppingList` included: a
+shopping list naming the retired supplier keeps it, as any CASCADE row
+does), never with the live model:
 a key to Supplier added later is none of its business, and a dependency
 added to it once applied is an InconsistentMigrationHistory in every espace.
 - **« Données »** never creates it again from an older archive, nor writes

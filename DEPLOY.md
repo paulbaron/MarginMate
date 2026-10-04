@@ -1125,10 +1125,10 @@ Si la page Identifiants avait une clé d'analyse IA enregistrée, elle la propos
 ligne.
 
 Cette version ajoute quatre migrations (`bank` 0009, `recipes` 0019, `invoices` 0038 et `accounts`
-0005) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
+0006) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
 qui est déjà dans votre espace ne change de sens ; `invoices` 0038 retire le fournisseur de l'analyse
-IA comme dit ci-dessus, et `accounts` 0005 ne change que le texte d'aide d'une case de
-l'administration.
+IA comme dit ci-dessus (une liste de courses ouverte pour lui le garde, comme tout ce qui y est
+rangé), et `accounts` 0006 ne change que le texte d'aide d'une case de l'administration.
 
 ## Limites connues
 
