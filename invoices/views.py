@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -271,16 +272,29 @@ def invoice_preview(request, pk):
 #: phone resending after a slow answer - opens the invoice it made rather
 #: than filing the purchase twice. A number would be refused as a duplicate
 #: (import_parsed_invoice), but most paper invoices typed here have none.
-#: In the session, and only the last few.
+#: In the session, and only the last few. Kept with what was posted: a page
+#: given back by the browser with its old value, another invoice typed on
+#: it, is that other invoice.
 MANUAL_INVOICES_MADE = "manual_invoices_made"
 MANUAL_INVOICES_KEPT = 20
+
+
+def _posted(request) -> str:
+    """What a page sent, but for the values that differ each time it is sent."""
+    fields = sorted(
+        (key, request.POST.getlist(key)) for key in request.POST if key not in ("csrfmiddlewaretoken", "jeton")
+    )
+    files = sorted((key, upload.name, upload.size) for key, upload in request.FILES.items())
+    return hashlib.sha256(repr((fields, files)).encode()).hexdigest()
 
 
 def create_manual_invoice(request):
     if request.method == "POST":
         token = request.POST.get("jeton", "")[:64]
         made = request.session.get(MANUAL_INVOICES_MADE, {})
-        already = Invoice.objects.filter(pk=made[token]).first() if token in made else None
+        made_pk, made_from = made.get(token, (None, ""))
+        posted = _posted(request)
+        already = Invoice.objects.filter(pk=made_pk).first() if made_from == posted else None
         if already is not None:
             messages.info(request, f"Facture déjà créée : {already}")
             return redirect("invoices:invoice_detail", pk=already.pk)
@@ -328,7 +342,7 @@ def create_manual_invoice(request):
                     display_filename=uploaded.name if uploaded else None,
                 )
                 if token:
-                    made[token] = invoice.pk
+                    made[token] = (invoice.pk, posted)
                     request.session[MANUAL_INVOICES_MADE] = dict(list(made.items())[-MANUAL_INVOICES_KEPT:])
                 messages.success(request, f"Facture créée : {invoice}")
                 return redirect("invoices:invoice_detail", pk=invoice.pk)

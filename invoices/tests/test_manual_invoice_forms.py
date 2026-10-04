@@ -429,8 +429,8 @@ class ManualInvoicePostedTwiceTests(TestCase):
         self.supplier = make_supplier(code="NOPARSER", name="Sans parseur", parser_key="")
         self.url = reverse("invoices:invoice_create_manual")
 
-    def post(self, token):
-        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line()}).items()}
+    def post(self, token, **row):
+        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line(**row)}).items()}
         data.update({"supplier": self.supplier.pk, "invoice_number": "", "invoice_date": "2026-09-01", "jeton": token})
         return self.client.post(self.url, data)
 
@@ -448,6 +448,18 @@ class ManualInvoicePostedTwiceTests(TestCase):
         self.post("Xq3vB0b1hJ8yQm2dKzP7cA")
         self.post("Lr5tN9wE2uY6iO1pS4dF8g")
         self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 2)
+
+    def test_another_invoice_typed_on_a_page_already_sent_is_made(self):
+        """Back to the page after creating: the browser can give it back with
+        its old value, and what is typed on it then is another invoice - sent
+        to the first with « déjà créée », it was lost."""
+        token = "Xq3vB0b1hJ8yQm2dKzP7cA"
+        self.post(token)
+        response = self.post(token, name="Gin 70cl", total_ht="45.00")
+        gin = Invoice.objects.get(supplier=self.supplier, lines__raw_name="Gin 70cl")
+        self.assertRedirects(response, reverse("invoices:invoice_detail", args=[gin.pk]))
+        self.assertEqual(Invoice.objects.filter(supplier=self.supplier).count(), 2)
+        self.assertRedirects(self.post(token, name="Gin 70cl", total_ht="45.00"), response.url)
 
     def test_each_page_carries_its_own_value_and_a_busy_button(self):
         first, second = self.client.get(self.url), self.client.get(self.url)
