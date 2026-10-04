@@ -119,18 +119,33 @@ def record_sales(entries, source: str = "manual") -> SalesImportResult:
 
 
 def _write_sales(order, totals, recipes, source, result) -> None:
+    # One upsert, not an update_or_create per recipe/day: that was four
+    # statements a row (savepoint, read, write, release), some 8 s of the
+    # bar's write lock for three years of a till. What was already there is
+    # read first, inside the same transaction, only to count it as updated;
+    # an existing row keeps its recorded_at, as update_or_create left it.
+    if not order:
+        return
+    days = [sold_on for _recipe_id, sold_on in order]
+    existing = set(
+        RecipeSale.objects.filter(source=source, sold_on__range=(min(days), max(days)))
+        .order_by()
+        .values_list("recipe_id", "sold_on")
+    )
+    RecipeSale.objects.bulk_create(
+        [
+            RecipeSale(recipe=recipes[recipe_id], sold_on=sold_on, source=source, quantity=totals[recipe_id, sold_on])
+            for recipe_id, sold_on in order
+        ],
+        update_conflicts=True,
+        unique_fields=["recipe", "sold_on", "source"],
+        update_fields=["quantity"],
+    )
     for key in order:
-        recipe_id, sold_on = key
-        _sale, created = RecipeSale.objects.update_or_create(
-            recipe=recipes[recipe_id],
-            sold_on=sold_on,
-            source=source,
-            defaults={"quantity": totals[key]},
-        )
-        if created:
-            result.created += 1
-        else:
+        if key in existing:
             result.updated += 1
+        else:
+            result.created += 1
 
 
 def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:

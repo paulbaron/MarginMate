@@ -201,10 +201,16 @@ class WriteBatchingTests(TestCase):
         from recipes.sales import record_sales
         from tests.factories import make_recipe
 
-        make_recipe(name="Mule")
+        mule = make_recipe(name="Mule")
         entries = [("Mule", date(2026, 1, 1) + timedelta(days=n), n) for n in range(10)]
 
-        with mock.patch("recipes.models.RecipeSale.objects.update_or_create", side_effect=RuntimeError("boom")):
+        def write_one_then_fail(*args, **kwargs):
+            # A row really written before the failure, so the rollback is
+            # what leaves the table empty - not a failure before any write.
+            RecipeSale.objects.create(recipe=mule, sold_on=date(2026, 1, 1), source="test", quantity=1)
+            raise RuntimeError("boom")
+
+        with mock.patch("recipes.models.RecipeSale.objects.bulk_create", side_effect=write_one_then_fail):
             with self.assertRaises(RuntimeError):
                 record_sales(entries, source="test")
         self.assertEqual(RecipeSale.objects.count(), 0)
