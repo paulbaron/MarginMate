@@ -53,7 +53,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from time import thread_time
 
-from common import group_thousands
+from common import group_thousands, weight
 from returnables import patterns
 from returnables.patterns import PatternError
 
@@ -102,6 +102,10 @@ MAX_ROWS = 200_000
 #: code can be the whole file, and a message goes through the session and
 #: onto the page.
 ECHO_MAX = 80
+#: The heaviest OFX or CAMT.053 file read: a year of a busy account is a
+#: fraction of it, and an XML file's every element costs memory and time
+#: while it is read (invoices.einvoice holds an e-invoice to as much).
+STRUCTURED_MAX_BYTES = 8 * 1024 * 1024
 #: The named group of the account pattern.
 ACCOUNT = "compte"
 #: Why a file is refused: what the csv module cannot split, an account
@@ -125,6 +129,23 @@ def too_many_operations() -> str:
 
 def too_many_rows() -> str:
     return f"Ce relevé compte plus de {group_thousands(MAX_ROWS)} lignes : exportez une période plus courte."
+
+
+def too_big() -> str:
+    return f"Ce relevé dépasse {weight(STRUCTURED_MAX_BYTES)} : exportez une période plus courte."
+
+
+def several_accounts(count: int) -> str:
+    """A structured file holding more than one account: a statement is one
+    account's, and its account is in every fingerprint."""
+    return f"Ce relevé contient plusieurs comptes ({count}) : exportez-les un par un."
+
+
+def not_euros(currency: str) -> str:
+    """A structured file in another currency than the euro: a conversion is
+    a decision nothing here is entitled to take, and a figure in dollars
+    read as euros is wrong money."""
+    return f"Ce relevé est en {echoed(currency)} : seuls les relevés en euros s'importent."
 
 
 def echoed(text) -> str:
@@ -444,6 +465,11 @@ def _reading(content: bytes, layout: Layout):
     whose `no_operation` is the sentence a file of none is refused with."""
     if layout.file_type == StatementFormat.FileType.CSV:
         return _CsvReading(content, layout)
+    if layout.file_type == StatementFormat.FileType.OFX:
+        # Imported here: bank.ofx reads this module's bounds and sentences.
+        from .ofx import OfxReading
+
+        return OfxReading(content, layout)
     raise ValueError(f"Ce type de fichier ne se lit pas : « {echoed(layout.file_type)} ».")
 
 
