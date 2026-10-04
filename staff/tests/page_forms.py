@@ -9,7 +9,12 @@ THE RENDERED HTML, following a browser's rules:
 
 * a control belongs to the `<form>` around it (these pages use no `form=`
   attribute, and `forms_of` refuses one rather than guess);
-* a disabled control, an unticked box and a button not pressed send nothing;
+* a disabled control, an unticked box and a button not pressed send nothing
+  - and a control inside a `<fieldset disabled>` is disabled, whatever its
+  own attributes say (but inside that fieldset's first `<legend>`), as the
+  HTML standard says: a page hiding the part of a form that does not apply
+  (« Format du relevé »'s CSV fields, a source's other channel) sends none
+  of it;
 * a `<select>` sends its selected option - the first one when none is
   marked - and a changed value must be one of its options, since a browser
   can send nothing else; a `<textarea>` sends its text.
@@ -30,6 +35,8 @@ class Control:
     attrs: dict
     options: list = field(default_factory=list)  # (value, selected) for a <select>
     text: str = ""  # a <textarea>'s content
+    #: Inside a `<fieldset disabled>` (but its first `<legend>`).
+    in_disabled_fieldset: bool = False
 
     @property
     def name(self) -> str | None:
@@ -45,7 +52,7 @@ class Control:
 
     @property
     def disabled(self) -> bool:
-        return "disabled" in self.attrs
+        return "disabled" in self.attrs or self.in_disabled_fieldset
 
     @property
     def value(self) -> str:
@@ -138,9 +145,21 @@ class _Forms(HTMLParser):
         self._select: Control | None = None
         self._option: list | None = None  # [value or None, selected, text]
         self._textarea: Control | None = None
+        #: The `<fieldset>`s open around the parser: [disabled, its first
+        #: legend open, its first legend seen].
+        self._fieldsets: list[list[bool]] = []
+
+    def _in_disabled_fieldset(self) -> bool:
+        return any(disabled and not in_legend for disabled, in_legend, _seen in self._fieldsets)
 
     def handle_starttag(self, tag, attrs):
         attributes = {name: ("" if value is None else value) for name, value in attrs}
+        if tag == "fieldset":
+            self._fieldsets.append(["disabled" in attributes, False, False])
+            return
+        if tag == "legend" and self._fieldsets and not self._fieldsets[-1][2]:
+            self._fieldsets[-1][1] = self._fieldsets[-1][2] = True
+            return
         if tag == "form":
             self._form = Form(attributes)
             self.forms.append(self._form)
@@ -152,7 +171,7 @@ class _Forms(HTMLParser):
         if tag not in ("input", "button", "select", "textarea"):
             return
         assert "form" not in attributes, "a control tied to a form by its `form` attribute: teach page_forms"
-        control = Control(tag, attributes)
+        control = Control(tag, attributes, in_disabled_fieldset=self._in_disabled_fieldset())
         if self._form is not None:
             self._form.controls.append(control)
         if tag == "select":
@@ -167,7 +186,11 @@ class _Forms(HTMLParser):
             self._textarea.text += data
 
     def handle_endtag(self, tag):
-        if tag == "form":
+        if tag == "fieldset" and self._fieldsets:
+            self._fieldsets.pop()
+        elif tag == "legend" and self._fieldsets and self._fieldsets[-1][1]:
+            self._fieldsets[-1][1] = False
+        elif tag == "form":
             self._form = None
         elif tag == "option":
             self._close_option()

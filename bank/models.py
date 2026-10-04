@@ -245,10 +245,11 @@ class OperationRule(models.Model):
 
 
 class StatementFormat(models.Model):
-    """How one bank lays out its CSV export: the encoding, the separator,
-    which column holds what, how dates and amounts are printed, where the
-    account number is (`bank.statements.parse_statement` reads a file with
-    one; « Format du relevé »).
+    """How one bank's export is read (`bank.statements.parse_statement`;
+    « Format du relevé »): the kind of file (`file_type`) and its encoding -
+    and, for a CSV, the separator, which column holds what, how dates and
+    amounts are printed, where the account number is. An OFX or a CAMT.053
+    file says itself where each datum is: its columns are blank.
 
     The owner's bank is seeded (migration 0007) exactly as the code read it
     before, so every fingerprint already stored is the one the same file
@@ -256,8 +257,13 @@ class StatementFormat(models.Model):
     columns are counted from 1, as a person reads them off the file.
     """
 
+    class FileType(models.TextChoices):
+        CSV = "csv", "CSV (colonnes)"
+        OFX = "ofx", "OFX / QFX (Money)"
+        CAMT053 = "camt053", "CAMT.053 (XML ISO 20022)"
+
     class Encoding(models.TextChoices):
-        AUTO = "auto", "Automatique (UTF-8, sinon Windows-1252)"
+        AUTO = "auto", "Automatique (UTF-16 ou UTF-8 selon le fichier, sinon Windows-1252)"
         UTF8 = "utf-8", "UTF-8"
         CP1252 = "cp1252", "Windows-1252"
         LATIN1 = "iso-8859-1", "ISO-8859-1"
@@ -286,6 +292,8 @@ class StatementFormat(models.Model):
     name = models.CharField("nom", max_length=100, unique=True)
     #: The first format is the one an import uses when nobody chooses.
     position = models.PositiveIntegerField(default=0)
+    #: Every format stored before migration 0009 is a CSV, as it always read.
+    file_type = models.CharField("type de fichier", max_length=10, choices=FileType.choices, default=FileType.CSV)
     encoding = models.CharField("encodage", max_length=12, choices=Encoding.choices, default=Encoding.AUTO)
     delimiter = models.CharField("séparateur", max_length=2, choices=Delimiter.choices, default=Delimiter.SEMICOLON)
     date_format = models.CharField(
@@ -294,9 +302,11 @@ class StatementFormat(models.Model):
     decimal_mark = models.CharField(
         "séparateur décimal", max_length=1, choices=DecimalMark.choices, default=DecimalMark.COMMA
     )
-    date_column = models.PositiveSmallIntegerField("colonne de la date")
+    #: Required of a CSV (`bank.statements.check_format`); blank for a file
+    #: that says where each datum is.
+    date_column = models.PositiveSmallIntegerField("colonne de la date", null=True, blank=True)
     #: One column or several, joined by a space: « 4 » or « 3, 4 ».
-    label_columns = models.CharField("colonnes du libellé", max_length=50)
+    label_columns = models.CharField("colonnes du libellé", max_length=50, blank=True)
     #: The amount is ONE signed column, or a column of debits and one of
     #: credits (either may be missing) - `bank.statements.check_format`.
     amount_column = models.PositiveSmallIntegerField("colonne du montant", null=True, blank=True)

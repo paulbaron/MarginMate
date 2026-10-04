@@ -186,6 +186,7 @@ COLUMN_NUMBER = f"Un numéro de colonne de 1 à {statements.MAX_COLUMN}."
 #: What `statements.check_format` reads, the name aside: a refusal of any of
 #: them is said on its field, and the check is not run past one already said.
 FORMAT_FIELDS = (
+    "file_type",
     "encoding",
     "delimiter",
     "date_format",
@@ -199,6 +200,33 @@ FORMAT_FIELDS = (
     "bank_type_column",
     "account_pattern",
 )
+
+
+#: Drawn first, whatever the kind of file.
+HEAD_FIELDS = ("name", "file_type", "encoding")
+#: A CSV's alone (`FileType.CSV`): drawn in a fieldset the page hides and
+#: disables for another kind of file (static/js/statement_format.js, and the
+#: server for the kind it draws) - a disabled field is never sent.
+CSV_FIELDS = tuple(name for name in FORMAT_FIELDS if name not in HEAD_FIELDS)
+#: What a CSV cannot do without, required of it alone - asked by the form as
+#: before (the browser's own `required` while the fieldset is shown).
+CSV_REQUIRED = ("delimiter", "date_format", "decimal_mark", "date_column", "label_columns")
+#: What a format of another kind stores in the fields it does not read: the
+#: model's defaults, and nothing in its columns or its account pattern - so a
+#: stored row says nothing it does not mean.
+CANONICAL = {
+    "delimiter": StatementFormat.Delimiter.SEMICOLON.value,
+    "date_format": StatementFormat.DateFormat.DAY_MONTH_YEAR.value,
+    "decimal_mark": StatementFormat.DecimalMark.COMMA.value,
+    "date_column": None,
+    "label_columns": "",
+    "amount_column": None,
+    "debit_column": None,
+    "credit_column": None,
+    "value_date_column": None,
+    "bank_type_column": None,
+    "account_pattern": "",
+}
 
 
 def _column(label, *, required=False, help_text=""):
@@ -221,10 +249,18 @@ def _column(label, *, required=False, help_text=""):
 
 
 class StatementFormatForm(forms.ModelForm):
-    """One format of « Format du relevé »: how a bank's CSV export is laid
-    out - checked here by `statements.check_format`, each refusal on its
-    field. Its place in the order is the page's business (a new format comes
-    last; « monter » / « descendre » move it), never typed."""
+    """One format of « Format du relevé »: the kind of file a bank exports
+    and, for a CSV, how it is laid out - checked here by
+    `statements.check_format`, each refusal on its field. Its place in the
+    order is the page's business (a new format comes last; « monter » /
+    « descendre » move it), never typed.
+
+    A format of another kind than CSV names no column: the page sends none
+    of a CSV's fields for it (their fieldset is disabled), so none is
+    required of it, a refusal of one is not said, and `clean` stores
+    `CANONICAL` in every one - whatever a page without its script sent."""
+
+    head_fields = HEAD_FIELDS
 
     date_column = _column("Colonne de la date", required=True, help_text="Les colonnes se comptent à partir de 1.")
     amount_column = _column(
@@ -240,6 +276,7 @@ class StatementFormatForm(forms.ModelForm):
         fields = ["name", *FORMAT_FIELDS]
         labels = {
             "name": "Nom",
+            "file_type": "Type de fichier",
             "encoding": "Encodage",
             "delimiter": "Séparateur",
             "date_format": "Format des dates",
@@ -249,6 +286,7 @@ class StatementFormatForm(forms.ModelForm):
         }
         help_texts = {
             "name": "Ex. « Banque Exemple (CSV) ».",
+            "file_type": "CSV : vous indiquez les colonnes. OFX et CAMT.053 : le fichier dit où est chaque donnée.",
             "label_columns": "Une colonne, ou plusieurs : « 4 » ou « 3, 4 ».",
             "account_pattern": (
                 "Facultatif. Cherché au-dessus des opérations ; (?P<compte>…) n'en garde qu'une partie."
@@ -261,6 +299,7 @@ class StatementFormatForm(forms.ModelForm):
                 "unique": FORMAT_NAME_TAKEN,
                 "null_characters_not_allowed": NUL_REFUSED,
             },
+            "file_type": {"required": "Type de fichier inconnu.", "invalid_choice": "Type de fichier inconnu."},
             "encoding": {"required": "Encodage inconnu.", "invalid_choice": "Encodage inconnu."},
             "delimiter": {"required": "Séparateur inconnu.", "invalid_choice": "Séparateur inconnu."},
             "date_format": {"required": "Format de date inconnu.", "invalid_choice": "Format de date inconnu."},
@@ -286,6 +325,24 @@ class StatementFormatForm(forms.ModelForm):
         #: The format as `check_format` compiled it, once every field but
         #: the name passed - what « Tester » reads the file with.
         self.layout = None
+        #: The kind of file the page draws: the one posted when it is one
+        #: the model offers, else the stored one - a CSV's fields are drawn
+        #: hidden and disabled for another (statement_format.js follows the
+        #: menu from there).
+        self.shown_file_type = self.instance.file_type or StatementFormat.FileType.CSV
+        posted = self.data.get(self.add_prefix("file_type")) if self.is_bound else None
+        if posted in StatementFormat.FileType.values:
+            self.shown_file_type = posted
+        for name in CSV_REQUIRED:
+            self.fields[name].required = self.shown_file_type == StatementFormat.FileType.CSV
+        # Not sent (a page drawn before the kind of file existed, a request
+        # written by hand): the format's own kind, never a guess.
+        self.fields["file_type"].required = False
+
+    @property
+    def reads_columns(self) -> bool:
+        """Whether the page draws a CSV's fields enabled."""
+        return self.shown_file_type == StatementFormat.FileType.CSV
 
     def clean_name(self):
         name = " ".join((self.cleaned_data.get("name") or "").split())
@@ -299,6 +356,15 @@ class StatementFormatForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+        if not cleaned.get("file_type") and "file_type" not in self.errors:
+            cleaned["file_type"] = self.instance.file_type or StatementFormat.FileType.CSV
+        file_type = cleaned.get("file_type")
+        if file_type and file_type != StatementFormat.FileType.CSV:
+            # None of a CSV's fields is read: a page without its script sent
+            # them all the same, and what it sent there says nothing.
+            for name in CSV_FIELDS:
+                self._errors.pop(name, None)
+            cleaned.update(CANONICAL)
         # A field refused already is said once, on itself: the check would
         # read its absence as a second refusal of a value nobody typed.
         if any(name in self.errors for name in FORMAT_FIELDS):
@@ -310,7 +376,8 @@ class StatementFormatForm(forms.ModelForm):
             self.add_error(error.field if error.field in self.fields else None, error.message)
             return cleaned
         # Stored as the page prints it: « 3,4 » and « 3 4 » are « 3, 4 ».
-        cleaned["label_columns"] = ", ".join(str(number + 1) for number in self.layout.labels)
+        if self.layout.file_type == StatementFormat.FileType.CSV:
+            cleaned["label_columns"] = ", ".join(str(number + 1) for number in self.layout.labels)
         return cleaned
 
     def _post_clean(self):

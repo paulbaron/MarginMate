@@ -1619,7 +1619,7 @@ def recognition_reapply(request):
 
 
 # -- « Format du relevé » ----------------------------------------------------------------------------------------
-# How a bank's CSV export is laid out (`StatementFormat`, read by
+# How a bank's export is read (`StatementFormat`, read by
 # bank/statements.py): the formats in their order - the first is the one an
 # import reads with when nobody chooses -, a new one, and one format's page.
 # Both forms carry « Tester »: a file picked on the page read with the format
@@ -1690,9 +1690,21 @@ class FormatRow:
     first: bool = False
     last: bool = False
 
+    @property
+    def reads_columns(self) -> bool:
+        """A CSV: its separator, dates and decimals mean something."""
+        return self.fmt.file_type == StatementFormat.FileType.CSV
+
+
+#: What the list says of the columns of a file that says where each datum is.
+COLUMNS_IN_THE_FILE = "lues dans le fichier"
+
 
 def _columns_said(fmt: StatementFormat) -> str:
-    """« date 1 · libellé 4 · montant 6 »: which column holds what."""
+    """« date 1 · libellé 4 · montant 6 »: which column holds what - « lues
+    dans le fichier » for an OFX or a CAMT.053 format, which names none."""
+    if fmt.file_type != StatementFormat.FileType.CSV:
+        return COLUMNS_IN_THE_FILE
     try:
         labels = ", ".join(str(number) for number in statements.label_columns(fmt.label_columns))
     except statements.FormatError:
@@ -1747,7 +1759,8 @@ class FormatTest:
     the operations the format reads there, or why it reads none."""
 
     file_name: str = ""
-    #: Why the file was not read at all: none chosen, too heavy, no CSV.
+    #: Why the file was not read at all: none chosen, too heavy, not a
+    #: statement file.
     problem: str = ""
     #: The first rows, each as wide as the widest (`width` cells).
     rows: list = field(default_factory=list)

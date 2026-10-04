@@ -1,5 +1,5 @@
-"""« Règles de la banque »: what reads one bank's statements - the layouts of
-its CSV export (« Format du relevé », `StatementFormat`), the rules that say
+"""« Règles de la banque »: what reads one bank's statements - how its export
+is read (« Format du relevé », `StatementFormat`), the rules that say
 what an operation is (« Reconnaissance des opérations », `OperationRule`)
 and the rules for the payments that never have an invoice (« Dépenses sans
 facture attendue », `IgnoreRule`).
@@ -62,6 +62,7 @@ KEY = "regles_banque"
 FORMAT_FIELDS = (
     "name",
     "position",
+    "file_type",
     "encoding",
     "delimiter",
     "date_format",
@@ -80,8 +81,15 @@ FORMAT_FIELDS = (
 # computer is « inchangé », not a conflict.
 FORMAT_COMPARED = tuple(name for name in FORMAT_FIELDS if name != "created_at")
 # No default in the model: a format the archive creates without one is
-# skipped with « valeur manquante ».
-FORMAT_REQUIRED = ("date_column", "label_columns")
+# skipped with « valeur manquante ». The date column is not one: blank since
+# bank/0009 (an OFX or a CAMT.053 format names no column), a CSV without one
+# is refused by the model's own check (`_check_format`).
+FORMAT_REQUIRED = ("label_columns",)
+# The kind of file of a format an archive written before bank/0009 holds:
+# every format was a CSV then. Said rather than « not said », or a
+# « Remplacer » would write that CSV's columns onto an OFX format of the
+# same name here, which stays OFX.
+FORMAT_FILE_TYPE_BEFORE_0009 = StatementFormat.FileType.CSV.value
 # The recognition rules like the formats: the name is the key and is
 # compared, the position too - the first rule of its kind that finds its
 # pattern decides.
@@ -128,6 +136,7 @@ FIELD_LABELS = {
     "searched": "cherché dans",
     "pattern": "motif",
     "position": "ordre",
+    "file_type": "type de fichier",
     "encoding": "encodage",
     "delimiter": "séparateur",
     "date_format": "format des dates",
@@ -322,12 +331,13 @@ class BankRulesSection(Section):
 
     # statement formats -------------------------------------------------------
     def _apply_formats(self, report, replacing: bool) -> None:
-        """How the bank lays out its CSV export (« Format du relevé »):
+        """How the bank's export is read (« Format du relevé »):
         configuration - one changed here is a conflict, kept. Every format
         written goes through the model's own check (`_check_format`), created
         or replaced: an archive may say any column and any account pattern.
         An archive saying nothing of them (written before bank/0007) leaves
-        them alone."""
+        them alone; a format saying no kind of file (written before
+        bank/0009) is a CSV, as every format was then."""
         if self._formats is None:
             return
         existing: dict[str, StatementFormat] = {}
@@ -336,6 +346,8 @@ class BankRulesSection(Section):
         created = []
         for record in self._formats:
             codec.note_unknown(report, record, FORMAT_FIELDS, where="formats de relevé › ")
+            if "file_type" not in record:
+                record = {**record, "file_type": FORMAT_FILE_TYPE_BEFORE_0009}
             name = record.get("name")
             key = name_key(name) if isinstance(name, str) else ""
             if not key:

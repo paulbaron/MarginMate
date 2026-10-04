@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Format du relevé - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -17,6 +18,7 @@
                     <tr>
                         <th class="num">Ordre</th>
                         <th>Nom</th>
+                        <th>Fichier</th>
                         <th>Colonnes</th>
                         <th>Séparateur</th>
                         <th>Dates</th>
@@ -45,10 +47,17 @@
                                     <p class="field-error">{{ row.problem }}</p>
                                 {% endif %}
                             </td>
+                            <td>{{ row.fmt.get_file_type_display }}</td>
                             <td>{{ row.columns }}</td>
-                            <td>{{ row.fmt.get_delimiter_display }}</td>
-                            <td>{{ row.fmt.get_date_format_display }}</td>
-                            <td>{{ row.fmt.get_decimal_mark_display }}</td>
+                            {% if row.reads_columns %}
+                                <td>{{ row.fmt.get_delimiter_display }}</td>
+                                <td>{{ row.fmt.get_date_format_display }}</td>
+                                <td>{{ row.fmt.get_decimal_mark_display }}</td>
+                            {% else %}
+                                <td>—</td>
+                                <td>—</td>
+                                <td>—</td>
+                            {% endif %}
                             <td class="row-actions">
                                 <a href="{% url 'bank:statement_format' row.fmt.pk %}" aria-label="Modifier « {{ row.fmt.name }} »">Modifier</a>
                                 <form method="post" action="{% url 'bank:statement_format' row.fmt.pk %}"
@@ -74,7 +83,7 @@
         <h2>Nouveau format</h2>
         <form method="post" action="{% url 'bank:statement_formats' %}#nouveau-format" enctype="multipart/form-data">
             {% csrf_token %}
-            {% include "_form_fields.html" with form=form %}
+            {% include "bank/_statement_format_fields.html" %}
             {% include "bank/_statement_format_file.html" %}
             {% comment %}
             « Tester » first: Enter in a field presses the form's first submit
@@ -89,4 +98,7 @@
     </div>
 
     {% include "bank/_statement_format_help.html" %}
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/statement_format.js' %}" defer></script>
 {% endblock %}

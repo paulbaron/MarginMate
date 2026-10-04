@@ -138,6 +138,7 @@ def echoed(text) -> str:
 UNICODE_MARKS = (codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 
 #: The fields a refusal of `check_format` names - the form's own.
+FILE_TYPE = "file_type"
 DATE_COLUMN, LABEL_COLUMNS = "date_column", "label_columns"
 AMOUNT_COLUMN, DEBIT_COLUMN, CREDIT_COLUMN = "amount_column", "debit_column", "credit_column"
 VALUE_DATE_COLUMN, BANK_TYPE_COLUMN = "value_date_column", "bank_type_column"
@@ -185,6 +186,10 @@ class Layout:
     value_date: int | None
     bank_type: int | None
     account: object | None
+    #: The kind of file (`StatementFormat.FileType`): only a CSV has columns
+    #: and an account pattern - an OFX or a CAMT.053 file says itself where
+    #: each datum is.
+    file_type: str = StatementFormat.FileType.CSV
 
     @property
     def width(self) -> int:
@@ -217,12 +222,25 @@ def label_columns(text) -> list[int]:
     return numbers
 
 
+def file_type_of(fmt) -> str:
+    """The kind of file `fmt` reads: a format saying none - a test's
+    namespace, a record written before migration 0009 - is a CSV, as every
+    format was until then."""
+    return getattr(fmt, FILE_TYPE, None) or StatementFormat.FileType.CSV
+
+
 def check_format(fmt) -> Layout:
     """The `Layout` of `fmt` (a StatementFormat, or any object carrying its
-    fields), or FormatError naming the field: a column outside 1..MAX_COLUMN,
-    a column given two roles, no amount or an amount said twice (one signed
-    column OR debits and credits), an unknown choice, an account pattern the
-    guard of `returnables.patterns` refuses."""
+    fields), or FormatError naming the field: an unknown kind of file, a
+    column outside 1..MAX_COLUMN, a column given two roles, no amount or an
+    amount said twice (one signed column OR debits and credits), an unknown
+    choice, an account pattern the guard of `returnables.patterns` refuses.
+    An OFX or a CAMT.053 format names no column and no account pattern: the
+    file says where each datum is, and whatever such a format holds in them
+    is not read."""
+    file_type = file_type_of(fmt)
+    if file_type not in StatementFormat.FileType.values:
+        raise FormatError(FILE_TYPE, "Type de fichier inconnu.")
     choices = (
         ("encoding", StatementFormat.Encoding, "Encodage inconnu."),
         ("delimiter", StatementFormat.Delimiter, "Séparateur inconnu."),
@@ -232,6 +250,23 @@ def check_format(fmt) -> Layout:
     for attribute, choice, refusal in choices:
         if getattr(fmt, attribute, None) not in choice.values:
             raise FormatError(attribute, refusal)
+    if file_type != StatementFormat.FileType.CSV:
+        return Layout(
+            name=str(getattr(fmt, "name", "") or ""),
+            encoding=fmt.encoding,
+            delimiter=fmt.delimiter,
+            date_format=fmt.date_format,
+            decimal_mark=fmt.decimal_mark,
+            date=None,
+            labels=(),
+            amount=None,
+            debit=None,
+            credit=None,
+            value_date=None,
+            bank_type=None,
+            account=None,
+            file_type=file_type,
+        )
 
     def column(attribute, *, required=False) -> int | None:
         value = getattr(fmt, attribute, None)
@@ -407,7 +442,9 @@ def _reading(content: bytes, layout: Layout):
     """The reader of `content` for `layout`: an object whose `lines()`
     yields `RawLine`s, whose `account` is final once they are all read, and
     whose `no_operation` is the sentence a file of none is refused with."""
-    return _CsvReading(content, layout)
+    if layout.file_type == StatementFormat.FileType.CSV:
+        return _CsvReading(content, layout)
+    raise ValueError(f"Ce type de fichier ne se lit pas : « {echoed(layout.file_type)} ».")
 
 
 class _CsvReading:
