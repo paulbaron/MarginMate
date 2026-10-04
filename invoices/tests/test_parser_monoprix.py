@@ -47,8 +47,7 @@ Garantie legale de conformite aupres
 """
 
 # The Dutch-language variant. 1.95 + 4.50 = 6.45 TTC. Note the date is
-# printed with a two-digit year and so is never read - the barcode is what
-# identifies this ticket.
+# printed with a two-digit year - the barcode is what identifies this ticket.
 DUTCH = """MONOPRIX
 024507308908260421161657
 DINAX
@@ -133,9 +132,42 @@ class MonoprixDutchTests(SimpleTestCase):
         self.assertEqual(total_ht + self.invoice.reconciliation_adjustment, Decimal("6.11"))
         self.assertEqual([c.label for c in self.invoice.checks if not c.passed], [])
 
-    def test_a_two_digit_year_is_not_guessed_at(self):
-        self.assertIsNone(self.invoice.invoice_date)
+    def test_a_two_digit_year_is_read(self):
+        self.assertEqual(self.invoice.invoice_date.isoformat(), "2026-04-21")
         self.assertEqual(self.invoice.invoice_number, "024507308908260421161657")
+
+
+# The other French layout: the date with a two-digit year, the till's count
+# of the day at the foot. 3 x 1.65 = 4.95 TTC, HT 4.69 + VAT 0.26.
+SHORT_YEAR = """MONOPRIX
+DIMAX
+12 RUE INVENTEE
+75000 PARIS
+Tel: 01 00 00 00 00
+07/05/26 - 10:52 714 71 5027
+OPERATION : VENTE
+T 3 X MENTHE FRAICHE  11 1.65 EUR  4.95 EUR
+TOTAL HORS PROMOTION :  4.95 EUR
+NOMBRE D'ARTICLES  3
+RESTE A PAYER  4.95 EUR
+CARTE  4.95 EUR
+VENTILATION PAR TAUX TVA
+CODE  TOT.HT  TAUX  T.V.A  T.T.C
+6  4.6919  5.50%  0.2581  4.95
+TOTAL TVA  0.2581  4.95
+TPV : 71, CAI : 714, TICKET : 5027
+"""
+
+
+class MonoprixShortYearTests(SimpleTestCase):
+    def test_the_count_of_the_day_takes_the_date_printed(self):
+        """ "TICKET : 5027" comes round: with the date unread it was filed
+        bare, and another day's 5027 refused as a duplicate of it."""
+        invoice = parse(SHORT_YEAR)
+        self.assertEqual(invoice.invoice_date.isoformat(), "2026-05-07")
+        self.assertEqual(invoice.invoice_number, "5027-20260507")
+        other_day = parse(SHORT_YEAR.replace("07/05/26", "21/04/26"))
+        self.assertEqual(other_day.invoice_number, "5027-20260421")
 
 
 class MonoprixFailureTests(SimpleTestCase):

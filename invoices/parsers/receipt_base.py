@@ -54,6 +54,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.utils import timezone
+
 from common import format_money, group_thousands
 
 from .base import InvoiceParser, ParseCheck, ParsedInvoice, PdfPage
@@ -113,6 +115,11 @@ RATE_RE = re.compile(r"(?<![\d.,])(\d{1,3})(?:[.,](\d{1,2}))?\s*%")
 # between a date and the time beside it: "Heure:14-07-202614:49:26".
 # With the guard, every Sabbh receipt came out with no date at all.
 DATE_RE = re.compile(r"(?<!\d)(\d{2})[-/.](\d{2})[-/.]((?:19|20)\d{2})")
+# "07/05/26 - 10:52", "le 09/06/26 a 11:37": a two-digit year, this
+# century's - Monoprix, Darty, Lidl print one. Only a date standing
+# alone, one separator twice: pairs of digits in a row are a phone number
+# ("01.99.00.42.17"), and « 1-2.79 » a count and a price.
+SHORT_DATE_RE = re.compile(r"(?<![\d.,/-])(\d{2})([-/.])(\d{2})\2(\d{2})(?!\d|\2\d)")
 # "19 mai 2026", "1er décembre 2025": a month spelled out, accents and case
 # as the document (or the recogniser) has them.
 # Abbreviated and in English too ("déc. 01", "Dec 02, 2024"): a platform
@@ -467,10 +474,12 @@ def read_rate(text: str) -> Decimal | None:
 
 
 def read_date(text: str, date_hint: date | None = None) -> date | None:
-    """All four shops print day first (15-07-2026, 28/01/2026); an invoice
+    """Tills print day first (15-07-2026, 28/01/2026, 07/05/26); an invoice
     may spell its month out ("19 mai 2026", "août 03, 2026"), and then that
-    is the first date it prints, before the day it will be debited."""
-    figures = DATE_RE.search(text)
+    is the first date it prints, before the day it will be debited. The
+    first date printed is the document's own: an appliance shop's « du 15/03/25 »
+    above « Garantie jusqu'au 14.03.2027 »."""
+    figures = _figure_dates(text)
     written_dates = [
         (match.start(), match.group(2), match.group(1), match.group(3)) for match in WRITTEN_DATE_RE.finditer(text)
     ] + [
@@ -478,19 +487,30 @@ def read_date(text: str, date_hint: date | None = None) -> date | None:
     ]
     for start, name, day, year in sorted(written_dates):
         month = MONTHS.get(_plain_month(name))
-        if month is None or (figures is not None and figures.start() < start):
+        if month is None or (figures and figures[0][0] < start):
             continue
         try:
             return date(int(year), month, int(day))
         except ValueError:
             continue
-    for match in DATE_RE.finditer(text):
-        day, month, year = (int(part) for part in match.groups())
+    for _start, day, month, year in figures:
         try:
             return date(year, month, day)
         except ValueError:
             continue
     return date_hint
+
+
+def _figure_dates(text: str) -> list[tuple[int, int, int, int]]:
+    """The dates printed in figures, in the order printed: (start, day,
+    month, year). A two-digit year past next year's is no date."""
+    found = [(match.start(), *(int(part) for part in match.groups())) for match in DATE_RE.finditer(text)]
+    latest = timezone.localdate().year + 1
+    for match in SHORT_DATE_RE.finditer(text):
+        day, _separator, month, year = match.groups()
+        if 2000 + int(year) <= latest:
+            found.append((match.start(), int(day), int(month), 2000 + int(year)))
+    return sorted(found)
 
 
 def _plain_month(name: str) -> str:
