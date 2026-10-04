@@ -199,10 +199,22 @@ def _resolve_stock_type_match(suggestion: dict) -> None:
     # to serialize one). Four decimals at most, what stock_equivalent holds:
     # « SAFRAN 0,25G » is 0.00025 kg, which « Approuver » refuses, and the
     # suggestion made again was the same.
+    exact = suggestion.get("stock_equivalent", 1)
     try:
-        suggestion["stock_equivalent"] = f"{round(float(suggestion.get('stock_equivalent', 1)), 4):g}"
+        factor = round(float(exact), 4)
     except (TypeError, ValueError):
-        suggestion["stock_equivalent"] = "1"
+        factor = 1
+    suggestion["stock_equivalent"] = f"{factor:g}"
+    if factor == 0:
+        # 0.04 g is 0.00004 kg, which four decimals make 0: no factor at all,
+        # left to a person - « Approuver » refused the 0, and the suggestion
+        # made again was the same, at every click.
+        suggestion["stock_equivalent"] = ""
+        suggestion["confidence"] = "low"
+        suggestion["reasoning"] += (
+            f" 1 produit = {_quantity_display(Decimal(str(exact)))} : plus fin que les 4 décimales d'un facteur, "
+            "à saisir."
+        )
 
 
 # --- Confidence -------------------------------------------------------------

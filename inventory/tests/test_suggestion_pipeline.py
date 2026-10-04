@@ -526,6 +526,36 @@ class ApproveSureSuggestionsTests(TestCase):
         self.assertEqual(made["stock_type_name"], "Safran")
         self.assertEqual(made["stock_equivalent"], "0.0003")
 
+    def test_a_suggested_factor_that_rounds_to_nothing_is_left_to_a_person(self):
+        """0.04 g is 0.00004 kg, which four decimals make 0: refused by
+        « Approuver », cleared, made again the same, at every click. It is
+        now suggested without a factor, never sure, and left as it is."""
+        spice = make_stock_type(name="Safran", unit=UnitChoices.KILOGRAM, category="Epicerie")
+        neighbour = make_product(
+            supplier=self.supplier, raw_name="SAFRAN 1G", stock_type=spice, stock_equivalent="0.001"
+        )
+        bought(neighbour)
+        product = make_product(supplier=self.supplier, raw_name="SAFRAN 0,04G")
+        bought(product)
+        made = suggest_for_product(product)
+        self.assertEqual((made["stock_type_name"], made["stock_equivalent"]), ("Safran", ""))
+        self.assertEqual(made["confidence"], "low")
+        self.assertIn("1 produit = 0.00004 : plus fin que les 4 décimales d'un facteur, à saisir", made["reasoning"])
+
+        # The panel asks for the factor rather than taking a blank one as 1.
+        page = self.client.get(reverse("inventory:review_queue"), **HTMX).content.decode()
+        self.assertRegex(page, r'name="stock_equivalent" inputmode="decimal"\s+value="" required>')
+        product.refresh_from_db()
+        stored = product.ai_suggestion
+        self.assertEqual(stored["stock_equivalent"], "")
+
+        for _click in range(2):
+            response = self.client.post(self.url)
+            self.assertIn("1 laissé(s) à classer, leur facteur étant à saisir.", self.message(response))
+            product.refresh_from_db()
+            self.assertIsNone(product.stock_type)
+            self.assertEqual(product.ai_suggestion, stored)
+
     def test_approving_everything_still_takes_every_confidence(self):
         products = [
             self.pending("RHUM A 70CL", self.rum, "high"),

@@ -1450,6 +1450,7 @@ def approve_all_suggestions(request):
     approved = 0
     remade = 0
     no_longer_sure = 0
+    no_factor = 0
     skip_reasons = Counter()
     for product in list(products):
         suggestion = product.ai_suggestion
@@ -1461,6 +1462,11 @@ def approve_all_suggestions(request):
             if only_sure and suggestion.get("confidence") != APPROVE_SCOPES[scope]:
                 no_longer_sure += 1
                 continue
+        if suggestion.get("stock_equivalent") == "":
+            # Suggested without a factor (finer than its column): a person's
+            # to type. Cleared, it would only be made again the same.
+            no_factor += 1
+            continue
         stock_equivalent = _parse_positive_decimal(str(suggestion.get("stock_equivalent", "")), default=None)
         stock_type = _resolve_suggestion_stock_type(suggestion)
 
@@ -1499,6 +1505,8 @@ def approve_all_suggestions(request):
         remade_note = f" {remade} suggestion(s) refaite(s) d'abord : les classements avaient changé."
     if no_longer_sure:
         remade_note += f" {no_longer_sure} laissé(s) à classer, leur suggestion refaite n'étant plus sûre."
+    if no_factor:
+        remade_note += f" {no_factor} laissé(s) à classer, leur facteur étant à saisir."
     if skipped:
         detail = ", ".join(f"{count} ({reason})" for reason, count in skip_reasons.most_common())
         messages.warning(
