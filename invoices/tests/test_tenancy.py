@@ -35,7 +35,7 @@ from accounts.tests.support import TwoTenantsTestCase
 from common import SERVER_ERROR
 from invoices import integrations
 from invoices.deletion import delete_invoice
-from invoices.integrations import TO_CONFIGURE
+from invoices.integrations import TO_CONFIGURE, TO_CONFIGURE_PLURAL
 from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
 from invoices.parsers import LLM_PARSER_KEY
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
@@ -138,7 +138,7 @@ class GateTests(TwoTenantsTestCase):
         self.client.force_login(self.user_b)
         create = reverse("invoices:invoice_type_create")
         page = self.client.get(create)
-        self.assertContains(page, TO_CONFIGURE)
+        self.assertContains(page, TO_CONFIGURE_PLURAL)
         self.assertNotContains(page, 'value="test"')
         with bound_tenant(self.bar_b):
             supplier = make_supplier(code="TRAITEUR_B", name="Traiteur Beta", parser_key="")
@@ -174,7 +174,7 @@ class GateTests(TwoTenantsTestCase):
                 with mock.patch("invoices.views.threading.Thread") as thread:
                     response = self.client.post(create, data, follow=True)
                 thread.assert_not_called()
-                self.assertContains(response, TO_CONFIGURE)
+                self.assertContains(response, TO_CONFIGURE_PLURAL)
         with bound_tenant(self.bar_b):
             self.assertEqual(InvoiceType.objects.count(), types_before)
             self.assertFalse(ScrapeJob.objects.exists())
@@ -231,7 +231,7 @@ class GateTests(TwoTenantsTestCase):
         self.assertNotContains(page, "+ Nouvelle source pour")
         self.assertNotContains(page, reverse("invoices:invoice_type_create"))
         self.assertNotContains(page, "ajoutez-en une (e-mail, espace client)")
-        self.assertContains(page, TO_CONFIGURE)
+        self.assertContains(page, TO_CONFIGURE_PLURAL)
         self.client.force_login(self.user_a)
         page = self.client.get(reverse("invoices:supplier_detail", args=[shop_a.pk]))
         self.assertContains(page, "+ Nouvelle source pour Epicerie Alpha")

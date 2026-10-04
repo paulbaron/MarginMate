@@ -266,7 +266,7 @@ class CallersTests(GuardCase):
         job.refresh_from_db()
         self.assertFalse(brought_in)
         self.assertIn(f"T0000000042.pdf : {ROUTED}", job.log)
-        self.assertNotIn("already imported", job.log)
+        self.assertNotIn("déjà importé", job.log)
         self.assertEqual(Slip.objects.count(), 1)
         self.assertNoInvoice()
 

@@ -8,7 +8,7 @@ from django.db.models import Q, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from common import JobLogMixin, group_thousands
+from common import JobLogMixin, group_thousands, job_line
 
 #: Which attachment of an e-mail is the invoice, by default. Since the
 #: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
@@ -1016,6 +1016,13 @@ class ScrapeJob(JobLogMixin):
         ordering = ["-started_at"]
 
     def append_log(self, message: str):
+        # As the espace reading it may read it (common.job_line): another
+        # bar's page never shows the server's paths or tracebacks. A line
+        # that was only a traceback there is not written at all.
+        cleaned = job_line(message)
+        if message and not cleaned:
+            return
+        message = cleaned
         # Timestamped so a slow run can actually be diagnosed after the fact
         # (which specific step took how long) instead of just knowing the
         # whole thing felt slow.
@@ -1026,6 +1033,9 @@ class ScrapeJob(JobLogMixin):
         self.save(update_fields=["log", "last_heartbeat"])
 
     def update_progress(self, supplier_code: str, label: str = "", **counts):
+        # A source's error or note is drawn on the gather's card: cleaned
+        # for the espace reading it, as the log is (common.job_line).
+        counts = {key: job_line(value) if isinstance(value, str) else value for key, value in counts.items()}
         entry = self.progress.setdefault(supplier_code, {"label": label, "found": 0, "imported": 0})
         if label:
             entry["label"] = label

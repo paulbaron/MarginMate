@@ -278,7 +278,7 @@ class GatherTests(TestCase):
 
         job, _ = self.gather(fetch, imported)
         self.assertEqual((job.status, job.invoices_created), (ScrapeJob.Status.SUCCESS, 0))
-        self.assertIn("already imported", job.log)
+        self.assertIn("déjà importé", job.log)
 
 
 class GatherCardTests(TestCase):

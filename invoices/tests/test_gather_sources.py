@@ -278,7 +278,7 @@ class EmailImportTests(TestCase):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{invoice_type.id}"})
         job.refresh_from_db()
         self.assertEqual((job.status, job.invoices_created), (ScrapeJob.Status.SUCCESS, 0))
-        self.assertIn("already imported", job.log)
+        self.assertIn("déjà importé", job.log)
 
     def test_the_emails_date_reaches_a_suppliers_own_reader(self):
         """A reader reading no date falls back on the email's: dropped on

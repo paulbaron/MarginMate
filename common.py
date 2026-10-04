@@ -4,6 +4,7 @@ Project-level rather than per-app because the problem below has now bitten
 three different formsets across three different apps.
 """
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -307,6 +308,79 @@ def error_for_page(exc: BaseException, *, said=(), log=None, what: str = "") -> 
     if log is not None:
         log.error("%s - montré comme « %s »", what or "Erreur", kind, exc_info=(type(exc), exc, exc.__traceback__))
     return kind
+
+
+# -- A job's log, as the espace that reads it may read it ---------------------------------------------------------
+
+#: Where a job's line goes whole when it was cleaned for the espace reading
+#: it: the server's own log (config/logs.py), with the espace's folder name.
+job_logger = logging.getLogger("marginmate.jobs")
+#: What stands for a path of the server outside the espace's own folders.
+SERVER_FILE = "[fichier du serveur]"
+#: Where a line stops being the person's: Python's traceback, and the native
+#: stack Selenium appends to a chromedriver error (with Chrome's own path).
+_TRACE_MARKERS = ("Traceback (most recent call last):", "Stacktrace:")
+#: A path's component: no space, no quote, nothing Windows refuses in a name.
+_PART = r"[^\s\"'<>|*?\\/]"
+#: Words with spaces between two separators (« Bar application gestion 2 »),
+#: so a folder name holding a space does not leave its end in the line.
+_MORE = rf"(?:(?: {_PART}+)+[\\/][^\s\"'<>|*?]*)*"
+_WINDOWS_PATH = re.compile(rf"(?<![\w])[A-Za-z]:[\\/][^\s\"'<>|*?]*{_MORE}")
+_UNC_PATH = re.compile(rf"\\\\{_PART}+\\[^\s\"'<>|*?]*{_MORE}")
+#: Two components at least, never inside a URL (« https://x.fr/a/b ») nor a
+#: date (« 01/02/2026 »): a slash after a letter, a digit, a colon, a dot or
+#: another slash starts no path.
+_POSIX_PATH = re.compile(r"(?<![\w.:/~\-\]])/(?:[^\s\"'<>|*?/]+/)+[^\s\"'<>|*?]*")
+
+
+def _own_folders(tenant) -> re.Pattern | None:
+    """The espace's own folder as a line may spell it - written, resolved,
+    with either separator - followed by its sub-folders: what is replaced so
+    that only the file's own name is left."""
+    from accounts import paths
+
+    try:
+        folder = paths.tenant_dir(tenant)
+    except Exception:  # noqa: BLE001 - no folder known: every path is the server's
+        return None
+    spellings = {str(folder), folder.as_posix()}
+    try:
+        resolved = folder.resolve()
+        spellings |= {str(resolved), resolved.as_posix()}
+    except OSError:
+        pass
+    roots = "|".join(re.escape(spelling) for spelling in sorted(spellings, key=len, reverse=True) if spelling)
+    return re.compile(rf"(?:{roots})(?:[\\/]{_PART}+)*[\\/]", re.IGNORECASE)
+
+
+def job_line(message: str) -> str:
+    """A line of a job's log (a gather, a source's « Tester », the till's
+    import) as the bound espace may read it. In the platform owner's espace
+    (`accounts.tenancy.server_accounts_allowed`) - and unbound - exactly as
+    written: the owner reads his own server's details. In any other espace,
+    whose pages show it: cut where a traceback or Selenium's stack starts, a
+    path inside the espace's own folders reduced to its file's name, and any
+    other absolute path of the server (« C:\\… », « \\\\… », « /… »)
+    written « [fichier du serveur] »; the line as written goes to the
+    server's log, under the espace's folder name (security audit LB-3)."""
+    from accounts.tenancy import current_tenant, server_accounts_allowed
+
+    tenant = current_tenant()
+    if tenant is None or server_accounts_allowed() or not message:
+        return message
+    cleaned = message
+    cut = min((cleaned.find(marker) for marker in _TRACE_MARKERS if marker in cleaned), default=-1)
+    if cut >= 0:
+        cleaned = cleaned[:cut]
+    own = _own_folders(tenant)
+    if own is not None:
+        cleaned = own.sub("", cleaned)
+    for pattern in (_UNC_PATH, _WINDOWS_PATH, _POSIX_PATH):
+        cleaned = pattern.sub(SERVER_FILE, cleaned)
+    cleaned = cleaned.rstrip()
+    if cleaned != message:
+        job_logger.warning("Espace %s, ligne de journal : %s", getattr(tenant, "dir_name", "?"), message)
+    return cleaned
 
 
 def search_key(text: str) -> str:

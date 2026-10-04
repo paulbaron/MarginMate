@@ -178,11 +178,11 @@ def _import_downloaded_file(
         parse_and_import(pdf_path, supplier, date_hint=date_hint, parser_key_override=parser_key_override)
         return True
     except DuplicateInvoiceError:
-        job.append_log(f"Skipped {pdf_path} (already imported)")
+        job.append_log(f"Ignoré : {pdf_path} (déjà importé)")
         return False
     except Exception as exc:  # noqa: BLE001 - one bad PDF shouldn't fail the whole batch
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Failed to import {pdf_path}: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec de l'import de {pdf_path} : {detail}\n{traceback.format_exc()}")
         return False
 
 
@@ -261,8 +261,12 @@ def gather_invoices_task(
             found, imported = _gather_metro(job, metro_supplier, start, end, metro_now)
             found_total += found
             created_total += imported
-        elif metro_supplier is None:
-            job.append_log("Metro supplier is not configured as scrapable, skipping.")
+        elif source_codes is not None and "METRO" in source_codes:
+            # Said only when Metro was asked for: every other gather never
+            # meant to search it.
+            job.append_log(
+                "Metro : la récupération automatique est désactivée pour ce fournisseur, rien n'est cherché."
+            )
 
         email_types = list(
             InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.EMAIL).select_related(
@@ -277,7 +281,7 @@ def gather_invoices_task(
 
             source = getattr(invoice_type, "email_source", None)
             if source is None:
-                job.append_log(f"{invoice_type.name}: no email source configured, skipping.")
+                job.append_log(f"{invoice_type.name} : aucune recherche de boîte mail réglée, source ignorée.")
                 continue
 
             start = start_date or suggested_start_date(invoice_type.supplier.code)
@@ -311,7 +315,7 @@ def gather_invoices_task(
                 continue
             source = getattr(invoice_type, "website_source", None)
             if source is None:
-                job.append_log(f"{invoice_type.name}: no website configured, skipping.")
+                job.append_log(f"{invoice_type.name} : aucun espace client réglé, source ignorée.")
                 continue
             start = start_date or suggested_start_date(invoice_type.supplier.code)
             if job.range_start is None or start < job.range_start:
@@ -332,7 +336,7 @@ def gather_invoices_task(
         job.status = ScrapeJob.Status.CANCELLED
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Gather run failed: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Récupération interrompue par une erreur : {detail}\n{traceback.format_exc()}")
         # The card shows the log's last line in plain view: the reason, not
         # the traceback's last frame.
         job.append_log(f"Échec de la récupération : {detail[:300]}")
@@ -602,7 +606,7 @@ def _import_document_file(
     from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
-        job.append_log(f"Skipped {path}: another document was being read for too long")
+        job.append_log(f"Ignoré : {path} (un autre document était en lecture depuis trop longtemps)")
         return False
     try:
         # What the document teaches its supplier is recorded as coming from
@@ -625,11 +629,11 @@ def _import_document_file(
         job.append_log(f"{os.path.basename(path)} : {exc}")
         return False
     except DuplicateInvoiceError:
-        job.append_log(f"Skipped {path} (already imported)")
+        job.append_log(f"Ignoré : {path} (déjà importé)")
         return False
     except Exception as exc:  # noqa: BLE001 - one bad file shouldn't fail the whole gather
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Failed to import {path}: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec de l'import de {path} : {detail}\n{traceback.format_exc()}")
         return False
     finally:
         OCR_LOCK.release()
@@ -669,7 +673,7 @@ def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, star
         job.status = ScrapeJob.Status.FAILED
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Test failed: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec du test : {detail}\n{traceback.format_exc()}")
         job.status = ScrapeJob.Status.FAILED
     finally:
         job.finished_at = timezone.now()
@@ -730,7 +734,7 @@ def test_email_pattern_task(
             job.append_log("Annulé par l'utilisateur.")
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Test failed: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec du test : {detail}\n{traceback.format_exc()}")
         job.status = ScrapeJob.Status.FAILED
     finally:
         job.finished_at = timezone.now()
