@@ -28,7 +28,7 @@ from unittest import mock
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 
 from accounts import paths
@@ -55,7 +55,7 @@ from tests.factories import (
 )
 from transfer import archive, keys, registry
 from transfer.archive import ArchiveError, ArchiveReader
-from transfer.runner import run_clear
+from transfer.runner import run_clear, run_import
 from transfer.sections import invoices as section
 from transfer.sections import stock_takes
 from transfer.sections.base import Strategy
@@ -1581,6 +1581,68 @@ class FilelessDocumentDeletedTests(MediaMixin, TestCase):
         self.addCleanup(old.close)
         import_archive(old, MERGE)
         self.assertEqual(self.state(), [("250.00", 1), ("30.00", 0)])
+
+
+def swap_products_after_export(test) -> ArchiveReader:
+    """X-1 on Q and Y-2 on P, exported; then X-1 moved onto P and Y-2 onto
+    R. Restoring X-1 first leaves P unused - until Y-2 is restored onto it."""
+    metro = Supplier.objects.get(code="METRO")
+    p, q, r = (make_product(metro, f"PROD ESSAI {name}") for name in "PQR")
+    x = make_invoice(metro, invoice_number="X-1", invoice_date=date(2026, 9, 1), status=COMPLETE)
+    y = make_invoice(metro, invoice_number="Y-2", invoice_date=date(2026, 9, 2), status=COMPLETE)
+    on_x = make_invoice_line(x, q, quantity=D("1"), total_ht="5.00")
+    on_y = make_invoice_line(y, p, quantity=D("1"), total_ht="7.00")
+    reader = export_archive({"factures"}, closed=False)
+    test.addCleanup(reader.close)
+    InvoiceLine.objects.filter(pk=on_x.pk).update(product=p)
+    InvoiceLine.objects.filter(pk=on_y.pk).update(product=r)
+    return reader
+
+
+def lines_by_number() -> list:
+    return sorted(InvoiceLine.objects.values_list("invoice__invoice_number", "product__raw_name"))
+
+
+class ProductMovedBetweenDocumentsTests(MediaMixin, TestCase):
+    """« Remplacer » removed a product as unused after each document: P,
+    freed by X-1, was deleted - and Y-2, restored next, was handed the same
+    P by the run's resolver, its line pointing at a row gone (review,
+    04/10/2026)."""
+
+    def test_a_replace_keeps_the_product_a_later_document_takes_back(self):
+        reader = swap_products_after_export(self)
+        run = import_archive(reader, {"factures": REPLACE})
+        connection.check_constraints()
+        self.assertEqual(lines_by_number(), [("X-1", "PROD ESSAI Q"), ("Y-2", "PROD ESSAI P")])
+        # R alone is left unused, and goes.
+        self.assertEqual(run.section("factures").tallies["produits"].deleted, 1)
+        self.assertEqual(
+            sorted(
+                Product.objects.filter(supplier__code="METRO", raw_name__startswith="PROD ESSAI").values_list(
+                    "raw_name", flat=True
+                )
+            ),
+            ["PROD ESSAI P", "PROD ESSAI Q"],
+        )
+
+
+class ProductMovedBetweenDocumentsConfirmTests(MediaMixin, TransactionTestCase):
+    """The same, previewed then confirmed for real: the preview is rolled
+    back, which never checks SQLite's deferred foreign keys, so it said 2
+    products deleted and the confirm then failed at its commit, « L'import
+    a échoué, rien n'a été changé », every time."""
+
+    # The suppliers the migrations seed must still be there for the tests
+    # that run after this one.
+    serialized_rollback = True
+
+    def test_the_confirm_commits(self):
+        reader = swap_products_after_export(self)
+        strategies = {"factures": REPLACE}
+        preview = run_import(reader, strategies, preview=True)
+        report = run_import(reader, strategies, preview=False, expected=preview)
+        self.assertEqual(report.section("factures").tallies["produits"].deleted, 1)
+        self.assertEqual(lines_by_number(), [("X-1", "PROD ESSAI Q"), ("Y-2", "PROD ESSAI P")])
 
 
 class TwinProductsTests(MediaMixin, TestCase):

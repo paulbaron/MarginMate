@@ -482,6 +482,9 @@ class InvoicesSection(Section):
         # (invoice, rank, line): lines a replace removes, held for now by a
         # count this run's « Inventaires » prune deletes - removed by prune.
         self.released_lines: list[tuple] = []
+        # Products a rewritten or removed line stopped using: removed when
+        # unused once the apply, or the prune, is over (`_remove_unused`).
+        self.unused: set[int] = set()
 
     def apply(self, ctx, report) -> None:
         self._ctx, self._report = ctx, report
@@ -509,6 +512,7 @@ class InvoicesSection(Section):
         # document of the archive then takes.
         self._update(matched)
         self._create(new)
+        self._remove_unused(report, self._products)
 
     # .. checking a record ..........................................................
     def _load_products(self) -> dict[tuple[str, str], dict]:
@@ -875,7 +879,6 @@ class InvoicesSection(Section):
         paired by rank and updated in place - never a line a stock take was
         priced from into another purchase (`_trail_kept`)."""
         from inventory.models import StockMovement, StockTakeLineSource
-        from invoices.deletion import remove_orphan_products
         from invoices.models import Invoice, InvoiceLine
 
         report = self._report
@@ -961,9 +964,29 @@ class InvoicesSection(Section):
         self._settle_products(doc, products)
         self._ctx.dirty.lines.update(line.pk for line in lines[: len(doc.lines)])
         self._ctx.dirty.lines.update(line.pk for line in new_lines)
-        removed = remove_orphan_products(set(previous.values()))
+        # Not removed here: a document after this one may take it back.
+        self.unused.update(previous.values())
+
+    def _remove_unused(self, report, resolver=None) -> None:
+        """The products the lines rewritten or removed stopped using, gone
+        if nothing uses them now - once, at the end: removed after each
+        document, one freed by the first and taken back by the next was
+        deleted under it, and the run's resolver still handed it out - its
+        line pointing at a row gone, the confirm failing at its commit after
+        a clean preview (review, 04/10/2026). `resolver` forgets those gone."""
+        from inventory.models import Product
+        from invoices.deletion import remove_orphan_products
+
+        if not self.unused:
+            return
+        candidates, self.unused = self.unused, set()
+        removed = remove_orphan_products(candidates)
         if removed:
             report.deleted("produits", removed)
+            if resolver is not None:
+                resolver.forget(
+                    candidates - set(Product.objects.filter(pk__in=candidates).values_list("pk", flat=True))
+                )
 
     # .. documents new here ..........................................................
     def _create(self, new: list) -> None:
@@ -1038,6 +1061,7 @@ class InvoicesSection(Section):
         ids = [pk for pk in Invoice.objects.order_by("id").values_list("id", flat=True) if pk not in self.named]
         if ids:
             _remove(ctx, report, ids, set())
+        self._remove_unused(report)
 
     def _remove_released_lines(self, report) -> None:
         """The lines `_replace` left to this prune: the counts that held them
@@ -1045,7 +1069,6 @@ class InvoicesSection(Section):
         only a hand-edited archive names a line its invoice does not have -
         stays, said, rather than break that count's trail."""
         from inventory.models import StockMovement, StockTakeLineSource
-        from invoices.deletion import remove_orphan_products
         from invoices.models import InvoiceLine
 
         if not self.released_lines:
@@ -1070,9 +1093,7 @@ class InvoicesSection(Section):
         StockMovement.objects.filter(invoice_line__in=gone).delete()
         InvoiceLine.objects.filter(pk__in=[line.pk for line in gone]).delete()
         report.deleted("lignes", len(gone))
-        removed = remove_orphan_products({line.product_id for line in gone})
-        if removed:
-            report.deleted("produits", removed)
+        self.unused.update(line.product_id for line in gone)
 
     # -- clear --------------------------------------------------------------------------
     def clear(self, ctx, report) -> None:

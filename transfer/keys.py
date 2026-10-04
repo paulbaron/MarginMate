@@ -164,6 +164,15 @@ class ProductResolver:
         if all(other.pk != product.pk for other in folded):
             folded.append(product)
 
+    def forget(self, product_ids: Iterable[int]) -> None:
+        """Products the run deleted (`remove_orphan_products`): handed out
+        still, a line pointed at a row gone and the import failed at its
+        commit (review, 04/10/2026)."""
+        gone = set(product_ids)
+        self._exact = {key: product for key, product in self._exact.items() if product.pk not in gone}
+        for products in self._folded.values():
+            products[:] = [product for product in products if product.pk not in gone]
+
     def resolve(self, supplier, raw_name: str):
         if supplier is None or not isinstance(raw_name, str):
             return None
