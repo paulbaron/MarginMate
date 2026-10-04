@@ -121,7 +121,7 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
         """A real one is a few hundred KB. Under the archive's bounds (256 MB,
         25 million values), « {"products": [[], [], …]} » parsed into some
         0.9 GB before its shape was even looked at (review, 04/10/2026):
-        refused unread, as not that file, past either of its own."""
+        refused unread past either of its own, and said so."""
         before = set(staging.staging_dir().iterdir())
         many = b'{"version": 1, "products": [' + b",".join([b"[]"] * staging.MAX_LEGACY_VALUES) + b"]}"
         padded = b'{"version": 1, "products": []' + b" " * staging.MAX_LEGACY_BYTES + b"}"
@@ -132,7 +132,7 @@ class StageUploadTests(FakeSectionsMixin, TestCase):
                 self.assertRaises(ArchiveError) as caught,
             ):
                 staging.stage_upload(SimpleUploadedFile("marginmate-associations.json", raw))
-            self.assertEqual(str(caught.exception), archive.NOT_ZIP_NOR_JSON)
+            self.assertEqual(str(caught.exception), "Export d'associations refusé : il est trop gros (16 Mo au plus).")
         self.assertEqual(set(staging.staging_dir().iterdir()), before)
 
     def test_too_big(self):

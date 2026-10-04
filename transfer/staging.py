@@ -55,6 +55,7 @@ TOO_BIG = "Archive trop grosse ({size} Go, 4 Go au plus)."
 NO_SPACE = "Pas assez de place sur le disque pour préparer l'import."
 LEGACY_UNAVAILABLE = "Les anciens fichiers d'associations ne peuvent pas encore être importés ici."
 LEGACY_UNENCODABLE = "Export d'associations refusé : il contient un caractère invalide."
+LEGACY_TOO_BIG = "Export d'associations refusé : il est trop gros (16 Mo au plus)."
 #: An old associations export is a few hundred KB, about ten values a
 #: product: bounds of its own, far under the archive's (256 MB, 25 million
 #: values - some 0.9 GB parsed, review 04/10/2026), checked before it is read.
@@ -236,10 +237,10 @@ def stage_upload(upload) -> Stage:
 
 def _stage_legacy(token: str, path: Path, raw: Path) -> Stage:
     if raw.stat().st_size > MAX_LEGACY_BYTES:
-        raise ArchiveError(archive.NOT_ZIP_NOR_JSON)
+        raise ArchiveError(LEGACY_TOO_BIG)
     data = raw.read_bytes()
     if archive.json_values_bound(data) > MAX_LEGACY_VALUES:
-        raise ArchiveError(archive.NOT_ZIP_NOR_JSON)
+        raise ArchiveError(LEGACY_TOO_BIG)
     try:
         text = data.decode("utf-8-sig")
         payload = json.loads(text, parse_constant=archive._refuse_constant)
