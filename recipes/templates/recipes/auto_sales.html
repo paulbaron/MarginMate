@@ -9,14 +9,15 @@
     </div>
 </div>
 
-{% if refused %}
-    {% comment %}
-    No source this espace may use - unbound, or another bar whose own
-    L'Addition account is not on its « Identifiants » (recipes/sales_sources.py):
-    the sentence and no form - the POST routes answer 403 all the same.
-    {% endcomment %}
-    <div class="message">{{ refused }}</div>
-{% else %}
+{% comment %}
+No source this espace may use - unbound, or another bar whose own
+L'Addition account is not on its « Identifiants » (recipes/sales_sources.py):
+the sentence, and no new rule's form - its POST answers 403. The rules
+already there are listed, and still switched off or deleted, in any bound
+espace; unbound (`blocked`) nothing is.
+{% endcomment %}
+{% if refused %}<div class="message">{{ refused }}</div>{% endif %}
+{% if not blocked %}
     {% if not sending_enabled %}
         <p class="message message-warning">Serveur de développement : aucun import ne part d'ici.</p>
     {% endif %}

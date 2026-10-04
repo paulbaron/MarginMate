@@ -1275,9 +1275,8 @@ class AutoGatherForm(forms.Form):
             raise forms.ValidationError(
                 [f"« {source['label']} » : {source.get('reason') or 'à la main seulement'}." for source in refused]
             )
-        if not codes:
-            raise forms.ValidationError(AUTO_NO_SOURCE)
-        # In the order the page offers them.
+        # In the order the page offers them. None at all is refused for an
+        # active rule only (`clean`).
         return [source["code"] for source in self.offered if source["code"] in codes]
 
     def clean_weekdays(self):
@@ -1297,6 +1296,11 @@ class AutoGatherForm(forms.Form):
         start, end = cleaned.get("start_time"), cleaned.get("end_time")
         if start is not None and end is not None and end < start:
             self.add_error("end_time", AUTO_END_BEFORE_START)
+        # A rule switched off may keep no source: another bar whose mailbox
+        # left its « Identifiants » is offered none, and could otherwise
+        # only delete its rules, never stop them.
+        if cleaned.get("sources") == [] and cleaned.get("is_active"):
+            self.add_error("sources", AUTO_NO_SOURCE)
         codes, every = cleaned.get("sources"), cleaned.get("every_minutes")
         if codes and every is not None:
             kinds = {source["kind"] for source in self.offered if source["code"] in codes}

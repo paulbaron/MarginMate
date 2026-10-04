@@ -61,6 +61,7 @@ from recipes.models import (
     RecipeSale,
     SaleDocument,
     SaleDocumentLine,
+    SalesImportJob,
     variation_scope,
 )
 from tests.factories import (
@@ -412,6 +413,36 @@ class TillWindowTests(TestCase):
         sold(self.soda, 2, D2)
         self.assertEqual(self.read().base[self.syrup.pk].available, Decimal("1"))
 
+    def test_till_files_continuing_the_coverage_carry_the_window_on(self):
+        """L'Addition fetched up to REF − 10, the days after uploaded as till
+        files on « Ventes » (a bar filling days by file, or one that left
+        L'Addition): the window runs on through the files that continue it
+        - never across a gap, never a failed one, never past the last
+        complete day when it was read - and L'Addition's own coverage, where
+        its imports start, stays where it was."""
+        covered(REF - 10 * DAY)
+        for day, quantity in ((REF - 12 * DAY, 2), (REF - 6 * DAY, 4), (REF - 2 * DAY, 8)):
+            sold(self.soda, quantity, day)
+
+        def a_file(first, last, status=SalesImportJob.Status.SUCCESS):
+            job = SalesImportJob.objects.create(
+                source=SalesImportJob.FILE, status=status, range_start=first, range_end=last
+            )
+            # Read on the page's day: its last complete day is REF.
+            SalesImportJob.objects.filter(pk=job.pk).update(started_at=NOW, finished_at=NOW)
+
+        a_file(REF - 7 * DAY, REF - 5 * DAY)  # after a gap (REF − 9, REF − 8)
+        self.assertEqual(self.read().until, REF - 10 * DAY)
+        a_file(REF - 9 * DAY, REF - 8 * DAY)  # the gap filled
+        self.assertEqual(self.read().until, REF - 5 * DAY)
+        a_file(REF - 4 * DAY, REF - DAY, status=SalesImportJob.Status.FAILED)
+        self.assertEqual(self.read().until, REF - 5 * DAY)
+        a_file(REF - 5 * DAY, TODAY)  # today is not over
+        read = self.read()
+        self.assertEqual((read.until, read.data.covered_until), (REF, REF))
+        self.assertEqual(read.data.series[self.syrup.pk][-1], (REF - 2 * DAY, 0.4))
+        self.assertEqual(auto_sales.covered_until(sales_sources.LADDITION), REF - 10 * DAY)
+
     def test_a_lagging_import_is_said_stale_on_the_plan(self):
         covered(REF - 10 * DAY)
         sold(self.soda, 2, D1)
@@ -594,10 +625,11 @@ class QueryCountTests(TestCase):
     #: What `prepare` reads with the till off: the scan, the articles, the
     #: suppliers, the products' names, the exclusions.
     TILL_OFF_QUERIES = 5
-    #: And with it on: the night and the coverage, the window's recipe
+    #: And with it on: the night and the coverage, the till's files that
+    #: continue it (`auto_sales.till_covered_until`), the window's recipe
     #: sales and sale-document lines, the till's first day (two), and the
     #: engine's reading of the recipes inside one variation_scope.
-    TILL_ON_QUERIES = 20
+    TILL_ON_QUERIES = 21
 
     def setUp(self):
         covered(REF)

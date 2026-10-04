@@ -65,6 +65,13 @@ class LadditionNotAllowed(LadditionAuthError):
     Carries a French sentence and no variable name."""
 
 
+class LadditionBrowsersBusy(LadditionAuthError, chrome.BrowsersBusy):
+    """Another bar found no browser of the server free (chrome.BROWSERS_BUSY),
+    before anything signed in: a till refusal said as it is, which an
+    automatic import tells apart (`chrome.BrowsersBusy`) to give its slot
+    back instead of failing (recipes/tasks.py)."""
+
+
 def _refuse_unless_allowed() -> None:
     """The last guard, wherever the session is opened from: before any
     browser starts, before any password is read."""
@@ -284,7 +291,7 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
     if till_login_missing():
         raise LadditionAuthError(TILL_LOGIN_MISSING)
     # One of the server's browsers, or a refusal at once (scrapers/chrome.py).
-    with chrome.browser_slot(refused=LadditionAuthError):
+    with chrome.browser_slot(refused=LadditionBrowsersBusy):
         driver = build_driver(download_dir)
         try:
             open_report(driver, path, log=log)

@@ -43,7 +43,7 @@ from django.utils import timezone
 from accounts import paths
 from recipes import auto_sales
 from recipes.importing import claim_sales_import
-from recipes.integration import refusal, require_tenant_for_command, till_allowed
+from recipes.integration import refusal, require_tenant_for_command, till_allowed, till_commands_shown
 from recipes.models import SalesImportJob
 from recipes.pos.laddition_download import DownloadCancelled, LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_session import LadditionAuthError
@@ -52,13 +52,21 @@ from recipes.sales_sources import LADDITION
 from recipes.tasks import fail, payments_log, store_reading
 
 BUSY = "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
-#: The first line of the command's job, as the Ventes tab shows it.
+#: The first line of the command's job, as the Ventes tab shows it - in the
+#: platform owner's espace (`till_commands_shown`); any other bar's tab names
+#: no server command (SERVER_NOTE).
 COMMAND_NOTE = "Lancé par la commande laddition_import."
+SERVER_NOTE = "Lancé depuis le serveur."
 CANCELLED = "Annulé depuis l'application."
 #: What the server's log calls a failure of the command's job.
 COMMAND_FAILED = "Commande laddition_import"
 #: What the command's job saves when it ends.
 END_FIELDS = ["status", "finished_at", "items_sold", "recorded", "unmatched"]
+
+
+def _note() -> str:
+    """The job's first line: the command named where a page may name it."""
+    return COMMAND_NOTE if till_commands_shown() else SERVER_NOTE
 
 
 def _as_date(value: str) -> date:
@@ -108,7 +116,7 @@ class Command(BaseCommand):
             raise CommandError(refusal())
         # The lock the page and the scheduler take (a dead run reaped first,
         # so that it does not hold this up for ever).
-        job = claim_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL, notes=[COMMAND_NOTE])
+        job = claim_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL, notes=[_note()])
         if not isinstance(job, SalesImportJob):  # None: another import runs (no plan, so never a sentence)
             raise CommandError(BUSY)
         if options["no_headless"]:

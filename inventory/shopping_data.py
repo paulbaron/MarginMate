@@ -255,13 +255,14 @@ def read_till(purchases: Iterable[shopping.PurchaseRow], now: datetime) -> TillR
 
     `purchases` are `purchase_rows`: they give the attribution its capacity
     (the window's purchases, floored at 0) and its costs, with no query."""
-    from recipes import auto_sales, sales_sources
+    from recipes import auto_sales
     from recipes.models import RecipeSale, SaleDocumentLine, variation_scope
 
     from .variance import attribute_sales, read_sales
 
     ref = auto_sales.last_complete_day(now)
-    covered = auto_sales.covered_until(sales_sources.LADDITION)
+    # L'Addition's coverage, carried on by the till's files that continue it.
+    covered = auto_sales.till_covered_until()
     after = ref - timedelta(days=shopping.TILL_WINDOW_DAYS)
     until = ref if covered is None else min(covered, ref)
     if until <= after:

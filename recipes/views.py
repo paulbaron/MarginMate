@@ -368,9 +368,8 @@ def sales_import(request):
 def trigger_sales_import(request):
     if request.method != "POST":
         return redirect(sales_list_url(request))
-    # The server's L'Addition account is the owner's (recipes/integration.py):
-    # the tab draws no form elsewhere, and a post from a page drawn before, or
-    # crafted, is refused here.
+    # Unbound, no espace's account may be used (recipes/integration.py): a
+    # crafted post is refused here.
     if not till_allowed():
         messages.error(request, refusal())
         return redirect(sales_list_url(request))

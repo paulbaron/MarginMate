@@ -303,27 +303,28 @@ class RefusalTests(SimpleTestCase):
     def test_comments_never_closed_are_refused_in_linear_time(self):
         """`<!--.*?-->` scanned to the end of the file for every comment
         left open: 160 KB took a minute, an 8 Mo file some forty hours of a
-        request thread (review, 04/10/2026)."""
+        request thread (review, 04/10/2026). Each bound here is this
+        process's CPU time: the suite's --parallel stretches the wall clock."""
         for content in (b"<OFX>" + b"<!--" * 75_000, sgml() + b"<!-- " + b"x" * 300_000, b"<OFX><!-- -->" * 30_000):
             with self.subTest(content=content[:20]):
-                started = time.perf_counter()
+                started = time.process_time()
                 self.assertEqual(refusal(content), ofx.NOT_OFX)
-                self.assertLess(time.perf_counter() - started, 1)
+                self.assertLess(time.process_time() - started, 1)
 
     def test_operations_under_unknown_elements_are_read_each_leaf_at_once(self):
         """A leaf looks up its nearest known aggregates - kept apart, never
         searched for among every element open: that pass, a leaf, took five
         seconds on an 8 Mo file of leaves sixty unknown elements deep."""
         content = sgml().replace(b"<BANKTRANLIST>", b"<BANKTRANLIST>" + b"<A>" * 50 + b"<B>x" * 300_000, 1)
-        started = time.perf_counter()
+        started = time.process_time()
         self.assertEqual(brief(read(content)), READ)
-        self.assertLess(time.perf_counter() - started, 5)
+        self.assertLess(time.process_time() - started, 5)
 
     def test_elements_nested_past_any_statement_are_refused_at_once(self):
         content = sgml().replace(b"<BANKTRANLIST>", b"<BANKTRANLIST>" + b"<A>" * 200_000, 1)
-        started = time.perf_counter()
+        started = time.process_time()
         self.assertEqual(refusal(content), ofx.NOT_OFX)
-        self.assertLess(time.perf_counter() - started, 2)
+        self.assertLess(time.process_time() - started, 2)
 
     def test_a_file_with_no_operation_names_its_format(self):
         self.assertEqual(refusal(sgml(())), "Aucune opération trouvée dans ce relevé OFX (format « Relevé OFX »).")

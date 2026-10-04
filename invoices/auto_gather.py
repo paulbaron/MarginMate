@@ -30,7 +30,9 @@ What each tick does for the bound espace, in this order:
   - « sautée : boîte mail à renseigner sur la page Identifiants » -
     another bar whose « Identifiants » do not hold its mailbox
     (`integrations.mailbox_offered`): nothing signs in, ever with the
-    owner's;
+    owner's; « en attente : identifiants momentanément illisibles » when
+    they could not be read at all for a moment (accounts.vault.BUSY): the
+    slot is given back (automation.Retry), not skipped;
   - « sautée : aucune source disponible » - none of its sources is offered
     to an automatic gather any more (`workspace.gather_sources`: the
     mailbox's invoice sources and slip formats only, never Metro nor a
@@ -167,8 +169,12 @@ def _unreadable(rule: AutoGather, now) -> str:
 def _start(rule: AutoGather, now) -> str | None:
     """The slot's gather, through the one start of a gather: None when
     another gather is active (nothing created). Another bar's gather waits
-    for its mailbox on its « Identifiants » - its store read once here."""
+    for its mailbox on its « Identifiants » - its store read once here -,
+    and for its store to be readable (automation.Retry: a file held for a
+    moment is no mailbox missing)."""
     state = None if server_accounts_allowed() else vault.load()
+    if state is not None and state.problem == vault.BUSY:
+        raise automation.Retry(automation.CREDENTIALS_BUSY)
     if not integrations.mailbox_offered(state):
         return MAILBOX_TO_FILL
     codes = available_codes(rule, state=state)

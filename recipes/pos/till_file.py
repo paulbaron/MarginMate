@@ -74,6 +74,7 @@ import codecs
 import csv
 import io
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -402,7 +403,7 @@ def check_format(fmt) -> Layout:
 class Table:
     """A file's rows, each (its number as a person reads it, its cells)."""
 
-    rows: object
+    rows: Iterator[tuple[int, list]]
     xlsx: bool = False
     date1904: bool = False
 

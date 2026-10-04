@@ -26,8 +26,11 @@ One rule's tick (`run_rule`):
     the kind's « en attente : … », so the next tick tries again until it
     starts or passes its limit; a DatabaseError (the espace locked past the
     scheduler's short wait: nothing was created) gives it back too, « en
-    attente : base occupée »; anything else is logged with its traceback,
-    « échec : erreur interne à HH:MM », the slot kept.
+    attente : base occupée »; so does a `Retry` the launch raises before it
+    created anything, saying its own « en attente : … » (one of `WAITS`:
+    another bar's « Identifiants » that could not be read for a moment, the
+    server's browsers all taken by other bars); anything else is logged
+    with its traceback, « échec : erreur interne à HH:MM », the slot kept.
 
 `run_each` runs every active rule of a kind, each in its own try: one rule
 raising is logged and the next one runs all the same.
@@ -51,6 +54,31 @@ DEV_SERVER = "sautée : serveur de développement"
 DEPLOYING = "sautée : mise à jour du site en cours"
 UNREADABLE = "sautée : jours ou heures illisibles"
 BUSY = "en attente : base occupée"
+#: Another bar's « Identifiants » could not be read at the slot
+#: (accounts.vault.BUSY: a save, a backup or an antivirus holding the file) -
+#: not « à renseigner »: they are there.
+CREDENTIALS_BUSY = "en attente : identifiants momentanément illisibles"
+#: Another bar's run would find every browser of the server taken by the
+#: other bars' (invoices/scrapers/chrome.py) and be refused at once.
+BROWSERS_BUSY = "en attente : navigateurs du serveur occupés"
+#: What a `Retry` may say while it waits → what the slot says once past its
+#: catch-up limit, « {at} » its time.
+WAITS = {
+    CREDENTIALS_BUSY: "manquée : identifiants illisibles à {at}",
+    BROWSERS_BUSY: "manquée : navigateurs du serveur occupés à {at}",
+}
+
+
+class Retry(Exception):
+    """Raised by a kind's `start` BEFORE it created anything: the slot is
+    given back and the sentence said - a key of WAITS -, the next tick tries
+    again within the catch-up limit."""
+
+    def __init__(self, sentence: str):
+        if sentence not in WAITS:
+            raise ValueError(f"not a waiting sentence: {sentence!r}")
+        super().__init__(sentence)
+        self.sentence = sentence
 
 
 def deploy_mark() -> Path:
@@ -141,6 +169,13 @@ def unreadable(kind: Kind, rule, now) -> str:
     return UNREADABLE
 
 
+def _give_back_guarded(kind: Kind, rule, slot) -> None:
+    try:
+        kind.give_back(rule, slot)
+    except DatabaseError:
+        kind.logger.warning(kind.log_not_given_back, rule.pk)
+
+
 def launch(kind: Kind, rule, slot, now) -> str:
     """Start the slot's run (`kind.start`); the sentence saying what came of
     it."""
@@ -149,15 +184,17 @@ def launch(kind: Kind, rule, slot, now) -> str:
         if result is None:
             kind.give_back(rule, slot)
             return kind.waiting
+    except Retry as wait:
+        # Refused before anything was created: tried again at the next
+        # tick, within the slot's catch-up limit.
+        _give_back_guarded(kind, rule, slot)
+        return wait.sentence
     except DatabaseError:
         # Locked past the scheduler's short wait: the start's transaction
         # never opened (or rolled back), nothing was created - tried again
         # at the next tick, within the slot's catch-up limit.
         kind.logger.warning(kind.log_busy, rule.pk, exc_info=True)
-        try:
-            kind.give_back(rule, slot)
-        except DatabaseError:
-            kind.logger.warning(kind.log_not_given_back, rule.pk)
+        _give_back_guarded(kind, rule, slot)
         return BUSY
     except Exception:  # the claimed slot must say why nothing ran
         kind.logger.exception(kind.log_launch_failed, rule.pk)
@@ -171,6 +208,8 @@ def missed(kind: Kind, rule, slot) -> str:
         return kind.missed_while_waiting.format(at=hhmm(slot))
     if rule.last_result == BUSY:
         return kind.missed_while_busy.format(at=hhmm(slot))
+    if rule.last_result in WAITS:
+        return WAITS[rule.last_result].format(at=hhmm(slot))
     return kind.missed_server_off.format(at=hhmm(slot))
 
 

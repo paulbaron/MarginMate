@@ -70,6 +70,26 @@ class ChromePolicyTests(TwoTenantsTestCase):
         gamma.close()
         self.assertEqual(chrome.running(), 0)
 
+    def free(self, tenant) -> bool:
+        with bound_tenant(tenant):
+            return chrome.slot_free()
+
+    def test_a_free_browser_is_asked_about_without_taking_one(self):
+        """`slot_free` answers what `browser_slot` would, and takes nothing:
+        a run asks it before it starts (recipes/auto_sales.py)."""
+        self.assertTrue(self.free(self.bar_b))
+        self.assertEqual(chrome.running(), 0)
+        beta = self.hold(self.bar_b)
+        self.assertFalse(self.free(self.bar_b))  # its one browser is taken
+        self.assertTrue(self.free(self.bar_c))
+        gamma = self.hold(self.bar_c)
+        self.assertFalse(self.free(self.bar_d))  # every other bar's two are
+        # The owner's espace is never held back by the others'.
+        self.assertTrue(self.free(self.bar_a))
+        beta.close()
+        self.assertTrue(self.free(self.bar_d))
+        gamma.close()
+
     def test_a_slot_is_given_back_when_the_run_fails(self):
         with bound_tenant(self.bar_b), self.assertRaises(ValueError), chrome.browser_slot():
             raise ValueError("échec")

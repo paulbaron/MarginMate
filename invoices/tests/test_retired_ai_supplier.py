@@ -3,8 +3,8 @@ pseudo-supplier « Autre (analyse IA) » - code OTHER, reader key LLM, seeded by
 invoices/0002 - wherever nothing names it. Where something does - a document,
 a product, a payee name learnt, a known price, a line of its history, a slip
 format, a pickup, another supplier's history, an article left out of its
-shopping list - it stays as an ordinary supplier, its name and every row
-naming it as they are. No other supplier is touched, and going back changes
+shopping list, a reminder « repris par » it - it stays as an ordinary
+supplier, its name and every row naming it as they are. No other supplier is touched, and going back changes
 nothing.
 
 Run the way the repository runs a data migration: its function, on the
@@ -23,6 +23,7 @@ from django.test import TestCase
 from bank.models import CounterpartyAlias
 from inventory.models import ShoppingExclusion
 from invoices.models import InvoiceType, ShopItemPrice, Supplier, SupplierChange
+from notifications.models import Reminder
 from returnables.models import Pickup
 from returnables.tests.support import make_format
 from tests.factories import make_invoice, make_product, make_stock_type, make_supplier
@@ -127,6 +128,16 @@ class RetireTests(TestCase):
             "un article écarté de ses courses": lambda: ShoppingExclusion.objects.create(
                 stock_type=make_stock_type(name="Article essai"), supplier=self.ai
             ),
+            # « Repris par » of a reminder (GitHub's main, notifications 0001):
+            # a plain id, no key - deleted, it would never match again.
+            "un rappel « repris par »": lambda: Reminder.objects.create(
+                name="Rappel essai",
+                title="Bons essai",
+                target="/consignes/",
+                weekdays="0",
+                times="00:00",
+                skip_supplier_id=self.ai.pk,
+            ),
         }
         for what, make in makers.items():
             with self.subTest(what=what):
@@ -135,7 +146,8 @@ class RetireTests(TestCase):
                 self.assert_kept_as_an_ordinary_supplier()
                 row.refresh_from_db()
                 # Still there, still naming it.
-                self.assertIn(self.ai.pk, {getattr(row, "supplier_id", None), getattr(row, "other_supplier_id", None)})
+                naming = ("supplier_id", "other_supplier_id", "skip_supplier_id")
+                self.assertIn(self.ai.pk, {getattr(row, name, None) for name in naming})
                 type(row).objects.filter(pk=row.pk).delete()
                 Supplier.objects.filter(pk=self.ai.pk).update(parser_key="LLM")
 
@@ -184,3 +196,14 @@ class MigrationShapeTests(TestCase):
         state = MigrationLoader(connection).project_state(NODE, at_end=False)
         walked = relations_to(state.apps.get_model("invoices", "Supplier"))
         self.assertEqual(walked, RELATIONS_AT_0038)
+
+    def test_the_plain_ids_it_asks_are_in_the_state_it_runs_on(self):
+        """A reminder's « Repris par » is an id with no key behind it: no
+        relation shows it, so 0038 names it (`PLAIN_IDS`), and depends on the
+        migration that makes it."""
+        self.assertEqual(MIGRATION.PLAIN_IDS, (("notifications", "Reminder", "skip_supplier_id"),))
+        state = MigrationLoader(connection).project_state(NODE, at_end=False)
+        for app, model, field in MIGRATION.PLAIN_IDS:
+            with self.subTest(model=model):
+                kind = state.apps.get_model(app, model)._meta.get_field(field).get_internal_type()
+                self.assertEqual(kind, "PositiveIntegerField")

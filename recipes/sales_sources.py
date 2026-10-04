@@ -15,7 +15,8 @@ log as the espace may read it (common.job_line).
 **Adding another site** is an entry here and nothing else in the
 scheduling: a key (slug-safe, stored in `AutoSalesImport.source` - never
 renamed), its label, `available` (whether this espace may use it) and the
-sentence said where it may not, its job's label, and `task`, the dotted path
+sentence said where it may not, its job's label, `uses_browser` (whether it
+needs one of the server's browsers), and `task`, the dotted path
 of its own import task - a function `(job_id, start, end)` run in a bound
 thread, which downloads that site's sales of [start, end] and records the
 same day-level sales the till's do (`recipes.sales.record_sales`,
@@ -49,11 +50,20 @@ class SalesSource:
     job_label: str
     #: The dotted path of its import task, `(job_id, start, end)`.
     task: str
+    #: Its task signs in through the server's Chrome (invoices/scrapers/
+    #: chrome.py): another bar's slot waits for a free browser rather than
+    #: start an import refused at once (auto_sales._start).
+    uses_browser: bool = True
 
 
 def _laddition_ready() -> bool:
     """The till may be used here and its account has a value to sign in
-    with (the module's docstring)."""
+    with (the module's docstring). In the platform owner's espace it is
+    `till_allowed()` alone, as on GitHub's main - unlike
+    `pos.connectors.LADDITION.ready()`, which draws the Ventes tab's fetch
+    card and also wants his account (« Identifiants » or the .env): an owner
+    with neither is offered rules whose import fails, and says so in its
+    alert, as before."""
     from .integration import till_allowed, till_login_missing
 
     return till_allowed() and not till_login_missing()

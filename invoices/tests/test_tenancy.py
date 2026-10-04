@@ -42,6 +42,7 @@ from accounts.tests.support import TwoTenantsTestCase
 from common import SERVER_ERROR
 from invoices import auto_gather, integrations
 from invoices.deletion import delete_invoice
+from invoices.forms import AUTO_NO_SOURCE
 from invoices.integrations import TO_CONFIGURE_PLURAL
 from invoices.models import (
     AutoGather,
@@ -59,6 +60,7 @@ from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_w
 from invoices.tests.pdf_files import write_pdf
 from invoices.tests.test_email_search import fake_mailbox
 from invoices.tests.test_mailbox_guards import a_mail, answers
+from notifications import automation
 from tests.factories import make_invoice, make_invoice_type, make_supplier
 
 START, END = date(2026, 1, 1), date(2026, 1, 31)
@@ -878,6 +880,44 @@ class AutomaticGatherGateTests(TwoTenantsTestCase):
         error = job.progress[self.mailbox_code]["error"]
         self.assertTrue(error.startswith("Boîte mail : "), error)
         self.assertIn("imap.beta.invalid", error)
+
+    @override_settings(**SERVER_ENV)
+    def test_another_bar_s_rule_waits_while_its_identifiants_cannot_be_read(self):
+        """A store held for a moment (accounts.vault.BUSY) is no mailbox
+        missing: the slot is given back, never skipped as « à renseigner »."""
+        self.beta_s_rule()
+        self.type_beta_s_mailbox()
+        with mock.patch("accounts.vault.load", return_value=vault.VaultState(problem=vault.BUSY)):
+            self.tick(self.bar_b).assert_not_called()
+        with bound_tenant(self.bar_b):
+            self.rule.refresh_from_db()
+            self.assertEqual((self.rule.last_result, self.rule.last_slot_at), (automation.CREDENTIALS_BUSY, None))
+        self.tick(self.bar_b).assert_called_once()
+
+    def test_another_bar_s_rule_can_be_switched_off_once_its_mailbox_is_gone(self):
+        """Nothing is offered without its mailbox: a switched-off rule may
+        keep no source - it could otherwise only be deleted, never stopped -,
+        and switching it back on still asks for one."""
+        self.beta_s_rule()
+        self.client.force_login(self.user_b)
+        prefix = f"auto-{self.rule.pk}"
+        edit = reverse("invoices:auto_gather_edit", args=[self.rule.pk])
+        posted = {
+            f"{prefix}-name": "Factures Beta",
+            f"{prefix}-weekdays": ["2"],
+            f"{prefix}-start_time": "06:00",
+            f"{prefix}-end_time": "14:00",
+            f"{prefix}-every_minutes": "60",
+        }
+        refused = self.client.post(edit, {**posted, f"{prefix}-is_active": "on"})
+        self.assertContains(refused, AUTO_NO_SOURCE)
+        with bound_tenant(self.bar_b):
+            self.rule.refresh_from_db()
+            self.assertTrue(self.rule.is_active)
+        self.assertEqual(self.client.post(edit, posted).status_code, 302)
+        with bound_tenant(self.bar_b):
+            self.rule.refresh_from_db()
+            self.assertEqual((self.rule.is_active, self.rule.source_list()), (False, []))
 
     def test_another_bar_s_automatic_run_logs_and_alerts_no_library_s_words(self):
         self.beta_s_rule()

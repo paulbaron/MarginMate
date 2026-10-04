@@ -14,7 +14,12 @@ that is not the platform owner's (accounts.tenancy.server_accounts_allowed):
   without waiting - a run finding none is refused at once
   (BROWSERS_BUSY): a thread waiting for a browser is a gather or an import
   standing still, and one bar's long import must not hold every browser of
-  the others. The platform owner's own sessions are not counted.
+  the others. The platform owner's own sessions are not counted. A run
+  that would start one asks `slot_free` first - an automatic sales import's
+  slot waits for a browser (« en attente : navigateurs du serveur
+  occupés », recipes/auto_sales.py) rather than start an import refused at
+  once; two runs started in the same tick can still both find one free, and
+  the one refused gives its slot back (`auto_sales.gave_way`).
 
 Process-wide by design (`serve` is one process): the counts are keyed by
 `tenant_key()`, never by a row's pk.
@@ -56,6 +61,22 @@ def running() -> int:
         return sum(_RUNNING.values())
 
 
+def _full(key: str) -> bool:
+    """Whether the espace `key` may start no session now (_LOCK held)."""
+    return sum(_RUNNING.values()) >= HOSTED_SESSIONS or _RUNNING.get(key, 0) >= PER_ESPACE
+
+
+def slot_free() -> bool:
+    """Whether `browser_slot` would give the bound espace a browser now -
+    nothing taken: a run asks it before it starts, `browser_slot` decides.
+    Always in the platform owner's espace."""
+    if server_accounts_allowed():
+        return True
+    key = tenant_key()
+    with _LOCK:
+        return not _full(key)
+
+
 @contextmanager
 def browser_slot(refused=BrowsersBusy):
     """Hold one of the server's browsers for the bound espace while the
@@ -66,7 +87,7 @@ def browser_slot(refused=BrowsersBusy):
         return
     key = tenant_key()
     with _LOCK:
-        if sum(_RUNNING.values()) >= HOSTED_SESSIONS or _RUNNING.get(key, 0) >= PER_ESPACE:
+        if _full(key):
             raise refused(BROWSERS_BUSY)
         _RUNNING[key] = _RUNNING.get(key, 0) + 1
     try:

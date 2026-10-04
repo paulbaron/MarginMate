@@ -2971,8 +2971,10 @@ its own - the views, the task bodies, each connector last:
   only through it, so another bar never signs in with the owner's
   accounts), a server command's or setting's name on a page
   (`recipes.integration.till_commands_shown`; elsewhere « récupérez ou
-  importez de nouveau les ventes … », `TILL_REIMPORT`), `laddition_open`,
-  and two connectors that stay his:
+  importez de nouveau les ventes … », `TILL_REIMPORT`, and
+  `laddition_import`'s job note « Lancé depuis le serveur. » - its job's log
+  is drawn on the Ventes tab), `laddition_open`, and two connectors that
+  stay his:
   - **Metro**: every bar's sign-in would leave from the server's one IP,
     which Metro's firewall judges for everybody (it blocked the owner
     twice); a pause per espace protects nobody. `scrape_metro_invoices`,
@@ -3052,11 +3054,13 @@ its own - the views, the task bodies, each connector last:
 - **Chrome** (`invoices/scrapers/chrome.py`): another bar's always headless
   (`headless()` - a window would open on the server's desktop), and
   `browser_slot()`: two sessions for every other espace together, one each,
-  never waited for (« Tous les navigateurs du serveur sont occupés … »); the
-  owner's not counted. Wired into L'Addition's session only - Metro and the
-  portals are the owner's. Another bar with no L'Addition login on its
-  « Identifiants » is refused before a browser starts
-  (`recipes.integration.till_login_missing`, `TILL_LOGIN_MISSING`).
+  never waited for (« Tous les navigateurs du serveur sont occupés … »,
+  raised from L'Addition's session as `LadditionBrowsersBusy`); the owner's
+  not counted. `slot_free()` asks the same and takes nothing. Wired into
+  L'Addition's session only - Metro and the portals are the owner's.
+  Another bar with no L'Addition login on its « Identifiants » is refused
+  before a browser starts (`recipes.integration.till_login_missing`,
+  `TILL_LOGIN_MISSING`).
 - **Clean job logs** (`common.job_line`, in `ScrapeJob.append_log`, the text
   of `update_progress` and `SalesImportJob.append_log`): outside the owner's
   espace a line is cut at « Traceback (most recent call last): » and at
@@ -3089,31 +3093,57 @@ its own - the views, the task bodies, each connector last:
   - another bar's rules search ITS mailbox only, and only once its
     « Identifiants » hold it (`auto_gather._start`: « sautée : boîte mail à
     renseigner sur la page Identifiants », `MAILBOX_TO_FILL`, no job, no
-    sign-in - never the .env's), its sources being `workspace.gather_sources`
+    sign-in - never the .env's; a store held for a moment, `vault.BUSY`,
+    gives the slot back instead, « en attente : identifiants momentanément
+    illisibles », `automation.Retry`; one that does not open, `UNREADABLE`,
+    stays « à renseigner », as « Identifiants » asks to type everything
+    again), its sources being `workspace.gather_sources`
     (this branch's gates inside: Metro and the portals the owner's only,
     the mailbox's sources and slips once filled in, ONE `vault.load()` a
     page or a slot); the run is `gather_invoices_task(unattended=True)`,
     whose mailbox goes through the guarded patterns, the egress check, the
     byte budgets, `failure_said` and `job_line` like a gather by hand; the
     run's alert names its failed sources by their labels only. The rules'
-    page says `MAILBOX_TO_FILL` and `integrations.METRO` / `PORTALS` there;
+    page says `MAILBOX_TO_FILL` and `integrations.METRO` / `PORTALS` there,
+    and a rule switched off may keep no source (`AutoGatherForm.clean`:
+    with its mailbox gone nothing is offered, and it could only be deleted);
   - another bar's automatic sales import runs only once its own L'Addition
     account is on its « Identifiants » (`sales_sources._laddition_ready`:
     `till_allowed()` and not `till_login_missing()`; else « sautée : source
-    indisponible » and the page says `TILL_LOGIN_MISSING`, no form): the
-    task signs in with that account, headless and in a browser slot of its
-    own (chrome.py), writes through `store_reading`, and fails through
-    `tasks.fail` - the job's log and the alert (`auto_sales._notify`) say the
-    till's refusal or `common.SERVER_ERROR`, never the exception's words,
-    which `fail` returns to the alert in the owner's espace alone, as on
-    GitHub's main;
+    indisponible » - « en attente : identifiants momentanément illisibles »
+    while the store is held - and the page says `TILL_LOGIN_MISSING`, draws
+    no new rule's form, and still lists the rules there to switch off or
+    delete): the task signs in with that account, headless and in a browser
+    slot of its own (chrome.py), writes through `store_reading`, and fails
+    through `tasks.fail` - the job's log and the alert (`auto_sales._notify`)
+    say the till's refusal or `common.SERVER_ERROR`, never the exception's
+    words, which `fail` returns to the alert in the owner's espace alone, as
+    on GitHub's main;
+  - **the server's two browsers are taken in turns, never failed for**
+    (review of the merge: every bar's new rule is offered at 07:00, and a
+    third bar's import failed every morning, its alert saying « réessayez
+    dans quelques minutes » to a rule nothing retried): a slot finding no
+    browser free (`chrome.slot_free`, asked under the start's lock, after
+    « à jour ») gives itself back, « en attente : navigateurs du serveur
+    occupés » (`automation.BROWSERS_BUSY`), tried again each minute within
+    the 12 h catch-up. Two imports started in the same tick can both find
+    one free: the one L'Addition's session then refuses
+    (`LadditionBrowsersBusy`, before anything signs in) gives way
+    (`auto_sales.gave_way`) - its job deleted (a failed one would make the
+    rule skip its slot), its rule's `last_slot_at` put just before the slot
+    (`GIVEN_BACK`), no alert, no `last_failed`; its last result may say
+    « lancé à … » until the next tick. An import by hand so refused fails
+    with the sentence, as before;
   - one sales import at a time includes a till's file uploaded on
     « Ventes » (`claim_sales_import`, its job's `SalesImportJob.source`
     « fichier »), which never counts as L'Addition's coverage nor makes a
     waiting rule skip its slot (`auto_sales._from_history`,
-    `_ended_while_waiting` filter on the source).
+    `_ended_while_waiting` filter on the source) - « Prévoir les courses »
+    reads the till past that coverage through the files that continue it
+    (`auto_sales.till_covered_until`).
   Tests: `invoices/tests/test_tenancy.py::AutomaticGatherGateTests`,
   `recipes/tests/test_tenants.py::AutomaticSalesImportGateTests`,
+  `invoices/tests/test_chrome_policy.py`,
   `recipes/tests/test_till_file_import.py::OneLockTests`.
 - **Not done, on purpose**: a kill switch per espace, an egress proxy that
   would let the portals open, a server-wide Metro throttle, fair OCR between
@@ -6312,7 +6342,7 @@ never proposed there: no history rule reaches a first purchase.
   public for it).
 
 **What is read** (`shopping_data.prepare`, a constant number of queries:
-`inventory/tests/test_shopping_data.py` pins 5 with the till off and 20
+`inventory/tests/test_shopping_data.py` pins 5 with the till off and 21
 with it on, and `test_shopping_page.PageCostTests` the whole page):
 - every PURCHASE movement of an invoice line, BOTH signs, in one streamed
   scan, dated by its `occurred_on`, else its invoice's date - **never
@@ -6324,13 +6354,19 @@ with it on, and `test_shopping_page.PageCostTests` the whole page):
 - the stores offered: every supplier with a purchase, but the suppliers
   of charges (`expenses_only`) and the removed AI reading's supplier, kept
   by invoices/0038 where something named it and told by its code
-  (`receipts.RETIRED_CODES`); what was bought at those still counts. « Autres enseignes » holds those under 3 visits in
-  the year.
+  (`receipts.RETIRED_CODES`); what was bought at those still counts.
+  « Autres enseignes » holds those under 3 visits in the year.
 - **the till, only with « Tenir compte des ventes de la caisse » on** -
   off, not one sales table is read and the engine never runs. The design's
   Option A: `attribute_sales` runs ONCE over the window W = (last complete
-  day − 365, min(coverage, last complete day)], its capacity the window's
-  purchases floored at 0, then each article's figure is spread per day -
+  day − 365, min(coverage, last complete day)] - the coverage L'Addition's,
+  carried on by the till's files uploaded on « Ventes » that continue it
+  (`auto_sales.till_covered_until`: a SUCCESS file job starting at most the
+  day after, up to its last day, never past the last complete day when it
+  was read; a gap stops it: a bar filling days by file, or one that left
+  L'Addition, was read up to its last fetch for good) -, its capacity the
+  window's purchases floored at 0, then each article's figure is spread per
+  day -
   the exact pours by the day's sales, the « OU » share by what each day's
   choices could have poured - so **the days add back up to the engine's
   totals over W** (pinned). The till's start is clamped to W. **The till's
@@ -6945,7 +6981,10 @@ every format written through the model's check, its refusal in French.
 - Migration `recipes/0019`, **WRITTEN and left to be applied** (the owner,
   after a backup, `migrate_tenants`; `serve` refuses to start until then).
   Written as 0018 and renumbered after GitHub's main's
-  `recipes/0018_auto_sales_import`, which it depends on. One new empty
+  `recipes/0018_auto_sales_import`, which it depends on; a dev copy
+  migrated under the old name is restored from a backup
+  (`refresh_dev_data.cmd`) and migrated again - never faked, which would
+  skip `SalesImportJob.source`. One new empty
   table, and a column of the sales jobs with its default
   (`SalesImportJob.source`, « laddition » - what every job before it read):
   nothing existing is read or rewritten, in any espace or the `_template`.
@@ -9044,7 +9083,9 @@ never a lost bon.
   time, `AUTO_GATHER_END_BEFORE_START`), the CheckConstraint
   `auto_gather_end_after_start` (0036), and its card, which says « heures
   illisibles : corrigez-les » (« jours illisibles » for its days) rather
-  than a 500.
+  than a 500. « Cochez au moins une source » is asked of an ACTIVE rule
+  only (`AutoGatherForm.clean`): a rule switched off may keep none - with
+  its mailbox gone, another bar is offered nothing to tick.
 - **Each source's coverage is recorded** (`invoices.GatherCoverage`,
   `invoices/coverage.py`; it replaced the « last clean search » walk of the
   history). Per source (`type-<id>`, `bons-<id>`): `searched_until`, the
@@ -9286,8 +9327,11 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   the give-back, the catch-up limit, the dev-server skip (« sautée :
   serveur de développement »), the deploy mark, the unreadable rule claimed
   once, `except Exception` → « échec : erreur interne à HH:MM », a
-  DatabaseError → given back « en attente : base occupée », the guarded
-  writes, one rule's failure kept to itself (`run_each`). A kind is an
+  DatabaseError → given back « en attente : base occupée », an
+  `automation.Retry` raised before anything was created → given back with
+  its own « en attente : … » (`WAITS`: another bar's « Identifiants » held,
+  the server's browsers taken; past the limit « manquée : … à HH:MM »), the
+  guarded writes, one rule's failure kept to itself (`run_each`). A kind is an
   `automation.Kind` (its model, instants, limit, `start`, sentences and log
   lines). `invoices/auto_gather.py` is the gathers' kind and kept every
   behaviour and word: its hooks call ITS module's functions at call time
@@ -9304,14 +9348,20 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   unbound (`till_allowed`: any bound espace since the merge with the
   connectors opened to every bar).
 - **The sources** (`recipes/sales_sources.py`): `SalesSource(key, label,
-  available, unavailable_reason, job_label, task)`. Another site is an
+  available, unavailable_reason, job_label, task, uses_browser)`. Another
+  site is an
   entry whose task (`(job_id, start, end)`) records the same day-level
   sales (`record_sales`, `PosProductDailyQuantity`) and ends with
   `auto_sales.finish` - nothing else in the scheduling changes. A key the
   registry no longer has is « sautée : source inconnue », never a 500.
   L'Addition is `available()` where the espace may fetch with its own
   account: in the owner's espace as on GitHub's main, in another once its
-  « Identifiants » hold the login and password (`till_login_missing`).
+  « Identifiants » hold the login and password (`till_login_missing`). In
+  the owner's espace that is `till_allowed()` alone, NOT
+  `pos.connectors.LADDITION.ready()`, which draws the Ventes tab's fetch
+  card and also wants his account: an owner with neither (« Identifiants »
+  nor .env) is offered rules whose import fails and says so in its alert,
+  as on GitHub's main - kept so, not aligned on the card.
 - **One sales import at a time** (`recipes/importing.start_sales_import`,
   used by the Ventes tab's `trigger_sales_import` and the automatic run):
   reap, active check and create in one `transaction.atomic()`, the bound
@@ -9350,8 +9400,9 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   cancelled or killed - up to the last complete day when it FINISHED (an
   import up to today has not seen tonight's sales). Unknown, it is read once
   from the SUCCESS sales jobs (L'Addition's only - `source` « laddition »,
-  never an uploaded file; the job being recorded left out). **Nothing new when the day after the coverage is past END**:
-  the slot says « à jour : ventes importées jusqu'au JJ/MM », no job, no
+  never an uploaded file; the job being recorded left out). **Nothing new
+  when the day after the coverage is past END**: the slot says « à jour :
+  ventes importées jusqu'au JJ/MM », no job, no
   sign-in - two slots a day sign in once. Otherwise START = coverage − 3
   days, or (never covered) the newest sales day − 3, else today − 90; only
   bounded at today − 400 (said in the job's log; such a run records its
@@ -9370,8 +9421,11 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   The tick prunes automatic jobs older than 30 days.
 - **The page** (`recipes/auto_sales_views.py`, `recipes:auto_sales`, POST-only
   `…/<pk>/` and `…/<pk>/supprimer/`; lights « Recettes & ventes »): owner
-  only for POST (members read-only, 403), no form where no source is
-  `available()` (its reason instead). One card per rule (`#import-<pk>`),
+  only for POST (members read-only, 403), no NEW rule's form where no
+  source is `available()` (its reason instead, its POST 403) - the rules
+  already there still listed, switched off, changed or deleted wherever
+  `till_allowed()`: a bar that cleared its account could otherwise never
+  stop them. One card per rule (`#import-<pk>`),
   « Prochains imports », the last 10 automatic runs, the period line naming
   the night setting; a new card « Ventes de la veille », every day, 07:00.
   Saving never runs an import (creation, re-activation, new days or times
@@ -9385,7 +9439,9 @@ what an import records - the task run with the download patched),
 `test_auto_sales_start_and_alert.py`, `test_auto_sales_views.py`,
 `test_auto_sales_races.py` (the plan under the lock, the SUCCESS and its
 coverage in one transaction, the skip after a failure, the command holding
-the lock); `transfer/tests/test_sales_section.py::SalesCoverageTests`;
+the lock); `test_tenants.py::AutomaticSalesImportGateTests` (another bar:
+its account, the browsers taken, the store held, its rules once the account
+is gone); `transfer/tests/test_sales_section.py::SalesCoverageTests`;
 `notifications/tests/test_schedule.py` (`CalendarInstantsTests`). The
 thread is always patched (`recipes.importing.threading.Thread`):
 `download_sales_lines` is never reached. A test running `run_due` at a
@@ -9685,9 +9741,12 @@ import (`parsers/llm_fallback.py`, the Anthropic SDK and its key
 `ANTHROPIC_API_KEY`, its « Identifiants » card), and the pseudo-supplier
 0002 seeded for it (code OTHER, reader key LLM). Migration `invoices/0038`
 deletes that supplier wherever no row names it - every relation to Supplier
-walked, CASCADE and hidden ones included - and keeps it as an ordinary
-supplier, its reader key emptied, where something does; no other supplier
-is touched. Migrations `invoices/0038` and `accounts/0005` (which rewords
+walked, CASCADE and hidden ones included, and a reminder « repris par » it
+(`notifications.Reminder.skip_supplier_id`, a plain id no relation shows:
+`PLAIN_IDS`; deleted under it, the reminder would never be skipped again) -
+and keeps it as an ordinary supplier, its reader key emptied, where
+something does; no other supplier is touched. Migrations `invoices/0038`
+and `accounts/0005` (which rewords
 the admin's help of « utilise les accès du serveur », no SQL), **WRITTEN and
 left to be applied** (the owner, after a backup, `migrate_tenants`; `serve`
 refuses to start until then). They were written as `invoices/0037` and
@@ -9695,7 +9754,10 @@ refuses to start until then). They were written as `invoices/0037` and
 (`0037_auto_gather`, `0004_pushdevice`, already published): 0038 depends on
 `0037_auto_gather` and on the latest migration of every app pointing at
 Supplier then - bank 0009, inventory 0021 (its `ShoppingExclusion`),
-returnables 0002 -, 0005 on `0004_pushdevice`. **0038's test compares the
+returnables 0002 - or holding a plain id of one (notifications 0001), 0005
+on `0004_pushdevice`. A dev copy migrated under the old names is restored
+from a backup (`refresh_dev_data.cmd`) and migrated again. **0038's test
+compares the
 relations it walks with that day's literal list** (`RELATIONS_AT_0038`, the
 merge's `inventory.ShoppingExclusion` included), never with the live model:
 a key to Supplier added later is none of its business, and a dependency

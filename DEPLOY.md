@@ -996,7 +996,8 @@ réglages »** (aussi depuis Données › Notifications).
 - La période va de la dernière journée importée sans trou, moins 3 jours, jusqu'à la dernière
   nuit terminée : avant l'heure « La nuit se termine à » (Notifications › Rappels, 06:00 par
   défaut), la veille n'est pas encore finie et s'arrête l'avant-veille. Jamais plus de 400 jours en
-  arrière. Les imports faits à la main depuis l'onglet Ventes comptent aussi.
+  arrière. Les récupérations faites à la main depuis l'onglet Ventes comptent aussi ; un fichier
+  de caisse importé, non.
 - Quand les ventes sont déjà à jour, la règle dit « à jour : ventes importées jusqu'au JJ/MM » et
   ne se connecte pas à L'Addition : même avec plusieurs heures dans la journée, L'Addition reçoit
   environ une connexion par jour.
@@ -1063,8 +1064,12 @@ Un bar invité dans son propre espace n'a plus seulement l'import à la main :
   renseignés sur sa page Identifiants. Tant que sa boîte mail n'y est pas, sa récupération
   automatique dit « sautée : boîte mail à renseigner sur la page Identifiants » ; tant que son
   compte L'Addition n'y est pas, sa page « Import automatique des ventes » le demande et rien ne
-  part. Metro et les espaces clients ne sont jamais les siens. Un import de fichier de caisse et un
-  import automatique des ventes ne tournent jamais en même temps.
+  part ; ses règles déjà là restent affichées, pour les désactiver ou les supprimer. Metro et les
+  espaces clients ne sont jamais les siens. Un import de fichier de caisse et un import automatique
+  des ventes ne tournent jamais en même temps.
+- **Deux navigateurs pour tous les autres bars** : quand ils sont pris, l'import automatique des
+  ventes d'un bar attend (« en attente : navigateurs du serveur occupés ») et repart dès qu'un se
+  libère, dans les 12 h, sans alerte d'échec. Votre espace n'attend jamais.
 
 **L'analyse IA est retirée** : elle n'avait jamais servi. L'import d'un PDF ne propose plus
 « Autre (analyse IA) », et la page Identifiants n'a plus de carte « Analyse IA (Anthropic) ». Le

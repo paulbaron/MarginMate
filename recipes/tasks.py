@@ -38,6 +38,7 @@ from django.utils.text import get_valid_filename
 from accounts.paths import downloads_dir, imports_dir
 from accounts.tenancy import server_accounts_allowed
 from common import error_for_page, format_money
+from invoices.scrapers.chrome import BrowsersBusy
 
 from .integration import refusal, till_allowed
 from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
@@ -416,7 +417,10 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
     went: a successful import moves the till's coverage (where the next
     automatic import starts) in the same transaction as its status, an
     automatic one that succeeded or failed sends its alert - never a
-    cancelled one, nor one refused above."""
+    cancelled one, nor one refused above. An automatic import another bar
+    starts when every browser of the server is taken (chrome.BrowsersBusy,
+    before anything signed in) fails nothing: it gives way
+    (`auto_sales.gave_way`: its job deleted, its rule's slot given back)."""
     from . import auto_sales
 
     job = SalesImportJob.objects.get(pk=job_id)
@@ -435,6 +439,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
     download_dir = download_dir or str(downloads_dir())
     own = None
     error = ""
+    gave_way = False
 
     try:
         # The till's own start, worked out BEFORE the import, whose sales move
@@ -471,20 +476,30 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
     except (_Cancelled, DownloadCancelled):
         job.status = SalesImportJob.Status.CANCELLED
         job.append_log("Annulé.")
+    except BrowsersBusy as exc:
+        # Another bar's: the server's browsers all taken. By hand, said as
+        # the till's refusal; automatic, the slot is tried again.
+        if job.is_automatic:
+            gave_way = True
+        else:
+            error = fail(job, exc, "Import des ventes de L'Addition")
     except Exception as exc:  # noqa: BLE001 - the job record IS the error report
         error = fail(job, exc, "Import des ventes de L'Addition")
     finally:
-        job.finished_at = timezone.now()
-        # The status and, for a SUCCESS, the coverage it records commit
-        # together: a tick between the two saw the import over and its days
-        # not covered, and signed in again for them.
-        auto_sales.finish(
-            job,
-            fields=["status", "finished_at", "items_sold", "recorded", "unmatched"],
-            source_key=LADDITION,
-            own=own,
-            error=error,
-        )
+        if gave_way:
+            auto_sales.gave_way(job)
+        else:
+            job.finished_at = timezone.now()
+            # The status and, for a SUCCESS, the coverage it records commit
+            # together: a tick between the two saw the import over and its
+            # days not covered, and signed in again for them.
+            auto_sales.finish(
+                job,
+                fields=["status", "finished_at", "items_sold", "recorded", "unmatched"],
+                source_key=LADDITION,
+                own=own,
+                error=error,
+            )
 
 
 # -- a file of the till, uploaded on « Ventes » --------------------------------------------

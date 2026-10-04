@@ -395,9 +395,12 @@ class MemoryTests(SimpleTestCase):
         taken out of its parent one at a time."""
         content = v02(ENTRIES[:1]).replace(b"<AddtlNtryInf>", b"<a/>" * 990_000 + b"<AddtlNtryInf>", 1)
         self.assertLess(len(content), statements.STRUCTURED_MAX_BYTES)
-        started = time.perf_counter()
+        # This process's CPU time, not the wall clock: a machine loaded by
+        # the suite's --parallel stretched the wall clock past the bound
+        # (11.4 s once) for a read that takes two.
+        started = time.process_time()
         self.assertEqual(len(read(content).lines), 1)
-        self.assertLess(time.perf_counter() - started, 10)
+        self.assertLess(time.process_time() - started, 10)
 
     def test_ten_thousand_entries_are_read_in_seconds(self):
         entries = [
@@ -406,9 +409,9 @@ class MemoryTests(SimpleTestCase):
         ]
         content = v02(entries)
         self.assertLess(len(content), statements.STRUCTURED_MAX_BYTES)
-        started = time.perf_counter()
+        started = time.process_time()
         self.assertEqual(len(read(content).lines), 10_000)
-        self.assertLess(time.perf_counter() - started, 20)
+        self.assertLess(time.process_time() - started, 20)
 
 
 FRENCH = (*camt.REFUSALS, *statements.REFUSALS)

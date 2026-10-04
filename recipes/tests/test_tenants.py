@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import threading
+from contextlib import ExitStack
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from io import StringIO
@@ -32,10 +33,12 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils.html import escape
 
-from accounts import paths
+from accounts import paths, vault
 from accounts.tenancy import bound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from common import SERVER_ERROR
+from invoices.scrapers import chrome
+from notifications import automation
 from recipes import auto_sales
 from recipes.integration import TILL_LOGIN_MISSING
 from recipes.management.commands.laddition_open import OWNER_ONLY
@@ -384,6 +387,26 @@ class CommandsTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(PosProduct.objects.exists())
 
+    def test_the_import_s_job_names_the_command_on_the_owner_s_tab_only(self):
+        """The job's first line is drawn on the espace's Ventes tab: another
+        bar's names no server command (CLAUDE.md, « Every espace's
+        connectors »)."""
+        from recipes.management.commands.laddition_import import COMMAND_NOTE, SERVER_NOTE
+
+        def download(start, end, download_dir, **kwargs):
+            return [an_export(download_dir)]
+
+        with mock.patch("recipes.management.commands.laddition_import.download_sales_lines", side_effect=download):
+            for tenant in (self.bar_a, self.bar_b):
+                self.run_for(tenant, "laddition_import", "--from", "2026-06-01", "--to", "2026-06-30")
+        with bound_tenant(self.bar_a):
+            self.assertIn(COMMAND_NOTE, SalesImportJob.objects.get().log)
+        with bound_tenant(self.bar_b):
+            log = SalesImportJob.objects.get().log
+        self.assertIn(SERVER_NOTE, log)
+        self.assertNotIn("laddition_import", log)
+        self.assertNotIn("commande", log)
+
     def test_a_file_named_by_hand_is_read_in_any_tenant(self):
         """--file uses no account: it reads what the operator names."""
         path = an_export(tempfile.mkdtemp())
@@ -501,14 +524,29 @@ class AutomaticSalesImportGateTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
 
-    def tick(self, tenant):
+    def tick(self, tenant, now=None):
         with (
             bound_tenant(tenant),
             mock.patch("notifications.webpush.sending_enabled", return_value=True),
             mock.patch("recipes.importing.threading.Thread") as thread,
         ):
-            auto_sales.run_due(self.SEVEN)
+            auto_sales.run_due(now or self.SEVEN)
         return thread
+
+    def hold_the_browsers(self) -> ExitStack:
+        """Every browser the server gives the other bars, taken by two of
+        them - held after their binding ends: one thread binds one espace at
+        a time, the server's sessions are many (invoices/scrapers/chrome.py)."""
+        held = ExitStack()
+        self.addCleanup(held.close)
+        for name in ("Bar Gamma", "Bar Delta"):
+            with bound_tenant(self.make_tenant(name)):
+                held.enter_context(chrome.browser_slot())
+        return held
+
+    def beta_s_rule(self) -> AutoSalesImport:
+        with bound_tenant(self.bar_b):
+            return AutoSalesImport.objects.get()
 
     @override_settings(**SERVER_TILL)
     def test_another_bar_s_rule_waits_for_its_own_account_never_the_server_s(self):
@@ -597,6 +635,115 @@ class AutomaticSalesImportGateTests(TwoTenantsTestCase):
         alert.assert_called_once()
         self.assertEqual(alert.call_args.args[1], "failed")
         self.assertEqual(alert.call_args.kwargs["body"], f"Échec : {SERVER_ERROR}")
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_for_a_free_browser_rather_than_fail(self):
+        """Every bar's rule is offered at 07:00, and the server has two
+        browsers for all of them: a slot finding none gives itself back and
+        tries again the next minute - never an import refused at once, an
+        alert every morning."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        held = self.hold_the_browsers()
+        self.tick(self.bar_b).assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_slot_at), (automation.BROWSERS_BUSY, None))
+        with bound_tenant(self.bar_b):
+            self.assertFalse(SalesImportJob.objects.exists())
+        # Past the catch-up limit, it says what it waited for.
+        self.tick(self.bar_b, self.SEVEN + auto_sales.CATCH_UP_LIMIT).assert_not_called()
+        self.assertEqual(self.beta_s_rule().last_result, "manquée : navigateurs du serveur occupés à 07:00")
+        # The owner's espace never waits for the other bars' browsers.
+        self.rule_in(self.bar_a)
+        self.tick(self.bar_a).assert_called_once()
+        # A browser free: the next slot starts.
+        held.close()
+        self.tick(self.bar_b, self.SEVEN + timedelta(days=1)).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_an_import_refused_a_browser_gives_its_slot_back_without_an_alert(self):
+        """Started in the same tick as two other bars', which took the
+        browsers first: nothing ran, and nothing failed - the job is gone,
+        the slot is due again, no alert, no « Dernier échec »."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        self.tick(self.bar_b).assert_called_once()
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.get()
+            # Started by that tick (a test's clock is not the tick's).
+            SalesImportJob.objects.filter(pk=job.pk).update(started_at=self.SEVEN + timedelta(seconds=1))
+        self.assertEqual(self.beta_s_rule().last_slot_at, self.SEVEN)
+        held = self.hold_the_browsers()
+        with (
+            bound_tenant(self.bar_b),
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch("notifications.events.emit") as alert,
+        ):
+            import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            self.assertFalse(SalesImportJob.objects.exists())
+        build.assert_not_called()
+        alert.assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_failed), (automation.BROWSERS_BUSY, None))
+        self.assertLess(rule.last_slot_at, self.SEVEN)
+        held.close()
+        self.tick(self.bar_b, self.SEVEN + timedelta(minutes=1)).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_an_import_by_hand_refused_a_browser_says_so(self):
+        self.type_beta_s_account()
+        self.hold_the_browsers()
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create(range_start=date(2026, 11, 14), range_end=date(2026, 11, 17))
+            with mock.patch.object(session_module, "build_driver") as build:
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            job.refresh_from_db()
+        build.assert_not_called()
+        self.assertEqual(job.status, SalesImportJob.Status.FAILED)
+        self.assertIn(f"Échec : {chrome.BROWSERS_BUSY}", job.log)
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_while_its_identifiants_cannot_be_read(self):
+        """A store held for a moment (accounts.vault.BUSY) is no account
+        missing: the slot is given back, never skipped as « indisponible »."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        with mock.patch("accounts.vault.load", return_value=vault.VaultState(problem=vault.BUSY)):
+            self.tick(self.bar_b).assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_slot_at), (automation.CREDENTIALS_BUSY, None))
+        self.tick(self.bar_b).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rules_stay_listed_and_can_be_stopped_once_its_account_is_gone(self):
+        """No L'Addition account on its « Identifiants » any more: no new
+        rule, but the ones there are listed, switched off and deleted - they
+        would otherwise tick « sautée : source indisponible » for good."""
+        rule = self.rule_in(self.bar_b)
+        self.client.force_login(self.user_b)
+        page = self.client.get(reverse("recipes:auto_sales")).content.decode()
+        self.assertIn(escape(TILL_LOGIN_MISSING), page)
+        self.assertIn(f'name="import-{rule.pk}-name"', page)
+        self.assertNotIn('name="nouveau-name"', page)
+        for server_word in ("LADDITION_", ".env", "manage.py", SERVER_TILL["LADDITION_EMAIL"]):
+            self.assertNotIn(server_word, page)
+        prefix = f"import-{rule.pk}"
+        switched_off = {
+            f"{prefix}-name": rule.name,
+            f"{prefix}-source": "laddition",
+            f"{prefix}-weekdays": ["0", "1", "2", "3", "4", "5", "6"],
+            f"{prefix}-times": "07:00",
+        }
+        response = self.client.post(reverse("recipes:auto_sales_edit", args=[rule.pk]), switched_off)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.beta_s_rule().is_active)
+        new = {"nouveau-name": "Autre", "nouveau-source": "laddition", "nouveau-weekdays": ["0"]}
+        new |= {"nouveau-times": "07:00", "nouveau-is_active": "on"}
+        self.assertEqual(self.client.post(reverse("recipes:auto_sales"), new).status_code, 403)
+        response = self.client.post(reverse("recipes:auto_sales_delete", args=[rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        with bound_tenant(self.bar_b):
+            self.assertFalse(AutoSalesImport.objects.exists())
 
     def test_the_owner_s_automatic_import_still_says_its_exception(self):
         """GitHub's main's alert, in the platform owner's espace: the

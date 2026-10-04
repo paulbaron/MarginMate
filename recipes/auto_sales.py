@@ -18,13 +18,24 @@ What each tick does for the bound espace:
   - « sautée : source inconnue » - its source is no key of
     recipes/sales_sources.py any more; « sautée : source indisponible » -
     that source's `available()` says no (another bar whose « Identifiants »
-    hold no L'Addition account: nothing signs in, no browser starts);
+    hold no L'Addition account: nothing signs in, no browser starts) - or
+    « en attente : identifiants momentanément illisibles » when they could
+    not be read at all for a moment (accounts.vault.BUSY): the slot is given
+    back (automation.Retry), not skipped;
   - « à jour : ventes importées jusqu'au JJ/MM » - nothing new to import
     (below): no job, no sign-in to the site. This is what keeps L'Addition's
     sign-ins to about one a day whatever the rule's times;
   - « en attente : un import des ventes est en cours » - another import (by
     hand, automatic, or `manage.py laddition_import` downloading) runs: the
     slot is given back;
+  - « en attente : navigateurs du serveur occupés » - another bar's import
+    would find every browser of the server taken by the other bars'
+    (invoices/scrapers/chrome.py: two for all of them) and be refused at
+    once: the slot is given back (automation.Retry), so bars whose rules
+    share 07:00 take turns instead of failing every morning. Two imports
+    started in the same tick can both find one free: the one the browser
+    then refuses gives way (`gave_way`) - its job deleted, its rule's slot
+    given back, no alert;
   - « sautée : l'import en cours vient d'échouer ou d'être annulé » - the
     rule was waiting and a sales import has failed or been cancelled since
     its slot: the slot is kept, the next one tries again (the owner's
@@ -88,6 +99,9 @@ from django.db.models import Max
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts import vault
+from accounts.tenancy import server_accounts_allowed
+from invoices.scrapers import chrome
 from notifications import automation, schedule, webpush
 
 from . import importing, sales_sources
@@ -205,6 +219,39 @@ def covered_until(key: str) -> date | None:
     if row is not None:
         return row.searched_until
     return _from_history(night_ends_at(), key=key) if key == sales_sources.LADDITION else None
+
+
+def till_covered_until() -> date | None:
+    """How far the till's sales are in without a gap, for a page reading
+    them (« Prévoir les courses », inventory/shopping_data.py): L'Addition's
+    coverage (`covered_until`), carried on by the till's files uploaded on
+    « Ventes » that continue it - each SUCCESS file job starting at most the
+    day after, up to its last day, never past the last complete day when it
+    finished (`_from_history`'s rule). A bar filling days by file, or one
+    that left L'Addition, is read past its last fetch. None while
+    L'Addition's coverage is unknown: the page then goes by the sales
+    themselves. Read only - L'Addition's own coverage, where its imports
+    start, is no file's to move."""
+    covered = covered_until(sales_sources.LADDITION)
+    if covered is None:
+        return None
+    night = None
+    files = (
+        SalesImportJob.objects.filter(
+            status=SalesImportJob.Status.SUCCESS,
+            source=SalesImportJob.FILE,
+            range_start__isnull=False,
+            range_end__gt=covered,
+        )
+        .order_by("range_start", "pk")
+        .values_list("range_start", "range_end", "started_at", "finished_at")
+    )
+    for range_start, range_end, started_at, finished_at in files.iterator(chunk_size=100):
+        if range_start > covered + timedelta(days=1):
+            break  # a gap: what comes after it is not contiguous
+        night = night_ends_at() if night is None else night
+        covered = max(covered, min(range_end, last_complete_day(finished_at or started_at, night)))
+    return covered
 
 
 @dataclass(frozen=True)
@@ -346,6 +393,34 @@ def finished(job: SalesImportJob, *, source_key: str, own: date | None, error: s
     _alert(job, error)
 
 
+#: How far back `gave_way` puts a rule's `last_slot_at`: just before the
+#: slot it claimed, so the next tick finds that slot due again.
+GIVEN_BACK = timedelta(microseconds=1)
+
+
+def gave_way(job: SalesImportJob) -> None:
+    """An automatic import refused a browser before anything was downloaded
+    (chrome.BROWSERS_BUSY: started in the same tick as other bars', which
+    took the server's browsers first): nothing ran. Its job is deleted - a
+    failed or cancelled one would make the rule skip its slot
+    (`_ended_while_waiting`) - and its rule's slot given back, « en attente :
+    navigateurs du serveur occupés »: the next tick tries again within
+    CATCH_UP_LIMIT. No alert, no `last_failed`: another bar's import holding
+    the browsers is no failure of this one. Only the slot that started this
+    job is given back (one claimed at or before it started); never raises -
+    the slot then stays used, as a failed import's would."""
+    try:
+        rule = AutoSalesImport.objects.filter(pk=job.auto_rule_id).first() if job.auto_rule_id else None
+        with transaction.atomic():
+            SalesImportJob.objects.filter(pk=job.pk).delete()
+            if rule is not None and rule.last_slot_at is not None and rule.last_slot_at <= job.started_at:
+                AutoSalesImport.objects.filter(pk=rule.pk, last_slot_at=rule.last_slot_at).update(
+                    last_slot_at=rule.last_slot_at - GIVEN_BACK, last_result=automation.BROWSERS_BUSY
+                )
+    except Exception:  # the thread's last step: logged, never raised
+        logger.exception("Import automatique des ventes n° %s : créneau non rendu", job.pk)
+
+
 # -- The rules' ticks ------------------------------------------------------------------------------------------------
 
 
@@ -364,15 +439,25 @@ def _ended_while_waiting(rule: AutoSalesImport, slot) -> bool:
     ).exists()
 
 
+def _credentials_busy() -> bool:
+    """Another bar's « Identifiants » could not be read at all just now
+    (accounts.vault.BUSY) - which is no account missing."""
+    return not server_accounts_allowed() and vault.load().problem == vault.BUSY
+
+
 def _start(rule: AutoSalesImport, now, slot=None) -> str | None:
     """The slot's import: its sentence, or None when another sales import
-    is running (nothing created). Whether to import, and what, is decided
-    under the start's lock (importing.start_sales_import's `plan`): read
-    before it, the period could predate an import ending in between."""
+    is running (nothing created); automation.Retry when another bar's
+    « Identifiants » or the server's browsers are busy (nothing created).
+    Whether to import, and what, is decided under the start's lock
+    (importing.start_sales_import's `plan`): read before it, the period
+    could predate an import ending in between."""
     entry = sales_sources.source(rule.source)
     if entry is None:
         return UNKNOWN_SOURCE
     if not entry.available():
+        if _credentials_busy():
+            raise automation.Retry(automation.CREDENTIALS_BUSY)
         return SOURCE_UNAVAILABLE
     planned: dict[str, Period] = {}
 
@@ -382,6 +467,9 @@ def _start(rule: AutoSalesImport, now, slot=None) -> str | None:
         period = period_for(entry.key, now)
         if period.up_to_date:
             return UP_TO_DATE.format(day=period.covered_until)
+        if entry.uses_browser and not chrome.slot_free():
+            # Raised inside the lock's block: rolled back, nothing created.
+            raise automation.Retry(automation.BROWSERS_BUSY)
         planned["period"] = period
         notes = [FLOOR_NOTE.format(floor=period.start, days=LOOKBACK_FLOOR_DAYS)] if period.cut else []
         return period.start, period.end, notes

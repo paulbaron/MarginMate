@@ -1,4 +1,4 @@
-"""When MarginMate last signed in to a protected site, and until when it
+"""When AdminMate last signed in to a protected site, and until when it
 leaves it alone (scrapers/metro.metro_pause) - and the Metro block already
 under way when this came in, taken from the gathers' logs: without it, the
 first gather after the upgrade would sign in straight into it."""
