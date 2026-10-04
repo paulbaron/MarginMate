@@ -150,6 +150,19 @@ class HostedCredentialsTests(TwoTenantsTestCase):
         self.assertIn(vault.WEAK_KEY_HOSTED, unescape(response.content.decode()))
         self.assertNotIn("DJANGO_SECRET_KEY", response.content.decode())
 
+    def test_a_value_no_account_uses_is_marked_by_its_name_on_the_owner_s_page_only(self):
+        """The owner's « Effacer » rows keep `data-credential="<NAME>"` as
+        before; another bar's name no server variable."""
+        for bar in (self.bar_a, self.bar_b):
+            with bound_tenant(bar):
+                vault.save({"OLD_EXEMPLE_PASSWORD": "ancien-secret"})
+        owner = self.page(self.user_a)
+        self.assertIn('data-credential="OLD_EXEMPLE_PASSWORD"', owner)
+        self.assertIn('name="OLD_EXEMPLE_PASSWORD__clear"', owner)
+        hosted = self.page(self.user_b)
+        self.assertNotIn("OLD_EXEMPLE", hosted)
+        self.assertIn("Effacer une valeur enregistrée", unescape(hosted))
+
     def test_another_bar_s_mailbox_server_is_its_own_and_never_the_env_s(self):
         with bound_tenant(self.bar_b):
             self.assertEqual(credentials.mailbox_host({}), credentials.DEFAULT_IMAP_HOST)

@@ -376,8 +376,12 @@ class HostedBarWordingTests(TenantTestCase):
                 self.assertNotIn(".env", hosted)
                 self.assertNotIn("manage.py", hosted)
                 self.assertNotIn("laddition_backfill", hosted)
-                self.assertIn(f"portails clients : {TO_CONFIGURE_PLURAL}", hosted)
+                self.assertIn(f"Portails clients : {TO_CONFIGURE_PLURAL}", hosted)
                 self.assertIn("restent sur la page Identifiants", hosted)
+                # The mailbox is open: « à configurer » is said of the
+                # portals alone, never of the mailbox's searches.
+                self.assertNotIn("boîte mail : à configurer", hosted)
+                self.assertNotIn("Identifiants : à ressaisir dans un autre espace) et portails", hosted)
                 self.assertIn(TILL_REIMPORT, hosted)
                 owner = self.text(self.user_a, url)
                 self.assertIn("dans le fichier .env (à recopier à la main sur un autre ordinateur)", owner)

@@ -259,7 +259,7 @@ INFO: dict[str, SectionInfo] = {
 DESCRIPTIONS_HOSTED = {
     "sources": (
         "Recherches dans la boîte mail (son adresse et son mot de passe restent sur la page Identifiants : à "
-        f"ressaisir dans un autre espace) et portails clients : {TO_CONFIGURE_PLURAL}. Un portail importé arrive "
+        f"ressaisir dans un autre espace). Portails clients : {TO_CONFIGURE_PLURAL} ; un portail importé arrive "
         "inactif."
     ),
     "ventes": (

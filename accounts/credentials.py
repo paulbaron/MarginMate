@@ -674,7 +674,7 @@ class CredentialsForm(forms.Form):
 
     def orphan_rows(self) -> list[dict]:
         return [
-            {"name": name, "html_name": self[name + CLEAR_SUFFIX].html_name, "clear": self[name + CLEAR_SUFFIX]}
+            {"name": name, "html_name": self.add_prefix(name), "clear": self[name + CLEAR_SUFFIX]}
             for name in self.orphans
         ]
 
