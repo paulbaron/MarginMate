@@ -775,8 +775,12 @@ def data_import_stage(request, token):
     except (ArchiveError, Busy) as exc:
         messages.error(request, str(exc))
     except Exception as exc:  # a preview is rolled back; the stage is kept to try again
-        logger.exception("import preview failed")
-        messages.error(request, f"L'aperçu a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
+        # « Importer » clicked is an import that failed, whichever step of it
+        # did - the backup's folder, a preview worked out again.
+        importing = action == "importer"
+        logger.exception("import failed" if importing else "import preview failed")
+        what = "L'import" if importing else "L'aperçu"
+        messages.error(request, f"{what} a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
     return redirect("transfer:data_import_stage", token=token)
 
 
