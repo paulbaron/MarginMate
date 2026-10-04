@@ -30,6 +30,7 @@ from __future__ import annotations
 import email
 import email.header
 import email.utils
+import functools
 import imaplib
 import os
 import re
@@ -77,7 +78,107 @@ def mailbox_credentials() -> tuple[str, str, str]:
     return address, app_password, host
 
 
+#: The biggest message (an IMAP « literal ») the server takes into memory:
+#: past it, a mail server - one a bar names on its « Identifiants » - could
+#: announce gigabytes and the one process every bar runs in would try to
+#: hold them. Generous: a mail provider's own limit is 25 to 35 MB, encoded.
+MAX_LITERAL_BYTES = 50 * 1024 * 1024
+MESSAGE_TOO_BIG = "La boîte mail annonce un message de plus de 50 Mo : la recherche s'arrête là, rien de plus n'est lu."
+#: Outside the platform owner's espace, what the answer to one command may
+#: bring in, its lines and its literals together: imaplib keeps a whole
+#: FETCH answer in memory, and 150 messages of 49 MB each was 7 GB. Room for
+#: one message at the cap and what surrounds it (MAX_BATCH_BYTES).
+MAX_RESPONSE_BYTES = 100 * 1024 * 1024
+RESPONSE_TOO_BIG = "La boîte mail a envoyé plus de 100 Mo en une seule réponse : la recherche s'arrête là."
+#: Outside the platform owner's espace, what one search may read in all: the
+#: attachments it keeps stay in memory until it ends, and so does whatever
+#: else the server sends that imaplib keeps.
+MAX_SEARCH_BYTES = 500 * 1024 * 1024
+SEARCH_TOO_BIG = "La recherche a déjà lu 500 Mo de la boîte mail : choisissez une période plus courte."
+#: Outside the platform owner's espace, phase 2 fetches its messages by the
+#: sizes phase 1 read (RFC822.SIZE): this much per FETCH at most - a message
+#: bigger than that alone.
+MAX_BATCH_BYTES = 40 * 1024 * 1024
+TOO_BIG_SKIPPED = "Passé : un e-mail de plus de 50 Mo (« {subject} »)."
+
+
+class MessageTooBig(imaplib.IMAP4.abort):
+    """More than the server takes into memory, announced or sent by the mail
+    server (MAX_LITERAL_BYTES; outside the owner's espace MAX_RESPONSE_BYTES
+    and MAX_SEARCH_BYTES too): the connection is given up, as imaplib gives
+    up a broken one."""
+
+
+class _CappedLiterals:
+    """In front of imaplib's IMAP4_SSL: `read(size)` is how imaplib takes a
+    literal the server announced (imaplib._get_response) - refused past
+    MAX_LITERAL_BYTES, in every espace."""
+
+    def read(self, size):
+        if size > MAX_LITERAL_BYTES:
+            raise MessageTooBig(MESSAGE_TOO_BIG)
+        return super().read(size)
+
+
+class _Budgeted:
+    """Behind the cap, outside the platform owner's espace: every byte the
+    server sends - a literal (`read`), a line (`readline`: each is at most
+    imaplib's _MAXLINE, but nothing limits how many) - counts against
+    MAX_RESPONSE_BYTES for the answer to one command (counted again from
+    each `send`) and MAX_SEARCH_BYTES for the connection. A literal is
+    counted before it is read: imaplib's file allocates it whole."""
+
+    _answer_bytes = 0
+    _search_bytes = 0
+
+    def send(self, data):
+        self._answer_bytes = 0
+        return super().send(data)
+
+    def _count(self, size: int) -> None:
+        self._answer_bytes += size
+        self._search_bytes += size
+        if self._answer_bytes > MAX_RESPONSE_BYTES:
+            raise MessageTooBig(RESPONSE_TOO_BIG)
+        if self._search_bytes > MAX_SEARCH_BYTES:
+            raise MessageTooBig(SEARCH_TOO_BIG)
+
+    def read(self, size):
+        self._count(size)
+        return super().read(size)
+
+    def readline(self):
+        line = super().readline()
+        self._count(len(line))
+        return line
+
+
+@functools.lru_cache(maxsize=8)
+def _capped(base: type, budgeted: bool = False) -> type:
+    if budgeted:
+        return type("BudgetedIMAP4_SSL", (_CappedLiterals, _Budgeted, base), {})
+    return type("CappedIMAP4_SSL", (_CappedLiterals, base), {})
+
+
+def _open_mailbox(host: str, *, budgeted: bool = False):
+    """The IMAP connection, with a verifying TLS context and the literal cap
+    - and, `budgeted` (another bar's mailbox), the byte budgets.
+    imaplib.IMAP4_SSL is looked up now: a test's stand-in (a mock, a class
+    that refuses) is called as it is."""
+    opener = imaplib.IMAP4_SSL
+    if isinstance(opener, type):
+        opener = _capped(opener, budgeted)
+    # A verifying context: imaplib's default (ssl._create_stdlib_context)
+    # checks neither the certificate nor the host name, and the app password
+    # went to whoever answered the TLS handshake (security review 01/10/2026).
+    return opener(host, ssl_context=ssl.create_default_context(), timeout=FETCH_TIMEOUT_SECONDS)
+
+
 FETCH_TIMEOUT_SECONDS = 45  # per IMAP operation - independent of how many emails there are in total
+#: Phase 1's FETCH: the headers the patterns read - and, outside the
+#: platform owner's espace, each message's size, which phase 2 batches by.
+HEADER_QUERY = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])"
+SIZED_HEADER_QUERY = "(RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])"
 BATCH_SIZE = 150  # messages per FETCH round trip - comfortably under IMAP servers' command-length limits
 LOG_EVERY = 500  # scanned messages between liveness log lines, so a big date range doesn't look frozen
 
@@ -185,6 +286,105 @@ def _parse_batched_fetch(msg_data) -> dict[bytes, bytes]:
     return result
 
 
+_SIZE_REGEX = re.compile(rb"RFC822\.SIZE (\d+)")
+
+
+def _parse_sizes(msg_data) -> dict[bytes, int]:
+    """{sequence_number: RFC822.SIZE} from a FETCH answer that asked for it.
+    The server says it before or after the header's literal, as it likes:
+    after, it is in the bare bytes that follow that message's tuple (its
+    trailer), which belong to the message the last tuple named."""
+    sizes: dict[bytes, int] = {}
+    current = None
+    for part in msg_data:
+        text = part[0] if isinstance(part, tuple) else part
+        if not isinstance(text, bytes):
+            continue
+        start = _FETCH_SEQ_REGEX.match(text)
+        if start:
+            current = start.group(1)
+        size = _SIZE_REGEX.search(text)
+        if size and current is not None:
+            sizes[current] = int(size.group(1))
+    return sizes
+
+
+def _batches_by_size(mail_ids: list, sizes: dict) -> list[list]:
+    """Phase 2's batches outside the platform owner's espace: BATCH_SIZE
+    messages at most, and MAX_BATCH_BYTES of announced sizes at most - a
+    message bigger than that alone. A size the server did not say counts as
+    MAX_LITERAL_BYTES: that message is fetched alone."""
+    batches: list[list] = []
+    batch: list = []
+    weight = 0
+    for mail_id in mail_ids:
+        size = sizes.get(mail_id, MAX_LITERAL_BYTES)
+        if batch and (len(batch) >= BATCH_SIZE or weight + size > MAX_BATCH_BYTES):
+            batches.append(batch)
+            batch, weight = [], 0
+        batch.append(mail_id)
+        weight += size
+    if batch:
+        batches.append(batch)
+    return batches
+
+
+# -- What a hosted espace's job log says of a search that failed -------------------------------------------------
+
+LOGIN_REFUSED = (
+    "identifiants ou commande refusés par le serveur : vérifiez l'adresse et le mot de passe d'application sur la "
+    "page Identifiants."
+)
+CONNECTION_CUT = "connexion coupée par le serveur : réessayez plus tard."
+CERTIFICATE_REFUSED = "certificat du serveur non valable : vérifiez le serveur IMAP sur la page Identifiants."
+TLS_FAILED = "connexion chiffrée impossible avec ce serveur : vérifiez le serveur IMAP sur la page Identifiants."
+NO_ANSWER = "le serveur ne répond pas : réessayez plus tard."
+CONNECTION_REFUSED = "le serveur refuse la connexion : vérifiez le serveur IMAP sur la page Identifiants."
+SERVER_NOT_FOUND = "serveur introuvable : vérifiez le serveur IMAP sur la page Identifiants."
+NETWORK_FAILED = "connexion impossible : réessayez plus tard."
+#: The app's own refusals, French already: said as they are.
+OWN_SENTENCES = (MAILBOX_MISSING, MAILBOX_UNBOUND)
+
+
+def failure_said(exc: BaseException, *, log=None) -> str:
+    """What a job's log and the gather card say of a mailbox search that
+    failed. In the platform owner's espace (and unbound) as always - the
+    exception's own words. In any other the library's words - English, the
+    server's host, a certificate's details - never reach the page (security
+    audit LB-3): the app's own refusals as they are (a pattern refused, a
+    server that is not public, a message too big, a mailbox missing), a
+    library's error as a fixed sentence by kind, anything else
+    `common.SERVER_ERROR`, its detail to `log` (a logger)."""
+    import socket
+
+    import common
+    from accounts.tenancy import current_tenant, server_accounts_allowed
+    from invoices import integrations
+    from returnables.patterns import PatternError
+
+    from .egress import EgressRefused
+
+    if current_tenant() is None or server_accounts_allowed():
+        return str(exc).strip() or exc.__class__.__name__
+    if isinstance(exc, (PatternError, EgressRefused, MessageTooBig)):
+        return str(exc).strip()
+    if type(exc) is RuntimeError and str(exc) in (*OWN_SENTENCES, integrations.MAILBOX):
+        return str(exc)
+    for kinds, sentence in (
+        (imaplib.IMAP4.abort, CONNECTION_CUT),
+        (imaplib.IMAP4.error, LOGIN_REFUSED),
+        (ssl.SSLCertVerificationError, CERTIFICATE_REFUSED),
+        (ssl.SSLError, TLS_FAILED),
+        (TimeoutError, NO_ANSWER),
+        (ConnectionRefusedError, CONNECTION_REFUSED),
+        (socket.gaierror, SERVER_NOT_FOUND),
+        (OSError, NETWORK_FAILED),
+    ):
+        if isinstance(exc, kinds):
+            return sentence
+    return common.error_for_page(exc, log=log, what="Recherche dans la boîte mail")
+
+
 def _extract_attachments(msg, attachment_regex: re.Pattern) -> list[EmailAttachment]:
     if not msg.is_multipart():
         return []
@@ -205,6 +405,30 @@ def _extract_attachments(msg, attachment_regex: re.Pattern) -> list[EmailAttachm
     return attachments
 
 
+#: The patterns find_matching_emails is given, in its arguments' order.
+PATTERN_FIELDS = ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern")
+
+
+def _guarded_compilers(log) -> dict:
+    """Outside the platform owner's espace: each pattern through
+    returnables.patterns.invoice_mail_matcher, named in a refusal as its
+    field is named on the source's form (EmailInvoiceSource.PATTERN_LABELS)
+    - « Motif de la source » left the bar guessing which of four failed."""
+    from returnables.patterns import invoice_mail_matcher
+
+    from ..models import EmailInvoiceSource
+
+    return {
+        field: functools.partial(
+            invoice_mail_matcher,
+            log=log,
+            field_label=EmailInvoiceSource.PATTERN_LABELS[field],
+            empty_reason=EmailInvoiceSource.EMPTY_MATCH_REASONS[field],
+        )
+        for field in PATTERN_FIELDS
+    }
+
+
 def find_matching_emails(
     start_date: date,
     end_date: date,
@@ -215,9 +439,9 @@ def find_matching_emails(
     log=print,
     on_progress=None,
     should_cancel=None,
-    compile=re.compile,
+    compile=None,
 ) -> list[EmailMatch]:
-    """Searches the shared invoice mailbox for emails matching every given
+    """Searches the espace's invoice mailbox for emails matching every given
     pattern (blank subject/body pattern = match anything), fetching each
     matched attachment's bytes into memory (nothing written to disk here -
     see scrape_email_invoices for that). `on_progress(matched, total)` fires
@@ -233,37 +457,54 @@ def find_matching_emails(
     invoice types. Cancelling mid-scan simply stops early and returns
     whatever was already found - nothing already matched is discarded.
 
-    The mailbox is the owner's: from a tenant that may not use the
-    server's accounts, refused before the settings are read or anything
-    signs in (invoices/integrations.py) - scrape_email_invoices goes through
-    here too.
+    The mailbox is the bound espace's own (its « Identifiants »): refused
+    unbound, before the settings are read or anything signs in
+    (invoices/integrations.py) - scrape_email_invoices goes through here too.
+    Outside the platform owner's espace its server must be a public address
+    (scrapers.egress.check_mail_host), checked before anything connects.
 
     `compile` turns each pattern (sender, subject, body, attachment) into
-    something with `.search(text)`; `re.compile` - an invoice source's
-    patterns, and « Tester », exactly as before. The returnables gather passes
-    returnables.patterns.mail_matcher: a format's patterns are checked before
-    anything compiles them, matched case-insensitively and with a timeout -
-    a header anybody on the internet can write must not hang the gather. A
-    pattern it refuses raises here, before anything signs in.
+    something with `.search(text)`. None: an invoice source's patterns, and
+    « Tester » - `re.compile` in the platform owner's espace, exactly as
+    before; anywhere else returnables.patterns.invoice_mail_matcher (checked
+    before anything compiles them, case-sensitive as `re` matched them, with
+    a timeout): a header anybody on the internet can write must not hang the
+    process every bar runs in. The returnables gather passes
+    returnables.patterns.mail_matcher. A pattern refused raises here, before
+    anything signs in.
     """
-    from accounts.tenancy import integrations_allowed
+    from accounts.tenancy import integrations_allowed, server_accounts_allowed
     from invoices import integrations
 
     if not integrations_allowed():
         raise RuntimeError(integrations.MAILBOX)
+    server = server_accounts_allowed()
     address, app_password, host = mailbox_credentials()
 
-    sender_regex = compile(sender_pattern)
-    subject_regex = compile(subject_pattern) if subject_pattern else None
-    body_regex = compile(body_pattern) if body_pattern else None
-    attachment_regex = compile(attachment_pattern or INVOICE_ATTACHMENT_PATTERN)
+    if compile is not None:
+        compilers = dict.fromkeys(PATTERN_FIELDS, compile)
+    elif server:
+        compilers = dict.fromkeys(PATTERN_FIELDS, re.compile)
+    else:
+        compilers = _guarded_compilers(log)
+    sender_regex = compilers["sender_pattern"](sender_pattern)
+    subject_regex = compilers["subject_pattern"](subject_pattern) if subject_pattern else None
+    body_regex = compilers["body_pattern"](body_pattern) if body_pattern else None
+    attachment_regex = compilers["attachment_pattern"](attachment_pattern or INVOICE_ATTACHMENT_PATTERN)
 
     matches: list[EmailMatch] = []
 
-    # A verifying context: imaplib's default (ssl._create_stdlib_context)
-    # checks neither the certificate nor the host name, and the app password
-    # went to whoever answered the TLS handshake (security review 01/10/2026).
-    imap = imaplib.IMAP4_SSL(host, ssl_context=ssl.create_default_context(), timeout=FETCH_TIMEOUT_SECONDS)
+    if not server:
+        from . import egress
+
+        egress.check_mail_host(host)
+    # Another bar's server is held to the byte budgets, and phase 2 fetches
+    # its messages by the sizes phase 1 read (_batches_by_size); the owner's
+    # search is the one it always was.
+    imap = _open_mailbox(host, budgeted=not server)
+    said = (lambda exc: exc) if server else failure_said
+    header_query = HEADER_QUERY if server else SIZED_HEADER_QUERY
+    sizes: dict[bytes, int] = {}
     imap.login(address, app_password)
     try:
         imap.select("inbox")
@@ -273,12 +514,12 @@ def find_matching_emails(
         search_criteria = f'SINCE "{_format_date_for_imap(start_date)}" BEFORE "{before}"'
         status, messages = imap.search(None, search_criteria)
         if status != "OK" or not messages or not messages[0]:
-            log("No emails found in that date range")
+            log("Aucun e-mail sur cette période.")
             return matches
 
         mail_ids = messages[0].split()
         total = len(mail_ids)
-        log(f"Scanning {total} email(s) between {start_date} and {end_date}")
+        log(f"{total} e-mail(s) à examiner du {start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}.")
         if on_progress:
             on_progress(0, total)
 
@@ -290,15 +531,17 @@ def find_matching_emails(
                 log(f"Recherche annulée après {scanned}/{total} email(s) analysé(s).")
                 return matches
             try:
-                status, header_data = imap.fetch(b",".join(batch), "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                status, header_data = imap.fetch(b",".join(batch), header_query)
             except OSError as exc:
-                log(f"Skipping a batch of {len(batch)} email(s) after a header fetch error: {exc}")
+                log(f"{len(batch)} e-mail(s) passé(s) : erreur en lisant leurs en-têtes ({said(exc)}).")
                 scanned += len(batch)
                 continue
             if status != "OK":
                 scanned += len(batch)
                 continue
             headers_by_id = _parse_batched_fetch(header_data)
+            if not server:
+                sizes.update(_parse_sizes(header_data))
             for mail_id in batch:
                 scanned += 1
                 header_bytes = headers_by_id.get(mail_id)
@@ -311,24 +554,33 @@ def find_matching_emails(
                     continue
                 if subject_regex and not subject_regex.search(subject):
                     continue
+                if sizes.get(mail_id, 0) > MAX_LITERAL_BYTES:
+                    # Announced past the cap: passed over on its own line,
+                    # never fetched - the search goes on.
+                    log(TOO_BIG_SKIPPED.format(subject=subject))
+                    continue
                 header_matches.append(mail_id)
             if on_progress:
                 on_progress(len(header_matches), total)
             if scanned % LOG_EVERY < BATCH_SIZE:
-                log(f"Scanned {scanned}/{total} email(s), {len(header_matches)} matched sender/subject so far")
+                log(
+                    f"{scanned}/{total} e-mail(s) examiné(s), {len(header_matches)} retenu(s) par l'expéditeur et "
+                    "l'objet jusqu'ici."
+                )
 
-        log(f"{len(header_matches)} email(s) matched sender/subject - fetching full content")
+        log(f"{len(header_matches)} e-mail(s) retenu(s) par l'expéditeur et l'objet : lecture de leur contenu.")
 
         # Phase 2: batch-fetch the full message only for header matches, test
         # body_pattern and pull attachments.
-        for batch in _chunked(header_matches, BATCH_SIZE):
+        batches = _chunked(header_matches, BATCH_SIZE) if server else _batches_by_size(header_matches, sizes)
+        for batch in batches:
             if should_cancel and should_cancel():
                 log(f"Recherche annulée après {len(matches)}/{len(header_matches)} email(s) confirmé(s).")
                 return matches
             try:
                 status, msg_data = imap.fetch(b",".join(batch), "(BODY.PEEK[])")
             except OSError as exc:
-                log(f"Skipping a batch of {len(batch)} email(s) after a fetch error: {exc}")
+                log(f"{len(batch)} e-mail(s) passé(s) : erreur en les lisant ({said(exc)}).")
                 continue
             if status != "OK":
                 continue
@@ -355,7 +607,7 @@ def find_matching_emails(
                         attachments=attachments,
                     )
                 )
-                log(f"Matched: {subject!r} from {sender!r} ({len(attachments)} attachment(s))")
+                log(f"Retenu : « {subject} » de {sender} ({len(attachments)} pièce(s) jointe(s)).")
                 if on_progress:
                     on_progress(len(matches), total)
     finally:
@@ -420,6 +672,6 @@ def scrape_email_invoices(
             filepath = os.path.join(download_dir, attachment_file_name(attachment.filename, taken))
             with open(filepath, "wb") as f:
                 f.write(attachment.content)
-            log(f"Downloaded: {attachment.filename}")
+            log(f"Téléchargé : {attachment.filename}")
             downloaded.append((filepath, match.email_date))
     return downloaded

@@ -100,9 +100,9 @@ def supplier_detail(request, pk):
             # Metro: fetched by the gather's own module, with no source - only
             # where the server's Metro account may be used (integrations.py).
             "own_module": own_module_suppliers().filter(pk=supplier.pk).exists(),
-            # Both channels of a source are the server's own accounts: where
-            # they are not this tenant's, said here as on the Sources tab,
-            # and no « + Nouvelle source » leading to a form that only says so.
+            # Unbound, both channels of a source are refused (integrations.py):
+            # said here as on the Sources tab, and no « + Nouvelle source »
+            # leading to a form that only says so.
             "sources_refused": None if integrations_allowed() else integrations.SOURCES,
             "delete_refused": delete_refused(supplier),
             "changes": changes,

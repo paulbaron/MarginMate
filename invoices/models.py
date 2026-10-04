@@ -8,7 +8,7 @@ from django.db.models import Q, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from common import JobLogMixin, group_thousands
+from common import JobLogMixin, group_thousands, job_line
 
 #: Which attachment of an e-mail is the invoice, by default. Since the
 #: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
@@ -167,8 +167,8 @@ class InvoiceType(models.Model):
 
 
 class EmailInvoiceSource(models.Model):
-    """How to recognize an InvoiceType's emails in the shared invoice
-    mailbox (see settings.INVOICE_EMAIL_ADDRESS) and which attachment to
+    """How to recognize an InvoiceType's emails in the espace's invoice
+    mailbox (its « Identifiants », accounts/vault.py) and which attachment to
     treat as the invoice. All patterns are real regexes (not IMAP's own
     crude substring search - see invoices/scrapers/generic_email.py for
     why), tested against the From header, the Subject, the decoded text
@@ -195,7 +195,38 @@ class EmailInvoiceSource(models.Model):
     def __str__(self):
         return f"Source email de {self.invoice_type}"
 
+    #: Each pattern's name in a refusal of the guard.
+    PATTERN_LABELS = {
+        "sender_pattern": "Motif d'expéditeur",
+        "subject_pattern": "Motif d'objet",
+        "body_pattern": "Motif de contenu",
+        "attachment_pattern": "Motif de pièce jointe",
+    }
+    #: What the guard tells a pattern that finds something in an empty text
+    #: - it would keep every e-mail, or every attachment -, field by field:
+    #: the slips' sentence about lines means nothing here.
+    EMPTY_MATCH_REASONS = {
+        "sender_pattern": "le motif retient un expéditeur vide, donc tous les e-mails : pour tous les expéditeurs, "
+        "écrivez @",
+        "subject_pattern": "le motif retient un objet vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "body_pattern": "le motif retient un contenu vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "attachment_pattern": "le motif retient un nom vide, donc toutes les pièces jointes : pour toutes, écrivez "
+        "un point (.)",
+    }
+
     def clean(self):
+        """Each pattern compiles - and outside the platform owner's espace
+        passes the pattern guard too (returnables.patterns, `flags=0`: the
+        case-sensitive `re` they are matched with), each refusal in French on
+        its field: the gather runs them on headers and bodies anybody can
+        write, in the one process every bar runs in. The owner's are matched
+        by `re` as always, and checked as always. The form and « Données »'s
+        import both run this."""
+        from accounts.tenancy import server_accounts_allowed
+
+        guarded = not server_accounts_allowed()
         errors = {}
         for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
             value = getattr(self, field_name)
@@ -205,6 +236,21 @@ class EmailInvoiceSource(models.Model):
                 re.compile(value)
             except re.error as exc:
                 errors[field_name] = f"Expression régulière invalide : {exc}"
+                continue
+            if guarded:
+                from returnables import patterns
+
+                try:
+                    patterns.compile_pattern(
+                        value,
+                        field_label=self.PATTERN_LABELS[field_name],
+                        max_length=self._meta.get_field(field_name).max_length,
+                        flags=0,
+                        strip=False,
+                        empty_reason=self.EMPTY_MATCH_REASONS[field_name],
+                    )
+                except patterns.PatternError as exc:
+                    errors[field_name] = str(exc)
         if errors:
             raise ValidationError(errors)
 
@@ -1016,6 +1062,13 @@ class ScrapeJob(JobLogMixin):
         ordering = ["-started_at"]
 
     def append_log(self, message: str):
+        # As the espace reading it may read it (common.job_line): another
+        # bar's page never shows the server's paths or tracebacks. A line
+        # that was only a traceback there is not written at all.
+        cleaned = job_line(message)
+        if message and not cleaned:
+            return
+        message = cleaned
         # Timestamped so a slow run can actually be diagnosed after the fact
         # (which specific step took how long) instead of just knowing the
         # whole thing felt slow.
@@ -1026,6 +1079,9 @@ class ScrapeJob(JobLogMixin):
         self.save(update_fields=["log", "last_heartbeat"])
 
     def update_progress(self, supplier_code: str, label: str = "", **counts):
+        # A source's error or note is drawn on the gather's card: cleaned
+        # for the espace reading it, as the log is (common.job_line).
+        counts = {key: job_line(value) if isinstance(value, str) else value for key, value in counts.items()}
         entry = self.progress.setdefault(supplier_code, {"label": label, "found": 0, "imported": 0})
         if label:
             entry["label"] = label

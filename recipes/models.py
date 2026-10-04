@@ -9,7 +9,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-from common import JobLogMixin, search_key
+from common import JobLogMixin, job_line, search_key
 from inventory.models import StockType, UnitChoices
 
 _costing = threading.local()
@@ -847,6 +847,12 @@ class SalesImportJob(JobLogMixin):
         ordering = ["-started_at"]
 
     def append_log(self, message: str) -> None:
+        # As the espace reading it may read it (common.job_line): another
+        # bar's page never shows the server's paths or tracebacks.
+        cleaned = job_line(message)
+        if message and not cleaned:
+            return
+        message = cleaned
         now = timezone.now()
         elapsed = (now - self.started_at).total_seconds()
         line = f"[+{elapsed:6.1f}s] {message}"

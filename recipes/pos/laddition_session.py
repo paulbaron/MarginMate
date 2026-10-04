@@ -4,9 +4,11 @@ Credentials come from the espace's « Identifiants » page (accounts/vault.py),
 else the environment (LADDITION_EMAIL / LADDITION_PASSWORD in .env), and are
 typed by the browser at run time - the same arrangement the Metro invoice
 scraper uses. They are never stored in the database, never logged, and
-never committed. They are the owner's own till, so in multi mode
-only the owner's tenant may open a session (recipes/integration.py): the
-refusal comes before a browser starts or a password is read.
+never committed. Each espace signs in to its own till with what it typed on
+its « Identifiants » page; the .env's values stand in for the platform
+owner's espace only (accounts.vault.settings_of). Unbound, the session is
+refused before a browser starts or a password is read
+(recipes/integration.py).
 
 This module deliberately stops at "you are logged in and looking at the page
 you asked for". What to click once you're there belongs in whatever module
@@ -30,7 +32,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-from recipes.integration import refusal, till_allowed
+from invoices.scrapers import chrome
+from recipes.integration import TILL_LOGIN_MISSING, refusal, till_allowed, till_login_missing
 
 REPORTING_ROOT = "https://reporting.laddition.com"
 AUTH_URL = "https://auth.laddition.com/"
@@ -58,9 +61,8 @@ class LadditionAuthError(RuntimeError):
 
 
 class LadditionNotAllowed(LadditionAuthError):
-    """This tenant may not use the server's L'Addition account
-    (recipes/integration.py). Carries a French sentence and no variable
-    name."""
+    """No tenant bound: no L'Addition account to use (recipes/integration.py).
+    Carries a French sentence and no variable name."""
 
 
 def _refuse_unless_allowed() -> None:
@@ -115,7 +117,9 @@ def navigate(driver, url: str, log=print, attempts: int = NAVIGATION_ATTEMPTS, s
 def build_driver(download_dir: str) -> webdriver.Chrome:
     os.makedirs(download_dir, exist_ok=True)
     options = webdriver.ChromeOptions()
-    if settings.SCRAPER_HEADLESS:
+    # Headless whatever the settings outside the platform owner's espace: a
+    # visible window would open on the server's desktop (scrapers/chrome.py).
+    if chrome.headless(settings.SCRAPER_HEADLESS):
         options.add_argument("--headless=new")
     options.add_experimental_option(
         "prefs",
@@ -272,15 +276,20 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
         with laddition_session(dir) as driver:
             ...  # driver is on /v2/shift-details, signed in
 
-    Refused (LadditionNotAllowed) in a tenant that may not use the
-    server's account, before the browser starts.
+    Refused (LadditionNotAllowed) unbound, before the browser starts.
     """
     _refuse_unless_allowed()
-    driver = build_driver(download_dir)
-    try:
-        open_report(driver, path, log=log)
-        yield driver
-    finally:
-        # Never let a teardown failure mask the real error.
-        with contextlib.suppress(Exception):
-            driver.quit()
+    # Another bar with no L'Addition account on its « Identifiants »: said
+    # before one of the server's browsers is started for nothing.
+    if till_login_missing():
+        raise LadditionAuthError(TILL_LOGIN_MISSING)
+    # One of the server's browsers, or a refusal at once (scrapers/chrome.py).
+    with chrome.browser_slot(refused=LadditionAuthError):
+        driver = build_driver(download_dir)
+        try:
+            open_report(driver, path, log=log)
+            yield driver
+        finally:
+            # Never let a teardown failure mask the real error.
+            with contextlib.suppress(Exception):
+                driver.quit()

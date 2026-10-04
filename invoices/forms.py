@@ -940,11 +940,13 @@ class InvoiceUploadForm(ReceiptShopForm):
     def clean_supplier(self):
         value = self.cleaned_data["supplier"].strip()
         if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
-            # The AI reading runs on the owner's key: not offered in a
-            # tenant that may not use the server's accounts, and refused
-            # here when posted all the same (invoices/integrations.py).
+            # The AI reading runs on the espace's own key: refused unbound,
+            # and - outside the platform owner's espace - before the upload
+            # when no key is on « Identifiants » (invoices/integrations.py).
             if not integrations_allowed():
                 raise forms.ValidationError(integrations.AI_READING)
+            if not integrations.ai_offered():
+                raise forms.ValidationError(integrations.AI_KEY_MISSING)
             return Supplier.objects.get(pk=value)
         return super().clean_supplier()
 

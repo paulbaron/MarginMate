@@ -20,7 +20,7 @@ from django.views.generic import DetailView
 import common
 from accounts import sudo
 from accounts.access import access_of, refused
-from accounts.tenancy import bound, integrations_allowed, is_owner
+from accounts.tenancy import bound, integrations_allowed, is_owner, server_accounts_allowed
 from accounts.views import file_response, open_stored
 from common import error_for_page, group_thousands, is_id, local_return, safe_next
 
@@ -360,8 +360,8 @@ def trigger_gather(request):
     # Achats' card otherwise. Every rule below is this view's, whoever asks.
     back = local_return(request) or f"{reverse('invoices:invoice_list')}?ajouter=recuperer"
     if not integrations_allowed():
-        # Every source is one of the server's own accounts (integrations.py):
-        # no job, no thread - and « metro_now » is refused with the rest.
+        # Unbound (integrations.py): no job, no thread - and « metro_now » is
+        # refused with the rest.
         messages.error(request, integrations.GATHER)
         return redirect(back)
 
@@ -374,8 +374,9 @@ def trigger_gather(request):
     ).first()
     source_codes = set(request.POST.getlist("sources"))
     # One sign-in to a paused Metro, asked for on purpose (its own box is
-    # disabled while paused, so this names it).
-    metro_now = request.POST.get("metro_now") == "on"
+    # disabled while paused, so this names it) - the platform owner's only:
+    # Metro is no other espace's (integrations.py).
+    metro_now = request.POST.get("metro_now") == "on" and server_accounts_allowed()
     if metro_now:
         source_codes.add("METRO")
     if gathers_slips_only(request) and not all(str(code).startswith(SLIPS_PREFIX) for code in source_codes):
@@ -446,7 +447,7 @@ def invoice_type_list(request):
 
 
 def invoice_type_form(request, pk=None):
-    """A kind of invoice to gather: from the shared mailbox (patterns on
+    """A kind of invoice to gather: from the espace's mailbox (patterns on
     the emails) or from the supplier's customer portal (a login page and
     the two names its credentials are kept under). Only the
     chosen kind's settings are validated and saved; "Tester" runs either
@@ -473,12 +474,22 @@ def invoice_type_form(request, pk=None):
     test_job = None
     return_to = _local_return(request)
     sources_refused = None if integrations_allowed() else integrations.SOURCES
+    # A customer portal is the platform owner's espace's alone
+    # (integrations.py): elsewhere its channel says « à configurer », and a
+    # portal is neither saved nor tested - its mailbox sources are.
+    portals_refused = None if server_accounts_allowed() else integrations.PORTALS
     status = 200
 
     if request.method == "POST" and sources_refused:
-        # Both channels are the server's own accounts (integrations.py): no
-        # « Tester », no source saved - the page says « à configurer ».
+        # Unbound: no « Tester », no source saved.
         messages.error(request, sources_refused)
+        return redirect(request.get_full_path())
+    if (
+        request.method == "POST"
+        and portals_refused
+        and request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE
+    ):
+        messages.error(request, portals_refused)
         return redirect(request.get_full_path())
     if request.method == "POST" and request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE:
         if not is_owner(request):
@@ -518,7 +529,12 @@ def invoice_type_form(request, pk=None):
         elif request.POST.get("action") == "test":
             # Only the patterns need to be valid to try them - name/supplier
             # can still be blank/invalid while iterating on a regex.
-            if source_form.is_valid():
+            if source_form.is_valid() and _a_test_runs_here():
+                # Another bar's « Tester » is one mailbox search at a time:
+                # each click was a thread signing in to a server it names,
+                # over the dates it chose (the owner's tests run as always).
+                messages.error(request, TEST_RUNNING)
+            elif source_form.is_valid():
                 start = source_form.cleaned_data["test_start_date"] or (timezone.localdate() - timedelta(days=30))
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
                 test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
@@ -582,6 +598,7 @@ def invoice_type_form(request, pk=None):
             # moved the type back unrefused.
             "supplier_was": _supplier_was(request, type_form, invoice_type),
             "sources_refused": sources_refused,
+            "portals_refused": portals_refused,
         },
         status=status,
     )
@@ -647,6 +664,21 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
             "depuis leur page.",
         )
     return redirect(return_to or "invoices:invoice_type_list")
+
+
+TEST_RUNNING = "Un test de source est déjà en cours : attendez qu'il se termine."
+
+
+def _a_test_runs_here() -> bool:
+    """Whether a source's « Tester » of this espace is running, outside the
+    platform owner's espace - a test whose thread died is reaped first, so
+    it never holds the button for good (common.JobLogMixin)."""
+    if server_accounts_allowed():
+        return False
+    ScrapeJob.reap_stale()
+    return ScrapeJob.objects.filter(
+        kind=ScrapeJob.Kind.TEST, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
+    ).exists()
 
 
 def _test_website(request, type_form, website_form):

@@ -21,11 +21,13 @@ the reader for what it brings. The suppliers have their own tab
 
 {% if sources_refused %}
 {% comment %}
-The mailbox and the portals' credentials are the server's own accounts
-(invoices/integrations.py): in a tenant that may not use them, said here,
+Unbound, both channels are refused; in another bar's espace the portals,
+which are the platform owner's alone (invoices/integrations.py) - said here,
 where somebody comes to ask where the invoices come from.
 {% endcomment %}
 <div class="message">{{ sources_refused }}</div>
+{% elif portals_refused %}
+<p class="muted">{{ portals_refused }}</p>
 {% endif %}
 
 {% comment %}

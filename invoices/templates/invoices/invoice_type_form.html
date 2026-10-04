@@ -5,10 +5,9 @@
 
     {% if sources_refused %}
     {% comment %}
-    Both channels are the server's own accounts - the owner's mailbox, the
-    .env credentials a portal names (invoices/integrations.py): a tenant
-    that may not use them gets the sentence, no form, no « Tester » - and the
-    view refuses a post all the same. No variable, no file named here.
+    Unbound only (invoices/integrations.py): the sentence, no form, no
+    « Tester » - and the view refuses a post all the same. No variable, no
+    file named here.
     {% endcomment %}
     <div class="card">
         <div class="message">{{ sources_refused }}</div>
@@ -59,7 +58,7 @@
             <fieldset class="source-kind" data-source-kind="EMAIL"{% if is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : boîte mail</h3>
                 <p class="muted">
-                    Recherche dans la boîte mail partagée (son adresse et son mot de passe : page
+                    Recherche dans la boîte mail des factures (son adresse et son mot de passe : page
                     <a href="{% url 'accounts:credentials' %}">Identifiants</a>). Chaque champ est une expression
                     régulière (pièce jointe : sur le nom du fichier) ; objet et contenu vides = tous. « Tester »
                     n'importe ni ne modifie rien.
@@ -69,6 +68,10 @@
 
             <fieldset class="source-kind" data-source-kind="WEBSITE"{% if not is_website %} hidden disabled{% endif %}>
                 <h3>Réglages : espace client</h3>
+                {% if portals_refused %}
+                {% comment %}The portals are the platform owner's espace's alone (invoices/integrations.py): no field to send, and the view refuses a post naming the channel.{% endcomment %}
+                <div class="message">{{ portals_refused }}</div>
+                {% else %}
                 <p class="muted">
                     L'identifiant et le mot de passe se saisissent sur la page
                     <a href="{% url 'accounts:credentials' %}">Identifiants</a>, une fois la source enregistrée ; les
@@ -80,6 +83,7 @@
                     <summary class="muted">Réglages avancés (sélecteurs CSS)</summary>
                     {% include "_form_fields.html" with form=website_form only=website_form.advanced %}
                 </details>
+                {% endif %}
             </fieldset>
 
             <h3>Tester</h3>

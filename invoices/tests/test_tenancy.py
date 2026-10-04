@@ -2,9 +2,11 @@
 
 Real tenants in temporary files (accounts/tests/support.py): a bar's jobs,
 files and caches stay its own, whichever thread or process-global structure
-they pass through, and the server's own accounts - Metro, the invoice
-mailbox, the portals' .env credentials, the AI reading - are used from the
-owner's tenant only, refused at every entry point elsewhere (views, task
+they pass through. The connectors (invoices/integrations.py): the mailbox
+and the AI reading run in every espace, each with what it typed on its own
+« Identifiants » page - never with the server's .env values, which stand in
+for the platform owner's espace alone -, and Metro and the customer portals
+stay the owner's, refused at every entry point elsewhere (views, task
 bodies, connectors) with « à configurer ».
 
 Primary keys restart at 1 in every tenant's database, so every test here
@@ -16,10 +18,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, datetime, timedelta
 from io import StringIO
+from pathlib import Path
 from unittest import mock
 
 from django.apps import apps
@@ -29,20 +33,34 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts import paths
+from accounts import paths, vault
 from accounts.tenancy import NoTenantBound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from common import SERVER_ERROR
 from invoices import integrations
 from invoices.deletion import delete_invoice
-from invoices.integrations import TO_CONFIGURE
-from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
+from invoices.integrations import TO_CONFIGURE_PLURAL
+from invoices.models import Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier, WebsiteInvoiceSource
 from invoices.parsers import LLM_PARSER_KEY
+from invoices.scrapers.generic_email import MAILBOX_MISSING
 from invoices.tasks import gather_invoices_task, test_email_pattern_task, test_website_task
 from invoices.tests.pdf_files import write_pdf
 from tests.factories import make_invoice, make_supplier
 
 START, END = date(2026, 1, 1), date(2026, 1, 31)
+
+#: What the platform owner's .env holds on the server - in the settings of
+#: the process every espace runs in. Invented.
+SERVER_ENV = {
+    "METRO_EMAIL": "acheteur@exemple.invalid",
+    "METRO_PASSWORD": "secret-metro-essai",
+    "INVOICE_EMAIL_ADDRESS": "factures@exemple.invalid",
+    "INVOICE_EMAIL_APP_PASSWORD": "secret-boite-essai",
+    "INVOICE_IMAP_HOST": "imap.exemple.invalid",
+    "LADDITION_EMAIL": "caisse@exemple.invalid",
+    "LADDITION_PASSWORD": "secret-caisse-essai",
+    "ANTHROPIC_API_KEY": "cle-serveur-essai",
+}
 
 
 def run_in_a_thread(target, args=()) -> None:
@@ -89,32 +107,52 @@ class _Reached(Exception):
 
 
 class GateTests(TwoTenantsTestCase):
-    """Bar Alpha is the owner's tenant; Bar Beta uses none of the server's
-    accounts."""
+    """Bar Alpha is the platform owner's espace; Bar Beta another bar, which
+    runs the mailbox and the AI reading with its own « Identifiants », and
+    neither Metro nor a portal."""
 
     owner_a = True
 
-    def reopen_the_owners_integrations_in_b(self):
-        """What a « Données » import or the admin could do to Beta's rows:
-        the data must not be what keeps the owner's accounts out of reach."""
+    def reopen_everything_in_b(self):
+        """What a « Données » import or the admin could do to Beta's rows -
+        Metro marked to fetch, every source active, a portal among them: the
+        data must not be what keeps Metro and the portals out of reach."""
         with bound_tenant(self.bar_b):
             Supplier.objects.filter(code="METRO").update(is_scrapable=True)
+            box = make_supplier(code="BOX_B", name="Box Beta", parser_key="")
+            portal = InvoiceType.objects.create(
+                name="Box Beta - Factures", supplier=box, source_kind=InvoiceType.SourceKind.WEBSITE
+            )
+            WebsiteInvoiceSource.objects.create(
+                invoice_type=portal,
+                login_url="https://box.exemple.invalid/login",
+                username_env="BOX_LOGIN",
+                password_env="BOX_PASSWORD",
+            )
             InvoiceType.objects.update(is_active=True)
-            return [f"type-{pk}" for pk in InvoiceType.objects.values_list("pk", flat=True)]
+            mailbox = InvoiceType.objects.filter(source_kind=InvoiceType.SourceKind.EMAIL)
+            return {
+                "mailbox": [f"type-{pk}" for pk in mailbox.values_list("pk", flat=True)],
+                "portal": f"type-{portal.pk}",
+            }
 
     # ------------------------------------------------------------ the views
 
-    def test_a_gather_is_refused_in_a_tenant_without_the_servers_accounts(self):
-        codes = self.reopen_the_owners_integrations_in_b()
+    def test_a_hosted_bar_s_gather_runs_in_a_thread_bound_to_it_and_never_asks_metro_now(self):
+        codes = self.reopen_everything_in_b()
         self.client.force_login(self.user_b)
         with mock.patch("invoices.views.threading.Thread") as thread:
-            response = self.client.post(
-                reverse("invoices:gather"), {"sources": ["METRO", *codes], "metro_now": "on"}, follow=True
+            self.client.post(
+                reverse("invoices:gather"), {"sources": [*codes["mailbox"], codes["portal"]], "metro_now": "on"}
             )
-        thread.assert_not_called()
-        self.assertContains(response, TO_CONFIGURE)
-        with bound_tenant(self.bar_b):
-            self.assertFalse(ScrapeJob.objects.exists())
+        thread.assert_called_once()
+        target, args = thread.call_args.kwargs["target"], thread.call_args.kwargs["args"]
+        self.assertIs(target.__wrapped__, gather_invoices_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        # « Réessayer Metro maintenant » is the owner's: neither Metro nor
+        # the pause's bypass reach the thread.
+        self.assertNotIn("METRO", args[3])
+        self.assertFalse(args[4])
 
     def test_the_owners_gather_runs_in_a_thread_bound_to_the_owners_tenant(self):
         self.client.force_login(self.user_a)
@@ -124,22 +162,38 @@ class GateTests(TwoTenantsTestCase):
         self.assertIs(target.__wrapped__, gather_invoices_task)
         self.assertEqual(target.tenant.pk, self.bar_a.pk)
 
-    def test_the_import_card_says_to_configure_instead_of_the_gather(self):
+    def test_the_import_card_offers_a_hosted_bar_its_mailbox_and_says_metro_and_the_portals(self):
+        codes = self.reopen_everything_in_b()
+        with bound_tenant(self.bar_b):
+            # Its mailbox, on its « Identifiants » (invoices/tests/test_mailbox_guards.py
+            # has the card before it is).
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
         gather = f'action="{reverse("invoices:gather")}"'
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer")
-        self.assertContains(page, integrations.GATHER)
-        self.assertNotContains(page, gather)
+        self.assertContains(page, gather)
+        for code in codes["mailbox"]:
+            self.assertContains(page, f'value="{code}"')
+        self.assertNotContains(page, f'value="{codes["portal"]}"')
+        self.assertNotContains(page, 'value="METRO"')
         self.assertNotContains(page, 'name="metro_now"')
+        self.assertContains(page, integrations.METRO)
+        self.assertContains(page, integrations.PORTALS)
         self.client.force_login(self.user_a)
-        self.assertContains(self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer"), gather)
+        page = self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer")
+        self.assertContains(page, gather)
+        self.assertNotContains(page, integrations.PORTALS)
 
-    def test_the_source_form_says_to_configure_and_refuses_every_post(self):
+    def test_the_source_form_takes_a_mailbox_source_and_refuses_a_portal(self):
         self.client.force_login(self.user_b)
         create = reverse("invoices:invoice_type_create")
         page = self.client.get(create)
-        self.assertContains(page, TO_CONFIGURE)
-        self.assertNotContains(page, 'value="test"')
+        self.assertContains(page, 'value="test"')
+        self.assertContains(page, integrations.PORTALS)
+        self.assertNotContains(page, 'name="site-login_url"')
         with bound_tenant(self.bar_b):
             supplier = make_supplier(code="TRAITEUR_B", name="Traiteur Beta", parser_key="")
             types_before = InvoiceType.objects.count()
@@ -149,7 +203,7 @@ class GateTests(TwoTenantsTestCase):
             "source_kind": "EMAIL",
             "parser_key": "",
             "is_active": "on",
-            "sender_pattern": r".",
+            "sender_pattern": r"traiteur",
             "subject_pattern": "",
             "body_pattern": "",
             "attachment_pattern": r"\.pdf$",
@@ -164,48 +218,53 @@ class GateTests(TwoTenantsTestCase):
             "site-username_env": "BOX_LOGIN",
             "site-password_env": "BOX_PASSWORD",
         }
-        for data in (
-            {**mailbox, "action": "test"},
-            {**portal, "action": "test"},
-            {**mailbox, "action": "save"},
-            {**portal, "action": "save"},
-        ):
-            with self.subTest(kind=data["source_kind"], action=data["action"]):
+        for data in ({**portal, "action": "test"}, {**portal, "action": "save"}):
+            with self.subTest(kind="portal", action=data["action"]):
                 with mock.patch("invoices.views.threading.Thread") as thread:
                     response = self.client.post(create, data, follow=True)
                 thread.assert_not_called()
-                self.assertContains(response, TO_CONFIGURE)
+                self.assertContains(response, TO_CONFIGURE_PLURAL)
         with bound_tenant(self.bar_b):
             self.assertEqual(InvoiceType.objects.count(), types_before)
             self.assertFalse(ScrapeJob.objects.exists())
+        # The mailbox: « Tester » runs bound to Beta, and the source saves.
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            self.client.post(create, {**mailbox, "action": "test"})
+        target = thread.call_args.kwargs["target"]
+        self.assertIs(target.__wrapped__, test_email_pattern_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        self.client.post(create, {**mailbox, "action": "save"})
+        with bound_tenant(self.bar_b):
+            self.assertTrue(InvoiceType.objects.filter(name="Traiteur Beta - Factures").exists())
 
-    def test_the_sources_tab_says_to_configure(self):
+    def test_the_sources_tab_offers_a_new_source_and_says_the_portals(self):
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_type_list"))
-        self.assertContains(page, TO_CONFIGURE)
+        self.assertContains(page, reverse("invoices:invoice_type_create"))
+        self.assertContains(page, integrations.PORTALS)
         self.client.force_login(self.user_a)
-        self.assertNotContains(self.client.get(reverse("invoices:invoice_type_list")), TO_CONFIGURE)
+        self.assertNotContains(self.client.get(reverse("invoices:invoice_type_list")), integrations.PORTALS)
 
-    def test_the_ai_reading_is_neither_offered_nor_taken_on_upload(self):
+    def test_the_ai_reading_is_offered_and_taken_on_upload_in_every_espace(self):
         with bound_tenant(self.bar_b):
             ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
+            # Its key, on its « Identifiants » (invoices/tests/test_ai_reading.py
+            # has the page before it is).
+            vault.save({"ANTHROPIC_API_KEY": "cle-beta-essai"})
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list"))
-        self.assertNotContains(page, '<optgroup label="Analyse IA">')
+        self.assertContains(page, '<optgroup label="Analyse IA">')
         upload = SimpleUploadedFile("facture.pdf", b"%PDF-1.4 essai", content_type="application/pdf")
-        with mock.patch("invoices.views.parse_and_import") as parse:
-            response = self.client.post(
-                reverse("invoices:invoice_upload"), {"supplier": str(ai.pk), "source_file": upload}
-            )
-        parse.assert_not_called()
-        self.assertContains(response, TO_CONFIGURE)
-        with bound_tenant(self.bar_b):
-            self.assertFalse(Invoice.objects.exists())
-        self.client.force_login(self.user_a)
-        self.assertContains(self.client.get(reverse("invoices:invoice_list")), '<optgroup label="Analyse IA">')
+        with (
+            mock.patch("invoices.ocr.check_page_count"),
+            mock.patch("invoices.receipts.route_to_returnables"),
+            mock.patch("invoices.views.parse_and_import", side_effect=_Reached) as parse,
+        ):
+            self.client.post(reverse("invoices:invoice_upload"), {"supplier": str(ai.pk), "source_file": upload})
+        parse.assert_called_once()
 
     def test_metro_is_not_said_to_be_fetched_by_its_own_module_outside_the_owners_tenant(self):
-        self.reopen_the_owners_integrations_in_b()
+        self.reopen_everything_in_b()
         own = "Récupérées par son propre module"
         with bound_tenant(self.bar_b):
             metro_b = Supplier.objects.get(code="METRO").pk
@@ -217,31 +276,19 @@ class GateTests(TwoTenantsTestCase):
         self.client.force_login(self.user_a)
         self.assertContains(self.client.get(reverse("invoices:supplier_detail", args=[metro_a])), own)
 
-    def test_a_supplier_s_page_offers_no_new_source_outside_the_owners_tenant(self):
-        """Both channels of a source are the server's own accounts: the
-        supplier's page says « à configurer » where the Sources tab does, and
-        no longer points at a form that only says so."""
+    def test_a_supplier_s_page_offers_a_new_source_in_every_espace(self):
         with bound_tenant(self.bar_b):
             shop_b = make_supplier(code="EPICERIE_B", name="Epicerie Beta", parser_key="")
-        with bound_tenant(self.bar_a):
-            shop_a = make_supplier(code="EPICERIE_A", name="Epicerie Alpha", parser_key="")
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:supplier_detail", args=[shop_b.pk]))
         self.assertEqual(page.status_code, 200)
-        self.assertNotContains(page, "+ Nouvelle source pour")
-        self.assertNotContains(page, reverse("invoices:invoice_type_create"))
-        self.assertNotContains(page, "ajoutez-en une (e-mail, espace client)")
-        self.assertContains(page, TO_CONFIGURE)
-        self.client.force_login(self.user_a)
-        page = self.client.get(reverse("invoices:supplier_detail", args=[shop_a.pk]))
-        self.assertContains(page, "+ Nouvelle source pour Epicerie Alpha")
-        self.assertContains(page, "ajoutez-en une (e-mail, espace client)")
-        self.assertNotContains(page, TO_CONFIGURE)
+        self.assertContains(page, "+ Nouvelle source pour Epicerie Beta")
+        self.assertNotContains(page, TO_CONFIGURE_PLURAL)
 
     # ------------------------------------------------------- the task bodies
 
-    def test_the_gather_task_refuses_by_itself(self):
-        codes = self.reopen_the_owners_integrations_in_b()
+    def test_the_gather_task_searches_the_mailbox_and_neither_metro_nor_a_portal(self):
+        codes = self.reopen_everything_in_b()
         with bound_tenant(self.bar_b):
             job = ScrapeJob.objects.create()
             with (
@@ -250,31 +297,34 @@ class GateTests(TwoTenantsTestCase):
                 mock.patch("invoices.tasks.fetch_website_invoices", return_value=[]) as portal,
                 mock.patch("invoices.tasks._GatherHeartbeat"),
             ):
-                gather_invoices_task(job.pk, START, END, {"METRO", *codes}, True)
+                gather_invoices_task(job.pk, START, END, {"METRO", *codes["mailbox"], codes["portal"]}, True)
             job.refresh_from_db()
-        for connector in (metro, mailbox, portal):
-            connector.assert_not_called()
-        self.assertEqual(job.status, ScrapeJob.Status.FAILED)
-        self.assertIn(integrations.GATHER, job.log)
+        metro.assert_not_called()
+        portal.assert_not_called()
+        mailbox.assert_called()
+        self.assertEqual(job.status, ScrapeJob.Status.SUCCESS)
+        self.assertEqual(job.progress["METRO"]["error"], integrations.METRO)
+        self.assertEqual(job.progress[codes["portal"]]["error"], integrations.PORTALS)
 
-    def test_the_tests_of_a_source_refuse_by_themselves(self):
+    def test_the_tests_of_a_source_mailbox_runs_and_portal_refuses_by_itself(self):
         with bound_tenant(self.bar_b):
             mail_job, portal_job = ScrapeJob.objects.create(kind="TEST"), ScrapeJob.objects.create(kind="TEST")
-            with mock.patch("invoices.tasks.find_matching_emails") as mailbox:
-                test_email_pattern_task(mail_job.pk, START, END, ".", "", "", r"\.pdf$")
+            with mock.patch("invoices.tasks.find_matching_emails", return_value=[]) as mailbox:
+                test_email_pattern_task(mail_job.pk, START, END, "traiteur", "", "", r"\.pdf$")
             with mock.patch("invoices.tasks.list_website_invoices") as portal:
                 test_website_task(portal_job.pk, portal_recipe(), 0, START, END)
             mail_job.refresh_from_db()
             portal_job.refresh_from_db()
-        mailbox.assert_not_called()
+        mailbox.assert_called_once()
         portal.assert_not_called()
-        self.assertEqual((mail_job.status, portal_job.status), (ScrapeJob.Status.FAILED, ScrapeJob.Status.FAILED))
-        self.assertIn(integrations.MAILBOX, mail_job.log)
+        self.assertEqual((mail_job.status, portal_job.status), (ScrapeJob.Status.SUCCESS, ScrapeJob.Status.FAILED))
         self.assertIn(integrations.PORTALS, portal_job.log)
 
     # ------------------------------------------------------ the connectors
+    # The server's .env values are in every espace's settings: a hosted bar
+    # with nothing typed on its « Identifiants » page must reach none of them.
 
-    @override_settings(METRO_EMAIL="acheteur@exemple.invalid", METRO_PASSWORD="secret-essai")
+    @override_settings(**SERVER_ENV)
     def test_metro_refuses_before_its_pause_or_a_browser(self):
         from invoices.scrapers.metro import MetroError, scrape_metro_invoices
 
@@ -292,19 +342,41 @@ class GateTests(TwoTenantsTestCase):
                 with self.assertRaises(_Reached):
                     scrape_metro_invoices(str(paths.downloads_dir() / "metro"), START, END)
 
-    @override_settings(INVOICE_EMAIL_ADDRESS="factures@exemple.invalid", INVOICE_EMAIL_APP_PASSWORD="secret-essai")
-    def test_the_mailbox_refuses_before_signing_in(self):
+    @override_settings(**SERVER_ENV)
+    def test_the_mailbox_never_signs_in_with_the_server_s_account(self):
         from invoices.scrapers.generic_email import find_matching_emails
 
         with mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL", side_effect=_Reached) as imap:
             with bound_tenant(self.bar_b):
                 with self.assertRaises(RuntimeError) as refused:
-                    find_matching_emails(START, END, ".", "", "", "")
+                    find_matching_emails(START, END, "traiteur", "", "", "")
             imap.assert_not_called()
-            self.assertEqual(str(refused.exception), integrations.MAILBOX)
+            self.assertEqual(str(refused.exception), MAILBOX_MISSING)
             with bound_tenant(self.bar_a):
                 with self.assertRaises(_Reached):
-                    find_matching_emails(START, END, ".", "", "", "")
+                    find_matching_emails(START, END, "traiteur", "", "", "")
+        self.assertEqual(imap.call_args.args[0], "imap.exemple.invalid")
+
+    @override_settings(**SERVER_ENV)
+    def test_the_mailbox_signs_in_with_what_the_bar_typed(self):
+        from invoices.scrapers.generic_email import find_matching_emails
+
+        with bound_tenant(self.bar_b):
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
+            imap = mock.Mock()
+            imap.login.side_effect = _Reached
+            public = [(2, 1, 6, "", ("8.8.8.8", 993))]
+            with (
+                mock.patch("invoices.scrapers.generic_email.imaplib.IMAP4_SSL", return_value=imap) as opened,
+                mock.patch("invoices.scrapers.egress.resolve", return_value=public),
+                self.assertRaises(_Reached),
+            ):
+                find_matching_emails(START, END, "traiteur", "", "", "")
+        self.assertEqual(opened.call_args.args[0], "imap.beta.invalid")
+        imap.login.assert_called_once_with("beta@exemple.invalid", "secret-beta")
 
     def test_a_portal_reads_no_credential_and_names_no_variable(self):
         from invoices.scrapers.website import WebsiteError, credentials
@@ -318,16 +390,37 @@ class GateTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_a):
             # The owner's espace: the .env's values, once their site is
             # confirmed on « Identifiants » (accounts/vault.py env_bindings).
-            from accounts import vault
-
             vault.save({}, env_bindings={"BOX_LOGIN": "box.exemple.invalid", "BOX_PASSWORD": "box.exemple.invalid"})
             self.assertEqual(
                 credentials(portal_recipe(), env_file=None, environ=environ),
                 ("gerant@exemple.invalid", "secret-essai"),
             )
 
-    @override_settings(ANTHROPIC_API_KEY="cle-essai")
-    def test_the_ai_reading_refuses_before_reading_or_calling_anything(self):
+    def test_a_portal_s_visit_makes_no_folder_and_starts_no_browser_for_another_bar(self):
+        """The connector's own gate, before a folder is made, the kept pages
+        pruned, a credential read or a browser started - whoever called it
+        (fetch_website_invoices, list_website_invoices)."""
+        from invoices.scrapers import website
+
+        folder = Path(tempfile.mkdtemp()) / "portail"
+        driver_factory = mock.Mock(side_effect=AssertionError("a browser started"))
+        for visit in (website.fetch_website_invoices, website.list_website_invoices):
+            with (
+                self.subTest(visit=visit.__name__),
+                bound_tenant(self.bar_b),
+                mock.patch.object(website, "prune_dumps") as prune,
+                mock.patch.object(website, "credentials") as read,
+                self.assertRaises(website.WebsiteError) as refused,
+            ):
+                visit(portal_recipe(), str(folder), START, END, driver_factory=driver_factory)
+            self.assertEqual(str(refused.exception), integrations.PORTALS)
+            prune.assert_not_called()
+            read.assert_not_called()
+        driver_factory.assert_not_called()
+        self.assertFalse(folder.exists())
+
+    @override_settings(**SERVER_ENV)
+    def test_the_ai_reading_never_bills_the_server_s_key(self):
         from invoices.parsers.llm_fallback import LLMFallbackParser
 
         anthropic = mock.Mock()
@@ -337,14 +430,36 @@ class GateTests(TwoTenantsTestCase):
             mock.patch("invoices.parsers.llm_fallback._extract_text", return_value="FACTURE ESSAI") as extract,
         ):
             with bound_tenant(self.bar_b):
-                with self.assertRaises(RuntimeError) as refused:
+                with self.assertRaises(integrations.AiReadingRefused) as refused:
                     LLMFallbackParser().parse("facture.pdf")
             extract.assert_not_called()
             anthropic.Anthropic.assert_not_called()
-            self.assertEqual(str(refused.exception), integrations.AI_READING)
+            self.assertEqual(str(refused.exception), integrations.AI_KEY_MISSING)
+            with bound_tenant(self.bar_b):
+                # Its own key, typed on its « Identifiants »: that one is sent.
+                vault.save({"ANTHROPIC_API_KEY": "cle-beta-essai"})
+                with self.assertRaises(_Reached):
+                    LLMFallbackParser().parse("facture.pdf")
+            self.assertEqual(anthropic.Anthropic.call_args.kwargs["api_key"], "cle-beta-essai")
             with bound_tenant(self.bar_a):
                 with self.assertRaises(_Reached):
                     LLMFallbackParser().parse("facture.pdf")
+            self.assertEqual(anthropic.Anthropic.call_args.kwargs["api_key"], "cle-serveur-essai")
+
+    def test_unbound_every_connector_refuses(self):
+        from invoices.parsers.llm_fallback import LLMFallbackParser
+        from invoices.scrapers.generic_email import find_matching_emails
+
+        with self.assertRaises(RuntimeError) as mailbox:
+            find_matching_emails(START, END, "traiteur", "", "", "")
+        self.assertEqual(str(mailbox.exception), integrations.MAILBOX)
+        with self.assertRaises(integrations.AiReadingRefused) as ai:
+            LLMFallbackParser().parse("facture.pdf")
+        self.assertEqual(str(ai.exception), integrations.AI_READING)
+
+    def test_refused_agrees_with_a_plural_subject(self):
+        self.assertTrue(integrations.PORTALS.endswith("disponibles prochainement dans les réglages de votre espace."))
+        self.assertTrue(integrations.METRO.endswith(" disponible prochainement dans les réglages de votre espace."))
 
 
 class ThreadTests(TwoTenantsTestCase):

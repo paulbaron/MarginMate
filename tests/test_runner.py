@@ -89,6 +89,7 @@ class TheBindingTests(SimpleTestCase):
         # The owner's tenant: the suite has always assumed the server's
         # integrations were allowed (their credentials are blank anyway).
         self.assertTrue(tenancy.integrations_allowed())
+        self.assertTrue(tenancy.server_accounts_allowed())
 
     def test_a_thread_started_without_bound_works_for_it_too(self):
         self.assertEqual(in_a_raw_thread(lambda: tenancy.current_tenant().pk), runner.TEST_TENANT_PK)

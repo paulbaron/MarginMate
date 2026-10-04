@@ -55,7 +55,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.tenancy import integrations_allowed
+from accounts.tenancy import server_accounts_allowed
 from invoices.integrations import TO_CONFIGURE
 
 from . import pdf, private_files, signature_mail, signing
@@ -86,9 +86,10 @@ RETENTION_NOTE = (
     "Les signatures sont conservées {years} ans après la fin du mois, puis à effacer : manage.py "
     "staff_purge_signatures (--dry-run d'abord) ; rien ne le lance automatiquement."
 )
-#: RETENTION_NOTE in a tenant that runs no command on the server (a hosted
-#: bar, accounts.tenancy.integrations_allowed): the words every other page
-#: uses for what it cannot do yet (invoices/integrations.py).
+#: RETENTION_NOTE in an espace that runs no command on the server (every one
+#: but the platform owner's, accounts.tenancy.server_accounts_allowed): the
+#: words every other page uses for what it cannot do yet
+#: (invoices/integrations.py).
 RETENTION_NOTE_TO_CONFIGURE = (
     f"Les signatures sont conservées {{years}} ans après la fin du mois ; leur effacement ensuite est {TO_CONFIGURE}."
 )
@@ -441,7 +442,7 @@ class SignaturePanel:
         the server: it is told « à configurer »."""
         if not (self.current or self.earlier):
             return ""
-        note = RETENTION_NOTE if integrations_allowed() else RETENTION_NOTE_TO_CONFIGURE
+        note = RETENTION_NOTE if server_accounts_allowed() else RETENTION_NOTE_TO_CONFIGURE
         return note.format(years=getattr(settings, "STAFF_SIGNATURE_RETENTION_YEARS", 5))
 
 
