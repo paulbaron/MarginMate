@@ -715,6 +715,29 @@ def bank_reconcile(request):
     return redirect(_back(request))
 
 
+#: A stale « Pas de facture » or « Rapprocher automatiquement », refused.
+LINKED_MEANWHILE = (
+    "Cette opération a été rattachée entre-temps à une facture : rien n'a changé. Déliez-la d'abord si besoin."
+)
+
+
+@transaction.atomic
+def _unless_linked(line: BankTransaction, change) -> bool:
+    """`change(line)` unless the line pays an invoice now; False then.
+
+    Neither button is drawn on a row that pays one, so a link means the page
+    was drawn before another tab, an import's automatic pass or
+    « Propositions » made it - and both changes start by deleting every
+    link: the stale click took it off in silence, and « pas de facture »
+    kept the pass from ever putting it back. Checked in the change's own
+    (IMMEDIATE) transaction, so no link is committed between the two.
+    """
+    if line.payments.exists():
+        return False
+    change(line)
+    return True
+
+
 def bank_line_action(request, pk):
     line = get_object_or_404(BankTransaction, pk=pk)
     back = _back(request)
@@ -758,8 +781,10 @@ def bank_line_action(request, pk):
         reconcile.unlink(line)
         messages.success(request, "Rattachement retiré : cette ligne ne sera plus rapprochée automatiquement.")
     elif action == "no_invoice":
-        reconcile.mark_no_invoice(line)
-        messages.success(request, "Ligne marquée « pas de facture attendue ».")
+        if _unless_linked(line, reconcile.mark_no_invoice):
+            messages.success(request, "Ligne marquée « pas de facture attendue ».")
+        else:
+            messages.error(request, LINKED_MEANWHILE)
     elif action == "category":
         # What the money was for, which says NOTHING about whether the
         # invoice is still to be found: a category must not set
@@ -783,7 +808,9 @@ def bank_line_action(request, pk):
                 request, f"Catégorie retirée : cette dépense compte comme « {spending.NO_CATEGORY} ».{moved}"
             )
     elif action == "reopen":
-        reconcile.reopen(line)
+        if not _unless_linked(line, reconcile.reopen):
+            messages.error(request, LINKED_MEANWHILE)
+            return redirect(back)
         reconcile.reconcile()
         if line.payments.exists():
             messages.success(request, "Ligne rendue au rapprochement automatique, et rattachée à sa facture.")
