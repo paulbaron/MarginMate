@@ -14,6 +14,7 @@ import hashlib
 import os
 from collections import defaultdict
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import default_storage
@@ -258,7 +259,8 @@ class RecipeResolver:
 
 # -- invoices ------------------------------------------------------------------------
 
-KEY_FIELDS = ("supplier", "number", "sha256", "file_sha256", "occurrence")
+#: "moment" only on a document with nothing to hash (invoice_keys).
+KEY_FIELDS = ("supplier", "number", "sha256", "file_sha256", "occurrence", "moment")
 #: Ids per query when InvoiceIndex.prefetch reads them, under SQLite's
 #: variable limit.
 PREFETCH_BATCH = 500
@@ -288,8 +290,12 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
     number, no stored sha and byte-identical files: they are (file sha, 0)
     and (file sha, 1), and round-trip as two. One with nothing to hash
     either - typed by hand without a file, or its file gone from the disk -
-    is ranked among its supplier's such documents: all were (supplier, "",
-    "", "", 0), and a restore kept one of them (audit 04/10/2026).
+    carries the moment it was typed (`moment`, imported_at in UTC, which an
+    import writes back) and is ranked among its supplier's such documents of
+    that same moment. All were (supplier, "", "", "", 0), and a restore kept
+    one of them (audit 04/10/2026); ranked among all the supplier's, one
+    deleted between the export and the import shifted every later one onto
+    its neighbour, and a merge created the last again (review, 04/10/2026).
 
     `file_shas` (pk → sha) are the shas already known - the invoices
     section has them from the file refs it just wrote - so no file is
@@ -309,11 +315,15 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
         return known[pk]
 
     ranks: dict[int, int] = {}
+    moments: dict[int, str] = {}
     groups: dict[str | tuple, int] = defaultdict(int)
-    for pk, code, number, stored_sha, _imported_at, name in rows:  # already in (imported_at, id) order
+    for pk, code, number, stored_sha, imported_at, name in rows:  # already in (imported_at, id) order
         if number:
             continue
-        fallback = stored_sha or sha_of(pk, name) or ("no file", code)
+        fallback = stored_sha or sha_of(pk, name)
+        if not fallback:
+            moments[pk] = imported_at.astimezone(UTC).isoformat()
+            fallback = ("no file", code, moments[pk])
         ranks[pk] = groups[fallback]
         groups[fallback] += 1
 
@@ -328,6 +338,7 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
             "sha256": stored_sha or "",
             "file_sha256": sha_of(pk, name),
             "occurrence": ranks.get(pk, 0),
+            **({"moment": moments[pk]} if pk in moments else {}),
         }
         for pk, code, number, stored_sha, _imported_at, name in rows
         if wanted is None or pk in wanted
@@ -336,6 +347,16 @@ def invoice_keys(invoices=None, *, file_shas: dict[int, str] | None = None) -> d
 
 def _canonical(key: dict) -> tuple:
     return tuple(key.get(name) for name in KEY_FIELDS)
+
+
+def _moment(value) -> datetime | None:
+    """A key's `moment`, or None when it is not one (a hand-edited key):
+    it then answers no document."""
+    try:
+        moment = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.utcoffset() is not None else None
 
 
 class Ambiguous:
@@ -362,7 +383,10 @@ class InvoiceIndex:
        hashed lazily, on the first miss, once per run.
     4. a key with no number and no sha at all: rank `occurrence` among the
        supplier's invoices with no number, no stored sha and no file on the
-       disk (invoice_keys ranks them so).
+       disk imported at the key's `moment` (invoice_keys ranks them so). A
+       key with no moment - an archive taken before 04/10/2026 - ranks among
+       all of them: every such key there says 0, so the first answers the
+       first document here and the others the same one, skipped.
 
     Steps 2 and 3 still run when step 1 finds something: a document whose
     number differs between the databases (a stand-in « YYYYMMDD-total »
@@ -450,7 +474,11 @@ class InvoiceIndex:
             if supplier is None:
                 return None
             self._hash_files()
-            return self._rank(self._fileless.get(supplier.pk, []), occurrence)
+            fileless = self._fileless.get(supplier.pk, [])
+            if "moment" in key:
+                moment = _moment(key["moment"])
+                fileless = [pk for pk in fileless if self._order[pk][0] == moment]
+            return self._rank(fileless, occurrence)
         found = self._rank([pk for sha in shas for pk in self._by_sha.get(sha, [])], occurrence)
         if found is not None:
             return found

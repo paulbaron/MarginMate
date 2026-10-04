@@ -43,6 +43,7 @@ from inventory.models import (
     StockType,
     UnitChoices,
 )
+from invoices.deletion import delete_invoice
 from invoices.models import Invoice, InvoiceLine, Supplier, SupplierChange
 from invoices.workspace import _changes_to_see
 from tests.factories import (
@@ -1443,11 +1444,25 @@ class FilelessDocumentsTests(MediaMixin, TestCase):
             for invoice in Invoice.objects.filter(supplier__code="METRO", invoice_number="")
         )
 
-    def test_they_are_ranked_apart_in_the_archive(self):
+    def test_they_are_keyed_apart_in_the_archive_by_the_moment_each_was_typed(self):
+        reader = export_archive({"factures"}, closed=False)
+        self.addCleanup(reader.close)
+        records = reader.section("factures").payload()["invoices"]
+        self.assertEqual(
+            sorted((record["key"]["moment"], record["key"]["occurrence"]) for record in records),
+            [("2026-09-10T08:01:30.125000+00:00", 0), ("2026-09-10T08:02:30.125000+00:00", 0)],
+        )
+
+    def test_two_typed_the_same_moment_are_ranked_within_it(self):
+        Invoice.objects.filter(supplier__code="METRO").update(imported_at=datetime(2026, 9, 10, 8, 1, tzinfo=UTC))
         reader = export_archive({"factures"}, closed=False)
         self.addCleanup(reader.close)
         records = reader.section("factures").payload()["invoices"]
         self.assertEqual(sorted(record["key"]["occurrence"] for record in records), [0, 1])
+        run = import_archive(reader, MERGE)
+        self.assertEqual(run.section("factures").tallies["documents"].created, 0)
+        self.assertEqual(run.section("factures").conflicts, [])
+        self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1)])
 
     def test_a_merge_of_the_own_export_changes_nothing(self):
         reader = export_archive(registry.closure({"factures", "banque"}, "export"))
@@ -1479,6 +1494,93 @@ class FilelessDocumentsTests(MediaMixin, TestCase):
         before, after = round_trip({"factures", "banque"}, REPLACE)
         self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1)])
         self.assertEqual(before, after)
+
+
+class FilelessDocumentDeletedTests(MediaMixin, TestCase):
+    """Three Metro documents typed by hand with no number and no file, B
+    paid by the bank, and A deleted between the export and the import. Keyed
+    by their rank among the supplier's such documents, every later one
+    shifted: a merge paired the archive's A with B here and its B with C,
+    said both « différente dans l'archive », created C a second time - its
+    purchase counted twice - and never brought A back; a replace rewrote B
+    with A's lines (review, 04/10/2026). Keyed by the moment each was typed,
+    which an import writes back, each finds its own."""
+
+    def setUp(self):
+        super().setUp()
+        metro = Supplier.objects.get(code="METRO")
+        self.typed = {}
+        for minute, (name, total) in enumerate((("A", "10.00"), ("B", "250.00"), ("C", "30.00")), start=1):
+            invoice = imported(unnumbered(metro, invoice_date=date(2026, 9, 1), status=COMPLETE), minute)
+            make_invoice_line(invoice, make_product(metro, f"SAISIE ESSAI {name}"), quantity=D("1"), total_ht=total)
+            self.typed[name] = invoice
+        payment(self.typed["B"])
+
+    state = staticmethod(FilelessDocumentsTests.state)
+
+    def export_then_delete_a(self, sections, *, closed=True) -> ArchiveReader:
+        reader = export_archive(sections, closed=closed)
+        self.addCleanup(reader.close)
+        delete_invoice(self.typed["A"])
+        return reader
+
+    def assert_restored(self, run):
+        documents = run.section("factures").tallies["documents"]
+        self.assertEqual((documents.created, documents.updated, documents.deleted), (1, 0, 0))
+        self.assertEqual(run.section("factures").conflicts, [])
+        self.assertEqual(run.section("factures").skipped, [])
+        self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1), ("30.00", 0)])
+        # B's payment stays on B's own row, and every line names a product.
+        self.assertEqual(InvoicePayment.objects.get().invoice_id, self.typed["B"].pk)
+        self.assertEqual(Invoice.objects.get(pk=self.typed["C"].pk).lines.get().total_ht, D("30.00"))
+        connection.check_constraints()
+
+    def test_a_merge_brings_it_back_and_duplicates_nothing(self):
+        reader = self.export_then_delete_a(registry.closure({"factures", "banque"}, "export"))
+        self.assert_restored(import_archive(reader, MERGE))
+
+    def test_a_replace_of_the_documents_alone_brings_it_back(self):
+        reader = self.export_then_delete_a({"factures"}, closed=False)
+        self.assert_restored(import_archive(reader, {"factures": REPLACE}))
+
+    def test_a_replace_of_the_documents_and_the_bank_brings_it_back(self):
+        reader = self.export_then_delete_a(registry.closure({"factures", "banque"}, "export"))
+        strategies = {key: REPLACE if key in ("factures", "banque") else MERGE for key in reader.sections}
+        self.assert_restored(import_archive(reader, strategies))
+
+    def test_restored_it_keeps_its_key_and_the_next_round_trip_changes_nothing(self):
+        reader = self.export_then_delete_a({"factures"}, closed=False)
+        import_archive(reader, MERGE)
+        self.assertEqual(self.state(), [("10.00", 0), ("250.00", 1), ("30.00", 0)])
+        again = export_archive({"factures"}, closed=False)
+        self.addCleanup(again.close)
+
+        def keys_of(archive):
+            records = archive.section("factures").payload()["invoices"]
+            return sorted(tuple(sorted(record["key"].items())) for record in records)
+
+        self.assertEqual(keys_of(again), keys_of(reader))
+        run = import_archive(again, MERGE)
+        documents = run.section("factures").tallies["documents"]
+        self.assertEqual((documents.created, documents.updated, documents.unchanged), (0, 0, 3))
+        self.assertEqual(run.section("factures").conflicts, [])
+
+    def test_an_archive_from_before_creates_no_copy(self):
+        """Archives taken before say (METRO, "", "", "", 0) for all three, no
+        moment: the first answers the first document here, the others the
+        same one - skipped, never created again."""
+
+        def as_before(payload):
+            for record in payload["invoices"]:
+                record["key"].pop("moment", None)
+                record["key"]["occurrence"] = 0
+            return payload
+
+        reader = self.export_then_delete_a({"factures"}, closed=False)
+        old = ArchiveReader(forge(reader, factures=as_before))
+        self.addCleanup(old.close)
+        import_archive(old, MERGE)
+        self.assertEqual(self.state(), [("250.00", 1), ("30.00", 0)])
 
 
 class TwinProductsTests(MediaMixin, TestCase):

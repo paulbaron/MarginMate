@@ -225,6 +225,10 @@ def _clean_key(key) -> dict | None:
     if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
         return None
     clean["occurrence"] = occurrence
+    if "moment" in key:
+        if not isinstance(key["moment"], str):
+            return None
+        clean["moment"] = key["moment"]
     return clean
 
 

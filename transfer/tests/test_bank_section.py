@@ -488,7 +488,8 @@ class ExportTests(BankData, TestCase):
         self.assertFalse({name for name in found if name.endswith("_id")})
         for record in payload["transactions"]:
             for payment in record["payments"]:
-                self.assertEqual(set(payment["invoice"]), set(keys.KEY_FIELDS))
+                # Not one of them was typed by hand without a file: no moment.
+                self.assertEqual(set(payment["invoice"]), set(keys.KEY_FIELDS) - {"moment"})
 
     def test_the_suppliers_it_names_come_with_their_names(self):
         payload = self.export().section("banque").payload()
