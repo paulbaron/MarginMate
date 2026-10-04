@@ -65,6 +65,7 @@ from .forms import (
 from .importing import (
     DuplicateInvoiceError,
     InvoiceLinesInUseError,
+    LineTooWideError,
     corrected_line,
     import_parsed_invoice,
     parse_and_import,
@@ -307,6 +308,8 @@ def create_manual_invoice(request):
                 return redirect("invoices:invoice_detail", pk=invoice.pk)
             except DuplicateInvoiceError as exc:
                 messages.warning(request, str(exc))
+            except LineTooWideError as exc:
+                messages.error(request, str(exc))
             finally:
                 if tmp_path:
                     os.unlink(tmp_path)
@@ -1379,7 +1382,7 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
             if invoice.is_receipt or doubted:
                 _answer_first_document(request, invoice)
             invoice.save(update_fields=fields)
-    except InvoiceLinesInUseError as exc:
+    except (InvoiceLinesInUseError, LineTooWideError) as exc:
         messages.error(request, str(exc))
         return False
     return True

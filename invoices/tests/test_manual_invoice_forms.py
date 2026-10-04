@@ -275,3 +275,116 @@ class EditInvoiceLinesRoundTripTests(TestCase):
     def test_the_rate_keeps_its_value_through_the_round_trip(self):
         response = self.client.get(reverse("invoices:invoice_edit_lines", args=[self.invoice.pk]))
         self.assertEqual(response.context["formset"].forms[0].initial["vat_rate"], Decimal("20.00"))
+
+
+class FiguresWiderThanTheirColumnTests(TestCase):
+    """A figure wider than the column behind it is refused, at the door - on
+    the hand-typed pages too, not only on the e-invoice import.
+
+    SQLite stored 1500 / 0.001 = 1 500 000 in `unit_cost_ht` (10,4) without a
+    word, and every read of that line then raised: the document's own pages,
+    « Produits & charges » and « Banque » answered 500 for every login of the
+    bar, and nothing short of raw SQL got the line out."""
+
+    def setUp(self):
+        self.supplier = make_supplier(code="NOPARSER", name="Sans parseur", parser_key="")
+
+    def create(self, **row):
+        # The page's own prefix, « form » - not the formset tests' « lines ».
+        data = {key.replace("lines-", "form-", 1): value for key, value in payload({0: line(**row)}).items()}
+        data.update({"supplier": self.supplier.pk, "invoice_number": "", "invoice_date": "2026-09-01"})
+        return self.client.post(reverse("invoices:invoice_create_manual"), data)
+
+    def test_a_count_of_a_thousandth_is_refused_on_the_hand_typed_invoice(self):
+        before = Invoice.objects.count()
+        response = self.create(quantity="0.001", total_ht="1500")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get(reverse("bank:bank_home")).status_code, 200)
+
+    def test_a_forgotten_decimal_comma_is_refused(self):
+        before = Invoice.objects.count()
+        response = self.create(quantity="1", total_ht="1250000")
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(Invoice.objects.count(), before)
+
+    def test_the_cliff_is_the_column_exactly(self):
+        response = self.create(quantity="1", total_ht="999999.99")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Invoice.objects.get(supplier=self.supplier).lines.get().unit_cost_ht, Decimal("999999.99"))
+
+    def test_a_rate_above_a_hundred_percent_is_refused(self):
+        formset = ManualInvoiceLineFormSet(payload({0: line(vat_rate="150")}), prefix="lines")
+        self.assertFalse(formset.is_valid())
+        self.assertEqual(formset.errors[0]["vat_rate"], ["Un taux ne dépasse pas 100 %."])
+
+    def test_the_correction_page_refuses_it_too(self):
+        invoice = make_invoice(supplier=self.supplier)
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "invoice_date": "2026-01-01",
+            "form-0-product_name": "VODKA 70CL",
+            "form-0-quantity": "0.001",
+            "form-0-total_ht": "1500",
+            "form-0-vat_rate": "20",
+        }
+        response = self.client.post(reverse("invoices:invoice_edit_lines", args=[invoice.pk]), data)
+        self.assertContains(response, "Prix unitaire impossible")
+        self.assertEqual(invoice.lines.count(), 0)
+
+    def test_a_ticket_whose_amount_with_its_vat_is_too_wide_is_refused(self):
+        from invoices.forms import DOCUMENT_RECEIPT, LineCorrectionForm
+
+        form = LineCorrectionForm(
+            data={
+                "product_name": "PAIN",
+                "quantity": "1000000",
+                "total_ht": "9999999999.99",
+                "amount_source": "ht",
+                "vat_rate": "20",
+            },
+            document=DOCUMENT_RECEIPT,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("total_ht", form.errors)
+        form = LineCorrectionForm(
+            data={"product_name": "PAIN", "quantity": "1", "total_ttc": "10", "vat_rate": "999"},
+            document=DOCUMENT_RECEIPT,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("vat_rate", form.errors)
+
+    def test_nothing_stores_a_line_its_column_cannot_hold(self):
+        """The last guard, under every path that writes lines - an OCR
+        reading, a move, a re-read: refused before anything is written."""
+        from invoices.importing import LineTooWideError, import_parsed_invoice, replace_invoice_lines
+        from invoices.parsers.base import ParsedInvoice, ParsedLine
+
+        def wide():
+            return ParsedLine(
+                raw_name="VODKA 70CL",
+                quantity=Decimal("0.001"),
+                total_volume=Decimal("0"),
+                unit_cost_ht=Decimal("1500000.0000"),
+                total_ht=Decimal("1500.00"),
+                vat_rate=Decimal("0.2"),
+            )
+
+        before = Invoice.objects.count()
+        parsed = ParsedInvoice(
+            supplier_code=self.supplier.code, invoice_number="", invoice_date=date(2026, 9, 1), lines=[wide()]
+        )
+        with self.assertRaisesMessage(LineTooWideError, "« VODKA 70CL » : le prix unitaire (1 500 000.0000)"):
+            import_parsed_invoice(self.supplier, parsed)
+        self.assertEqual(Invoice.objects.count(), before)
+        self.assertIsInstance(LineTooWideError("x"), ValueError)
+
+        invoice = make_invoice(supplier=self.supplier)
+        with self.assertRaises(LineTooWideError):
+            replace_invoice_lines(invoice, [wide()])
+        self.assertEqual(invoice.lines.count(), 0)

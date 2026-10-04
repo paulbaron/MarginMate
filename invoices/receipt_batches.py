@@ -66,7 +66,7 @@ from accounts.tenancy import bound, tenant_key
 from common import error_for_page
 
 from .einvoice import EInvoiceError
-from .importing import DuplicateInvoiceError, RoutedToReturnablesError
+from .importing import DuplicateInvoiceError, LineTooWideError, RoutedToReturnablesError
 from .models import ReceiptBatch
 from .ocr import DocumentTooBig
 from .receipts import (
@@ -90,9 +90,10 @@ REQUEUE_BATCHES = 20
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 #: The refusals a file's line says in their own words: the app's, written in
 #: French for the person (an electronic invoice it cannot take, a document
-#: too long or too large to read). Anything else is said by kind
-#: (common.error_for_page), its detail in the server's log.
-READING_REFUSALS = (EInvoiceError, DocumentTooBig)
+#: too long or too large to read, a line with a figure no column holds).
+#: Anything else is said by kind (common.error_for_page), its detail in the
+#: server's log.
+READING_REFUSALS = (EInvoiceError, DocumentTooBig, LineTooWideError)
 
 # Held for a read and write of a batch's `results`, never across an import.
 # One for the process, every tenant included, on purpose: it makes writers
@@ -469,6 +470,11 @@ def _import_with_shop(batch: ReceiptBatch, index: int, path: str, supplier) -> d
     entry = dict(batch.results[index])
     try:
         invoice = import_document(path, display_filename=entry["name"], supplier=supplier)
+        # Inside the try, as in _read_file: a figure the database cannot read
+        # back raises in _record_import, and out of the `else:` it was a 500
+        # for the shop chosen by hand rather than that file's own error.
+        entry.pop("message", None)
+        _record_import(entry, invoice)
     except DuplicateInvoiceError as exc:
         batch.append_log(f"{entry['name']} (ticket {supplier.name}) : {exc}")
         if _unfiled_slip(exc):
@@ -486,8 +492,6 @@ def _import_with_shop(batch: ReceiptBatch, index: int, path: str, supplier) -> d
         batch.append_log(f"{entry['name']} : échec de l'import comme ticket {supplier.name}. {problem}")
         raise ShopChoiceError(f"{entry['name']} n'a pas pu être importé comme ticket {supplier.name}. {problem}")
     else:
-        entry.pop("message", None)
-        _record_import(entry, invoice)
         batch.append_log(f"{entry['name']} : importé comme ticket {supplier.name} (enseigne choisie à la main).")
     entry.pop("kept")
     _discard(path)

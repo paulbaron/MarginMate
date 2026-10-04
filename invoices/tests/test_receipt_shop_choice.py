@@ -13,7 +13,7 @@ OCR never runs here: `receipts.recognise` is replaced.
 import os
 import shutil
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from unittest import mock
 
 from django.contrib.messages import get_messages
@@ -248,6 +248,19 @@ class ChooseShopInBatchTests(TestCase):
         self.assertFalse(any("photo illisible" in message for message in messages_of(response)))
         self.assertNotIn("photo illisible", self.batch.log)
         self.assertIn("photo illisible", "\n".join(logged.output))
+
+    def test_a_file_that_blows_up_while_being_described_is_said_on_the_page(self):
+        """`_record_import` inside the try here too, as in `_read_file`: a
+        figure the database cannot read back raised out of the `else:` and
+        the shop chosen by hand answered 500."""
+        with (
+            mock.patch("invoices.receipt_batches._record_import", side_effect=InvalidOperation),
+            self.assertLogs("invoices.receipt_batches", "ERROR"),
+        ):
+            response, _ = self.choose()
+        self.assertRedirects(response, self.page)
+        self.assertTrue(any("n'a pas pu être importé comme ticket" in message for message in messages_of(response)))
+        self.assertEqual(self.batch.results[0]["status"], "unrecognised")
 
     def test_the_shop_can_be_chosen_while_the_batch_runs(self):
         """No need to wait for a folder of a hundred tickets to check the

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 from django.core.files import File
 from django.db import transaction
@@ -52,6 +52,10 @@ def import_parsed_invoice(
         and Invoice.objects.filter(supplier=supplier, invoice_number=parsed.invoice_number).exists()
     ):
         raise DuplicateInvoiceError(f"Déjà dans MarginMate : {supplier} n° {parsed.invoice_number}.")
+    # Refused before anything is written, the source file included
+    # (_fitting says why).
+    for parsed_line in parsed.lines:
+        _line_values(parsed_line)
     if supplier.expenses_only:
         parsed.printed_total_ttc = charge_reading(parsed)[0]
 
@@ -541,8 +545,54 @@ def flag_products(supplier: Supplier, parsed_lines, resolved) -> None:
             product.save(update_fields=["is_expense"])
 
 
+class LineTooWideError(ValueError):
+    """A line with a figure wider than the column it goes into, said in
+    French: a ValueError, as every refusal of a reading is."""
+
+
+#: Each figure of a line its column bounds, as the refusal names it.
+_LINE_FIGURES = {
+    "quantity": "la quantité",
+    "total_volume": "le poids / volume",
+    "unit_cost_ht": "le prix unitaire",
+    "total_ht": "le montant HT",
+    "taxes": "les taxes",
+    "discount": "la remise",
+    "vat_rate": "le taux de TVA",
+    "printed_ttc": "le montant TTC",
+    "discount_ttc": "la remise TTC",
+    "spread_ht": "la part des frais",
+}
+
+
+def _fitting(values: dict) -> dict:
+    """`values`, or a refusal naming the first figure its column cannot hold.
+
+    The last guard, under every path that writes lines (a hand-typed
+    invoice, the correction page, an OCR reading, a move, a re-read). SQLite
+    stores 1 500 000 in `unit_cost_ht` (10,4) without a word and Django's
+    converter raises on every read of it - the document, « Produits &
+    charges » and « Banque » answer 500 until raw SQL takes the line out
+    (CLAUDE.md « A figure wider than the column behind it is refused, at the
+    door »). Checked the way that read does it, so the cliff is the column
+    exactly."""
+    for name, what in _LINE_FIGURES.items():
+        value = values[name]
+        if value is None:
+            continue
+        field = InvoiceLine._meta.get_field(name)
+        try:
+            Decimal(value).quantize(Decimal(1).scaleb(-field.decimal_places), context=field.context)
+        except InvalidOperation:
+            raise LineTooWideError(
+                f"« {values['raw_name']} » : {what} ({group_thousands(value)}) dépasse ce que MarginMate peut "
+                "enregistrer - vérifiez la quantité et le montant de la ligne."
+            ) from None
+    return values
+
+
 def _line_values(parsed_line: ParsedLine) -> dict:
-    return {
+    values = {
         "raw_name": parsed_line.raw_name,
         "read_as": parsed_line.read_as,
         "quantity": parsed_line.quantity,
@@ -559,6 +609,7 @@ def _line_values(parsed_line: ParsedLine) -> dict:
         "is_spread_charge": parsed_line.is_spread_charge,
         "spread_ht": parsed_line.spread_ht,
     }
+    return _fitting(values)
 
 
 def _create_line(invoice: Invoice, product, parsed_line: ParsedLine) -> InvoiceLine:
@@ -744,6 +795,9 @@ def replace_invoice_lines(invoice: Invoice, parsed_lines) -> Invoice:
     # before the delivery was shared out, and nothing would recreate them
     # until somebody happened to save the page again.
     spread_charges(parsed_lines)
+    # Refused before anything is written either (_fitting).
+    for parsed_line in parsed_lines:
+        _line_values(parsed_line)
     stored = {line.pk: line for line in invoice.lines.all()}
     corrected = {parsed.line_id for parsed in parsed_lines if parsed.line_id in stored}
     removed = [line for pk, line in stored.items() if pk not in corrected]
