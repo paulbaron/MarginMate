@@ -20,7 +20,7 @@ from accounts.middleware import TenantMiddleware
 from accounts.models import Membership
 from accounts.tenancy import TenancyError, bound_tenant, current_tenant
 from accounts.tests.support import TwoTenantsTestCase
-from config.navigation import navigation
+from config.navigation import counted_when_drawn, navigation
 from inventory.context_processors import review_count
 from invoices.context_processors import receipt_review_count
 from invoices.models import ScrapeJob
@@ -454,6 +454,13 @@ class BadgesCountedWhenDrawnTests(TwoTenantsTestCase):
             drawn = review_count(request)
         with bound_tenant(self.bar_b), self.assertRaises(TenancyError):
             str(drawn["review_count_nav"])
+
+    def test_a_badge_made_with_no_espace_bound_is_refused(self):
+        """The processors make none then; a caller that would got an
+        AttributeError at the first read, not the refusal it documents."""
+        self.assertIsNone(current_tenant())
+        with self.assertRaises(TenancyError):
+            counted_when_drawn(lambda: 0)
 
     def test_a_polled_card_counts_no_badge(self):
         with bound_tenant(self.bar_a):

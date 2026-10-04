@@ -87,13 +87,13 @@ def counted_when_drawn(count):
     away a scan of the invoice table (5-20 ms of a 7 ms poll). `{% if %}`,
     `{{ }}` and == take it for the int - not int() nor arithmetic. Read
     under another binding than the processor's - another bar's queue, or
-    none - it refuses (TenancyError). Lives no longer than the request's
-    context."""
+    none - it refuses (TenancyError), as it does made with none bound
+    (NoTenantBound). Lives no longer than the request's context."""
     from django.utils.functional import SimpleLazyObject
 
-    from accounts.tenancy import TenancyError, current_tenant
+    from accounts.tenancy import TenancyError, current_tenant, require_tenant
 
-    tenant = current_tenant()
+    tenant = require_tenant()
 
     def bound_count():
         current = current_tenant()
