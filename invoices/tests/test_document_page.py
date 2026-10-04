@@ -118,6 +118,33 @@ class RereadTicketTests(TestCase):
         self.assertTrue(any("introuvable" in message for message in messages_of(response)))
         self.assertEqual(self.ticket.lines.count(), 1)
 
+    def test_a_reading_no_column_holds_is_said_and_changes_nothing(self):
+        """1 500 € over 0,001: a unit price of 1 500 000 that unit_cost_ht
+        (10,4) cannot hold. Refused under replace_invoice_lines, which the
+        page let through as a 500."""
+        absurd = ParsedInvoice(
+            supplier_code="SABBH",
+            invoice_number="",
+            invoice_date=date(2026, 7, 14),
+            lines=[
+                ParsedLine(
+                    raw_name="Pain Pita",
+                    quantity=D("0.001"),
+                    total_volume=D("0"),
+                    unit_cost_ht=D("1500000"),
+                    total_ht=D("1500"),
+                    vat_rate=FIVE_FIVE,
+                )
+            ],
+        )
+        read = mock.Mock(parsed=absurd, problem="", preview=None)
+        with mock.patch("invoices.receipts.read_receipt", return_value=read):
+            response = self.client.post(self.url, {"action": "reread"})
+        self.assertRedirects(response, self.url)
+        self.assertTrue(any("le prix unitaire" in message for message in messages_of(response)))
+        self.assertEqual([line.raw_name for line in self.ticket.lines.all()], ["Pain Pita"])
+        self.assertEqual(self.ticket.lines.get().total_ht, D("9.48"))
+
     def test_a_line_a_stock_take_was_priced_from_stops_it(self):
         line = self.ticket.lines.get()
         count = make_stock_take_line(

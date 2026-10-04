@@ -1991,7 +1991,7 @@ def reread_receipt(invoice: Invoice) -> bool:
     checked ticket: its lines are what a person confirmed. Returns whether it
     changed.
     """
-    from .importing import InvoiceLinesInUseError, refile_as_charge, replace_invoice_lines
+    from .importing import InvoiceLinesInUseError, LineTooWideError, refile_as_charge, replace_invoice_lines
 
     if invoice.reviewed_at is not None or not invoice.ocr_text:
         return False
@@ -2032,7 +2032,7 @@ def reread_receipt(invoice: Invoice) -> bool:
                     "status",
                 ]
             )
-    except InvoiceLinesInUseError:
+    except (InvoiceLinesInUseError, LineTooWideError):
         return False
     return True
 

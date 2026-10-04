@@ -1563,7 +1563,7 @@ def _reread_from_page(request, invoice) -> None:
 
     try:
         messages.success(request, reread_document(invoice))
-    except (RereadError, InvoiceLinesInUseError) as exc:
+    except (RereadError, InvoiceLinesInUseError, LineTooWideError) as exc:
         messages.error(request, str(exc))
 
 
