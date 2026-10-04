@@ -740,6 +740,26 @@ def _unless_linked(line: BankTransaction, change) -> bool:
     return True
 
 
+#: A stale « Délier » / « Tout délier », refused.
+UNLINK_CHANGED_MEANWHILE = "Cette opération a changé entre-temps : rien n'a été délié."
+
+
+@transaction.atomic
+def _unlink_as_shown(line: BankTransaction, shown: set) -> bool:
+    """Every invoice off `line` if it pays exactly `shown`, the invoices its
+    row was drawn with; False, and nothing written, otherwise.
+
+    The page may be older than a link another tab or « Propositions » made:
+    the stale click then took off an invoice the reader never saw on that
+    row. Checked in the unlink's own (IMMEDIATE) transaction, like
+    `_unless_linked`.
+    """
+    if set(line.payments.values_list("invoice_id", flat=True)) != shown:
+        return False
+    reconcile.unlink(line)
+    return True
+
+
 def bank_line_action(request, pk):
     line = get_object_or_404(BankTransaction, pk=pk)
     back = _back(request)
@@ -780,8 +800,11 @@ def bank_line_action(request, pk):
             left = "" if line.payments.exists() else " Cette ligne ne sera plus rapprochée automatiquement."
             messages.success(request, f"{reconcile.invoice_label(invoice)} détachée de cette opération.{left}")
     elif action == "unlink":
-        reconcile.unlink(line)
-        messages.success(request, "Rattachement retiré : cette ligne ne sera plus rapprochée automatiquement.")
+        shown = {int(value) for value in request.POST.getlist("shown") if is_id(value)}
+        if _unlink_as_shown(line, shown):
+            messages.success(request, "Rattachement retiré : cette ligne ne sera plus rapprochée automatiquement.")
+        else:
+            messages.error(request, UNLINK_CHANGED_MEANWHILE)
     elif action == "no_invoice":
         if _unless_linked(line, reconcile.mark_no_invoice):
             messages.success(request, "Ligne marquée « pas de facture attendue ».")

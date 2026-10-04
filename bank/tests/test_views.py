@@ -94,7 +94,8 @@ class BankPageTests(Fixtures, TestCase):
 
     def test_an_unlinked_line_stays_unlinked(self):
         metro_line = self.line("METRO FRANCE")
-        self.act(metro_line, "unlink")
+        # The invoices its row shows, as « Délier » posts them.
+        self.act(metro_line, "unlink", shown=[self.metro.pk])
         self.client.post(reverse("bank:bank_reconcile"))
         self.assertFalse(InvoicePayment.objects.filter(transaction=metro_line).exists())
 
