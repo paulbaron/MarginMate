@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from pathlib import Path
 
-from accounts.views import open_stored
+from accounts.views import media_folder, open_stored
 from common import format_money
 from invoices.filenames import UniqueNames, clean, download_name
 from invoices.models import Invoice
+from transfer.archive import STORED_SUFFIXES
 
 #: The list, inside the zip, of the documents it could not hold.
 MISSING_LIST = "Factures sans fichier.txt"
@@ -47,17 +49,30 @@ def write_zip(invoices, handle) -> list[Invoice]:
     hold (no file, or the file gone from the disk)."""
     missing = []
     names = UniqueNames()
+    # Found once for the zip, not once a file: resolving it (and making the
+    # folder) for each of a whole history's invoices was most of its cost.
+    # Every file is still resolved and kept inside it by `open_stored`.
+    root = media_folder()
     with zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as archive:
         for invoice in invoices:
-            source = open_stored(invoice.source_file.name) if invoice.source_file else None
+            source = open_stored(invoice.source_file.name, root) if invoice.source_file else None
             if source is None:
                 missing.append(invoice)
                 continue
-            with source, archive.open(names.take(download_name(invoice)), "w") as target:
+            with source, archive.open(_member(names.take(download_name(invoice))), "w") as target:
                 shutil.copyfileobj(source, target)
         if missing:
             archive.writestr(MISSING_LIST, missing_text(missing))
     return missing
+
+
+def _member(name: str) -> zipfile.ZipInfo:
+    """A file's entry: a PDF or a photo is compressed already, and deflating
+    it again cost seconds of CPU on a whole history, for a few percent -
+    stored as it is, as « Données » stores them (transfer/archive.py)."""
+    info = zipfile.ZipInfo(name)  # what `archive.open(name)` made
+    info.compress_type = zipfile.ZIP_STORED if Path(name).suffix.lower() in STORED_SUFFIXES else zipfile.ZIP_DEFLATED
+    return info
 
 
 def missing_text(invoices) -> str:

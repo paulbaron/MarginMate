@@ -290,8 +290,21 @@ class RecipeIngredientForm(BlankRowTolerantModelForm):
     # bookkeeping, never something the user types, so it must not on its own
     # make a row look filled in - see BlankRowTolerantFormMixin, without
     # which a row removed in the browser leaves an invisible, unsaveable row
-    # behind.
-    group = forms.IntegerField(widget=forms.HiddenInput(), required=False, initial=0)
+    # behind. Bounded because the model's own validators never see it (it is
+    # not in Meta.fields): a tampered or stale form posting -1 or 10**25 is
+    # the form again with a message, not a 500 from the save. The top is
+    # SQLite's, not a smaller cap: an archive may carry large group numbers.
+    group = forms.IntegerField(
+        widget=forms.HiddenInput(),
+        required=False,
+        initial=0,
+        min_value=0,
+        max_value=2**63 - 1,
+        error_messages=dict.fromkeys(
+            ("invalid", "min_value", "max_value"),
+            "Cette ligne n'a pas pu être lue : rechargez la page, puis saisissez-la de nouveau.",
+        ),
+    )
 
     bookkeeping_fields = ("group",)
 

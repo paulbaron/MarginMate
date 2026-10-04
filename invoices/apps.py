@@ -104,6 +104,17 @@ class InvoicesConfig(AppConfig):
     name = "invoices"
 
     def ready(self):
+        # What a server killed while PDFium drew left in TEMP
+        # (ocr.sweep_drawn_folders): in every process, production's `serve`
+        # included - it reaps no gather here -, and only folders an hour old,
+        # which no process uses any more. One folder listed: nothing to wait for.
+        try:
+            from .ocr import sweep_drawn_folders
+
+            sweep_drawn_folders()
+        except Exception:
+            logger.exception("Le nettoyage des pages PDF laissées par un arrêt du serveur a échoué.")
+
         # Gather jobs run in a plain background thread (see tasks.py), which
         # cannot survive a server restart. Any job still marked PENDING/RUNNING
         # when the server starts was interrupted (dev server autoreload,

@@ -63,6 +63,7 @@ from invoices.tests.einvoice_files import (
     UBL_TWO_RATES,
     XML_NOT_AN_INVOICE,
 )
+from invoices.tests.page_posts import page_post
 from invoices.tests.pdf_files import write_pdf, write_pdf_with_attachments
 from invoices.workspace import DOCUMENT_TO_FIX, TICKET_TO_CHECK
 from tests.factories import make_supplier
@@ -775,6 +776,39 @@ class ADateNoInvoiceWasIssuedOnTests(TestCase):
         invoice = import_document(write_xml(self, "vieille.xml", CII_DATE_YEAR_ONE))
         page = self.client.get(reverse("invoices:invoice_edit_lines", args=[invoice.pk]))
         self.assertContains(page, "Date invraisemblable")
+
+    def correct_the_date(self, invoice):
+        url = reverse("invoices:invoice_edit_lines", args=[invoice.pk])
+        response = self.client.post(url, page_post(self.client.get(url), invoice_date="2026-09-02"))
+        self.assertEqual(response.status_code, 302)
+        invoice.refresh_from_db()
+        return invoice
+
+    def test_the_date_typed_in_takes_it_out_of_documents_to_fix(self):
+        """As its own sentence asks. Kept, the sentence held the document in
+        « Documents à corriger », with its red pill and in the nav's count,
+        for good: no action left could clear it."""
+        invoice = self.correct_the_date(import_document(write_xml(self, "vieille.xml", CII_DATE_YEAR_ONE)))
+        self.assertEqual(invoice.invoice_date, date(2026, 9, 2))
+        self.assertEqual(invoice.error_message, "")
+        self.assertFalse(Invoice.objects.filter(DOCUMENT_TO_FIX, pk=invoice.pk).exists())
+        self.assertNotEqual(invoice.review_state["label"], "À corriger")
+
+    def test_the_suppliers_arithmetic_stays(self):
+        """Only the date sentence goes: totals that do not hold are reported
+        and never repaired, and keep the document where it is."""
+        xml = CII_TOTALS_DISAGREE.replace(
+            '<udt:DateTimeString format="102">20260903</udt:DateTimeString>',
+            '<udt:DateTimeString format="102">00010101</udt:DateTimeString>',
+        )
+        invoice = import_document(write_xml(self, "faux.xml", xml))
+        before = invoice.error_message
+        self.assertIn("Date invraisemblable", before)
+        invoice = self.correct_the_date(invoice)
+        self.assertNotIn("Date", invoice.error_message)
+        self.assertTrue(invoice.error_message)
+        self.assertIn(invoice.error_message, before)
+        self.assertTrue(Invoice.objects.filter(DOCUMENT_TO_FIX, pk=invoice.pk).exists())
 
 
 class WhatTheScreensCallItTests(TestCase):

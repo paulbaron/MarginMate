@@ -59,7 +59,7 @@ from django.utils.dateparse import parse_date
 
 from accounts.access import access_of
 from accounts.tenancy import integrations_allowed
-from common import is_id
+from common import is_id, selection_too_big
 from invoices import coverage, integrations
 from invoices.models import ScrapeJob
 from returnables import comparison, invoice_check, patterns, reading, slips
@@ -741,6 +741,20 @@ def slip_upload(request):
             return redirect(f"{_home_url()}#bons")
     if not files:
         messages.error(request, "Aucun fichier choisi : rien n'a été ajouté.", extra_tags=UPLOAD_MESSAGES)
+        return redirect(f"{_home_url()}#bons")
+    # Every document is read in this request: refused whole, before any is
+    # read, past what one post may hold a server thread for.
+    if len(files) > slips.MAX_SLIP_UPLOAD_FILES:
+        messages.error(
+            request,
+            f"{len(files)} documents d'un coup : {slips.MAX_SLIP_UPLOAD_FILES} au plus par envoi, "
+            "rien n'a été ajouté. Envoyez-les en plusieurs fois.",
+            extra_tags=UPLOAD_MESSAGES,
+        )
+        return redirect(f"{_home_url()}#bons")
+    too_heavy = selection_too_big(files)
+    if too_heavy:
+        messages.error(request, f"{too_heavy} Rien n'a été ajouté.", extra_tags=UPLOAD_MESSAGES)
         return redirect(f"{_home_url()}#bons")
     summary = slips.store_uploads(files, fmt)
     level = messages.warning if summary.has_refusals else messages.success

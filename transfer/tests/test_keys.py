@@ -79,6 +79,15 @@ class ProductResolverTests(TestCase):
         self.assertEqual(resolver.resolve(self.brewery, TWIN), twin)
         self.assertEqual(resolver.resolve(self.brewery, KEG), self.keg)
 
+    def test_a_product_deleted_during_the_run_is_found_no_more(self):
+        """Handed out after `remove_orphan_products` deleted it, a line
+        pointed at a row gone, and the import failed at its commit."""
+        resolver = ProductResolver()
+        resolver.forget({self.keg.pk})
+
+        self.assertIsNone(resolver.resolve(self.brewery, KEG))
+        self.assertIsNone(resolver.resolve(self.brewery, "bière du pont fût 20l"))
+
 
 class ArchiveProductKeysTests(TestCase):
     """What the archive names, read from the three sections naming products

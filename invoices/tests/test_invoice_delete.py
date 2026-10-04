@@ -10,14 +10,18 @@ what a past count was worth.
 
 from datetime import date
 from decimal import Decimal
+from unittest import mock
 
 from django.core.files.base import ContentFile
+from django.db import connection
+from django.db.models import ProtectedError, QuerySet
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from inventory.models import Product, StockMovement, StockTakeLineSource
 from inventory.services import create_stock_movement_for_line
-from invoices.deletion import InvoiceInUseError, delete_invoice
+from invoices.deletion import InvoiceInUseError, delete_invoice, remove_orphan_products
 from invoices.models import Invoice, InvoiceLine
 from tests.factories import (
     make_invoice,
@@ -93,6 +97,28 @@ class DeleteInvoiceTests(TestCase):
         delete_invoice(self.invoice)
         self.assertFalse(Invoice.objects.filter(pk=self.invoice.pk).exists())
         self.assertTrue(Product.objects.filter(pk=counted.pk).exists())
+
+    def test_the_products_go_at_once(self):
+        """One by one, six queries each: a full « Effacer » spent most of its
+        time on them, the whole catalogue being candidates (audit 04/10/2026)."""
+        kept = [self.lemon, make_product(supplier=self.supplier, raw_name="ANETH")]
+        make_stock_take_line(product=kept[1])
+        orphans = [make_product(supplier=self.supplier, raw_name=f"GARBLED {n}") for n in range(20)]
+        ids = {product.pk for product in kept + orphans}
+        with CaptureQueriesContext(connection) as queries:
+            removed = remove_orphan_products(ids)
+        self.assertEqual(removed, 20)
+        self.assertLess(len(queries), 10)
+        self.assertEqual(set(Product.objects.filter(pk__in=ids).values_list("pk", flat=True)), {p.pk for p in kept})
+
+    def test_a_relation_it_does_not_know_falls_back_to_one_by_one(self):
+        """A PROTECT relation to Product added later: what it holds stays,
+        the others still go."""
+        free = make_product(supplier=self.supplier, raw_name="GARBLED")
+        with mock.patch.object(QuerySet, "delete", side_effect=ProtectedError("held", set())):
+            removed = remove_orphan_products({free.pk, self.lemon.pk})
+        self.assertEqual(removed, 1)
+        self.assertFalse(Product.objects.filter(pk=free.pk).exists())
 
     def test_its_files_are_removed_once_committed(self):
         self.invoice.source_file.save("ticket.pdf", ContentFile(b"%PDF-1.4 test"), save=False)

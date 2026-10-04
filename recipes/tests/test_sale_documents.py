@@ -16,7 +16,7 @@ from django.urls import reverse
 
 from inventory.models import UnitChoices
 from inventory.variance import quantities_sold
-from recipes.models import SaleDocument, SaleDocumentLine
+from recipes.models import Recipe, SaleDocument, SaleDocumentLine
 from recipes.sales import record_sales, sales_between, stock_type_sales_between
 from tests.factories import make_ingredient, make_movement, make_recipe, make_stock_type
 
@@ -408,3 +408,15 @@ class SaleDocumentPageTests(TestCase):
         SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
         self.client.post(reverse("recipes:sale_document_delete", kwargs={"pk": document.pk}))
         self.assertEqual(SaleDocument.objects.count(), 0)
+
+    def test_a_recipe_on_a_document_is_kept_with_a_message(self):
+        """A document's line PROTECTs its recipe: deleting the recipe says
+        where it is used, as an article does - not a 500."""
+        for reference in ("T-1", "T-2"):
+            document = SaleDocument.objects.create(sold_on=date(2026, 3, 5), reference=reference)
+            SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
+            SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("1"))
+        response = self.client.post(reverse("recipes:recipe_delete", kwargs={"pk": self.recipe.pk}), follow=True)
+        self.assertRedirects(response, reverse("recipes:recipe_detail", kwargs={"pk": self.recipe.pk}))
+        self.assertContains(response, "utilisée dans 2 document(s) de vente")
+        self.assertTrue(Recipe.objects.filter(pk=self.recipe.pk).exists())

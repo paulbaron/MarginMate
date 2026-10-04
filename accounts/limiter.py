@@ -249,12 +249,18 @@ def _signed(device: str, marks: list[str]) -> str:
 _LOGGED_IN_AS = "_marginmate_logged_in_as"
 
 
+def logged_in_now(request) -> str:
+    """The address whose login `succeeded` on this request - its password
+    just checked and right - else ""."""
+    return getattr(request, _LOGGED_IN_AS, "")
+
+
 def remember_device(request, response, email=None):
     """`response` with the « appareil connu » cookie for `email` - by
     default the address whose login `succeeded` on this request - put first
     among the addresses the device already knows, its 180 days counted
     again. Nothing when nobody logged in."""
-    email = normalize_email(email if email is not None else getattr(request, _LOGGED_IN_AS, ""))
+    email = normalize_email(email if email is not None else logged_in_now(request))
     if not email:
         return response
     device = _device(request) or {"n": secrets.token_hex(8), "e": []}

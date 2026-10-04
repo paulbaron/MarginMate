@@ -53,7 +53,7 @@
                             <button type="button" class="btn btn-small btn-secondary js-remove-ingredient">Retirer</button>
                         </div>
                         {% for error in ingredient_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
-                        {% for error in ingredient_form.source.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
+                        {% for error in ingredient_form.source.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}{% for error in ingredient_form.group.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
                     </div>
                 {% endfor %}
             </div>

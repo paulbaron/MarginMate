@@ -48,7 +48,9 @@ In order:
    source, and a release whose files keep older dates - a zip, a copy that
    keeps them, going back to a backup - left the previous scripts served
    beside the new templates (review PROD-3). STATIC_ROOT is only ever filled
-   by collectstatic (gitignored).
+   by collectstatic (gitignored). Just before, the expired sessions are
+   deleted (`clear_expired_sessions`, Django's clearsessions): nothing else
+   ever removes them.
 5. **Waitress**, on 127.0.0.1 only (cloudflared, on this machine, is the way
    in: no port is opened on the router), `THREADS` threads, ONE process -
    the tenants' binding is per thread, and the login limiter counts in this
@@ -83,6 +85,7 @@ In order:
 from __future__ import annotations
 
 import socket
+from importlib import import_module
 from pathlib import Path
 
 from django.conf import settings
@@ -302,6 +305,7 @@ class Command(BaseCommand):
                 "avec --port."
             ) from None
         try:
+            self.clear_expired_sessions()
             self.stdout.write("Fichiers statiques…")
             # --clear: an exact copy of the code's, whatever the files' dates
             # (the module's docstring, point 4).
@@ -310,6 +314,21 @@ class Command(BaseCommand):
             sock.close()
             raise
         self.serve(sock, port)
+
+    def clear_expired_sessions(self) -> None:
+        """Django's `clearsessions`, at each start: nothing else removes an
+        expired session, and a visitor of a signing link that keeps no cookie
+        leaves one per post (staff/public_views.py). Only expired ones go:
+        nobody is logged out. A failure is said and serving goes on."""
+        engine = import_module(settings.SESSION_ENGINE)
+        try:
+            engine.SessionStore.clear_expired()
+        except DatabaseError as error:
+            self.stderr.write(
+                f"Sessions expirées : non effacées ({type(error).__name__}), le serveur démarre quand même."
+            )
+            return
+        self.stdout.write("Sessions expirées effacées.")
 
     def serve(self, sock: socket.socket, port: int) -> None:
         """Waitress on `sock` until Ctrl+C; the socket is closed on the way

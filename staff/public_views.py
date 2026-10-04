@@ -24,8 +24,8 @@ What protects it, and what each view keeps to:
   to the owner, and are rendered without the context processors (no
   messages of the owner's session, no counts of anything).
 * **The one-time code** (`check_code`), remembered in HIS session for THIS
-  request only (`is_identified`); the session's key changes once it is
-  verified. Signing needs it; reading the month and the PDF do not - and
+  request only, for an hour (`is_identified`); the session's key changes
+  once it is verified. Signing needs it; reading the month and the PDF do not - and
   the PDF stays so on purpose (security audit ANON-6, 29/09): the page the
   link opens shows everything the PDF holds, and once he has signed no code
   can be issued, while « Voir le PDF » and his copy stay offered until the
@@ -217,16 +217,6 @@ def mask_address(address: str) -> str:
     return f"{shown}@{domain}"
 
 
-def _record_once(request, sign_request, name: str) -> None:
-    """« Document téléchargé », once per session and file: a PDF viewer asks
-    for the same file more than once."""
-    key = f"staff-signature-downloaded-{sign_request.uuid}-{name}"
-    if request.session.get(key):
-        return
-    workflow.record_download(sign_request, name, **client(request))
-    request.session[key] = True
-
-
 # -- The page ---------------------------------------------------------------------------------------------------
 
 
@@ -285,11 +275,12 @@ def _sign_page(request, token: str, sign_request: SignatureRequest, *, error: st
 @_for_the_link
 def sign(request, token):
     """The month to read, « Voir le PDF », the code, the drawing - or, once
-    signed, his copy. Opening it is « Lien ouvert », once per session."""
+    signed, his copy. Opening it is « Lien ouvert », once an hour per
+    device."""
     sign_request, failure = _resolve(request, token)
     if failure:
         return failure
-    workflow.note_link_opened(sign_request, request.session, **client(request))
+    workflow.note_link_opened(sign_request, **client(request))
     return _sign_page(request, token, sign_request)
 
 
@@ -425,7 +416,7 @@ def document(request, token):
         data = private_files.read_checked(sign_request.uuid, private_files.DOCUMENT, sign_request.document_sha256)
     except (private_files.AlteredFileError, FileNotFoundError):
         return _error(request, ALTERED_DOCUMENT, 500)
-    _record_once(request, sign_request, private_files.DOCUMENT)
+    workflow.note_download(sign_request, private_files.DOCUMENT, **client(request))
     response = HttpResponse(data, content_type="application/pdf")
     label = sign_request.month_snapshot.get("label") or ""
     response["Content-Disposition"] = pdf.disposition(
@@ -446,7 +437,7 @@ def copy(request, token):
         name, data = workflow.latest_document(sign_request)
     except (private_files.AlteredFileError, FileNotFoundError):
         return _error(request, ALTERED_DOCUMENT, 500)
-    _record_once(request, sign_request, name)
+    workflow.note_download(sign_request, name, **client(request))
     if name == private_files.FINAL:
         filename = signature_mail.final_copy_name(sign_request)
     else:

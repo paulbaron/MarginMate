@@ -85,6 +85,30 @@ def section_of(match) -> str:
     return SECTION_BY_APP.get(match.app_name, "")
 
 
+def counted_when_drawn(count):
+    """A badge's number, `count()` run only when a template reads it: base.html
+    draws the badges, but every template rendered with the request runs the
+    processors - the job cards polled every second among them, which threw
+    away a scan of the invoice table (5-20 ms of a 7 ms poll). `{% if %}`,
+    `{{ }}` and == take it for the int - not int() nor arithmetic. Read
+    under another binding than the processor's - another bar's queue, or
+    none - it refuses (TenancyError), as it does made with none bound
+    (NoTenantBound). Lives no longer than the request's context."""
+    from django.utils.functional import SimpleLazyObject
+
+    from accounts.tenancy import TenancyError, current_tenant, require_tenant
+
+    tenant = require_tenant()
+
+    def bound_count():
+        current = current_tenant()
+        if current is None or current.pk != tenant.pk:
+            raise TenancyError(f"A badge of espace {tenant.pk} read outside its request's binding.")
+        return count()
+
+    return SimpleLazyObject(bound_count)
+
+
 def navigation(request):
     from accounts.access import access_of
     from accounts.tenancy import current_tenant
@@ -102,7 +126,11 @@ def navigation(request):
         section = ""
     # The till products to link: counted for whoever has the link
     # (accounts/access.py).
-    pending = PosProduct.objects.filter(recipe__isnull=True, ignored=False).count() if access.allows("recipes") else 0
+    pending = (
+        counted_when_drawn(PosProduct.objects.filter(recipe__isnull=True, ignored=False).count)
+        if access.allows("recipes")
+        else 0
+    )
     return {
         "nav_section": section,
         "nav_section_label": SECTION_LABELS.get(section, ""),

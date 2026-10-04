@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import ProtectedError, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.html import escape
 
@@ -35,6 +35,7 @@ from .models import (
     Recipe,
     RecipeSale,
     SaleDocument,
+    SaleDocumentLine,
     SalesImportJob,
     variation_scope,
 )
@@ -280,7 +281,16 @@ def recipe_delete(request, pk):
         messages.error(request, f'Impossible de supprimer "{recipe.name}" : utilisée comme ingrédient dans {used_by}.')
         return redirect("recipes:recipe_detail", pk=pk)
     name = recipe.name
-    recipe.delete()
+    try:
+        with transaction.atomic():
+            recipe.delete()
+    except ProtectedError as exc:
+        # A sale document's lines PROTECT their recipe: the document must
+        # keep saying what was sold. Said as delete_stock_type says it.
+        documents = {obj.document_id for obj in exc.protected_objects if isinstance(obj, SaleDocumentLine)}
+        where = f"utilisée dans {len(documents)} document(s) de vente" if documents else "encore utilisée"
+        messages.error(request, f'Impossible de supprimer "{name}" : {where}.')
+        return redirect("recipes:recipe_detail", pk=pk)
     messages.success(request, f'"{name}" supprimée.')
     return redirect("recipes:recipe_list")
 
@@ -472,7 +482,14 @@ def pos_products_bulk(request):
         messages.error(request, "Aucun produit sélectionné.")
         return redirect("recipes:pos_product_list")
 
-    updated = PosProduct.objects.filter(name__in=names).update(ignored=True, recipe=None)
+    with transaction.atomic():
+        updated = PosProduct.objects.filter(name__in=names, recipe__isnull=True).update(ignored=True)
+        # The ticks are on rows still to link, but the page can be stale: a
+        # product linked meanwhile goes through set_aside, which takes its
+        # sales and its happy-hour name off the recipe - one UPDATE would not.
+        for product in PosProduct.objects.filter(name__in=names, recipe__isnull=False).select_related("recipe"):
+            set_aside(product, ignored=True)
+            updated += 1
     messages.success(request, f"{updated} produit{'s' if updated > 1 else ''} ignoré{'s' if updated > 1 else ''}.")
     return redirect("recipes:pos_product_list")
 

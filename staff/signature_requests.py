@@ -24,10 +24,11 @@ or a French refusal (`RequestError` and its kinds).
    e-mail (`code_email`, staff/signature_mail.py) or shown ONCE to the owner
    who passes it on by another channel than the link (`code_remis`) - which
    the proof file says honestly. A code by e-mail never voids the one the
-   employer handed over while it can still be typed. The method recorded
-   (`identification`) is the one of the code he TYPED, set when he types it
-   - never by a code merely issued. A verified code is remembered in HIS
-   session, for THIS request only (`is_identified`).
+   employer handed over while it can still be typed, and none is sent or
+   checked after `CODE_FAILURES_PER_LINK` wrong codes with the link. The
+   method recorded (`identification`) is the one of the code he TYPED, set
+   when he types it - never by a code merely issued. A verified code is remembered in HIS
+   session, for THIS request only, for an hour (`is_identified`).
 4. **He signs** (`sign_for_employee`): the certification ticked, his drawing
    checked (`signing.clean_signature_png`), the frozen file checked against
    its hash, then `signing.sign_as_employee` with a timestamp. No timestamp
@@ -82,6 +83,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -111,8 +113,18 @@ Identification = SignatureRequest.Identification
 
 LINK_VALIDITY = timedelta(days=14)
 CODE_VALIDITY = timedelta(minutes=15)
+#: How long a code typed identifies his session (`is_identified`): time to
+#: read his month and sign - not the session's two weeks, on a phone he may
+#: share (« Cache-Control: no-store »).
+IDENTIFICATION_VALIDITY = timedelta(hours=1)
 CODE_MAX_ATTEMPTS = 5
 CODES_PER_HOUR = 3
+#: Codes typed wrong with one link, every code together, before codes by
+#: e-mail are neither sent nor checked any more - five tries a code, a new
+#: code whenever asked, made some 300 guesses a day for the link's
+#: fortnight. « Nouveau lien » starts the count again; a code the employer
+#: hands over still works.
+CODE_FAILURES_PER_LINK = 30
 CODE_DIGITS = 6
 #: A link token is 43 characters; anything much longer is no token.
 TOKEN_MAX_LENGTH = 128
@@ -143,6 +155,14 @@ NOT_SIGNED = "La signature n'a pas pu être enregistrée : rien n'a été signé
 #: Refused to a code by e-mail while the one the employer handed over can
 #: still be typed: anyone holding the link could otherwise void it.
 HANDED_OVER_CODE_WAITING = "Votre employeur vous a donné un code : tapez-le ci-dessous (il vaut 15 minutes)."
+#: Past `CODE_FAILURES_PER_LINK`, to a code by e-mail asked for or typed.
+TOO_MANY_WRONG_CODES = "Trop de codes erronés avec ce lien : demandez le code à votre employeur, ou un nouveau lien."
+#: A file gone from the tenant's private folder, said by its name: an OS
+#: error's own words are its full path on the server (security audit LB-3),
+#: and « Vérifier » writes its verdict for good in the journal and the proof.
+FILE_MISSING = (
+    "Le fichier {name} est introuvable dans le dossier privé de l'espace : restaurez-le depuis la sauvegarde."
+)
 #: « Contresigner » posted before the employee signed (a page drawn earlier).
 COUNTERSIGN_TOO_EARLY = "Ce relevé n'est pas encore signé du côté salarié : il se contresigne ensuite."
 #: Where the SHA-256 of the employer's drawing is recorded: the COUNTERSIGNED
@@ -789,17 +809,56 @@ def index_links() -> tuple[int, int]:
     return len(missing), len(stale)
 
 
-def _opened_key(request) -> str:
-    return f"staff-signature-opened-{request.uuid}"
+#: What anyone holding the link makes the journal say as often as he likes -
+#: opening it, fetching a PDF, a code refused before any was compared - is
+#: logged once an hour per device and detail, and at most this many times an
+#: hour per kind and detail whatever the devices say. Once per SESSION held
+#: only for a browser keeping its cookie: a script without one wrote an event
+#: and a session row per hit, and the proof file, the owner's month page and
+#: both databases grew without end.
+REPEATED_EVENTS_PER_HOUR = 10
+
+#: And at most this many of a kind and detail in a request's whole life: ten
+#: an hour from a script changing its device at every hit were still
+#: ~10 000 hash-chained events over a link's fortnight, and each « Nouveau
+#: lien » or countersignature gives it another. An employee opens his link a
+#: handful of times; past the cap, nothing more of that kind is journaled for
+#: the request.
+REPEATED_EVENTS_PER_REQUEST = 200
 
 
-def note_link_opened(request: SignatureRequest, session, *, ip=None, user_agent="", now=None) -> None:
-    """« Lien ouvert », once per session."""
-    key = _opened_key(request)
-    if session.get(key):
-        return
-    log_event(request, Kind.LINK_OPENED, at=now, ip=ip, user_agent=user_agent)
-    session[key] = True
+def _log_unless_repeated(request: SignatureRequest, kind: str, *, now=None, ip=None, user_agent="", detail=None):
+    """`log_event`, unless this event - kind, device, detail - was logged in
+    the hour before `now`, or `REPEATED_EVENTS_PER_HOUR` of this kind and
+    detail were, or `REPEATED_EVENTS_PER_REQUEST` in the request's whole
+    life: past that, nothing more of that kind and detail is ever logged for
+    it (the owner's own downloads, logged alike, count too). Checked in the
+    transaction that appends it (IMMEDIATE in production: two hits at once
+    do not both find nothing) - with no upper bound, since a hit that read
+    the clock later may have logged first."""
+    now = _now(now)
+    ip, user_agent, detail = _clean_ip(ip), _clean_user_agent(user_agent), _clean_detail(detail)
+    with transaction.atomic():
+        devices = [
+            (seen_ip, seen_agent)
+            for seen_ip, seen_agent, seen_detail in SignatureEvent.objects.filter(
+                request=request, kind=kind, at__gt=now - timedelta(hours=1)
+            ).values_list("ip", "user_agent", "detail")
+            if (seen_detail or {}) == detail
+        ]
+        if len(devices) >= REPEATED_EVENTS_PER_HOUR or (ip, user_agent) in devices:
+            return None
+        logged = SignatureEvent.objects.filter(request=request, kind=kind, detail=detail).count()
+        if logged >= REPEATED_EVENTS_PER_REQUEST:
+            return None
+        return log_event(request, kind, at=now, ip=ip, user_agent=user_agent, detail=detail)
+
+
+def note_link_opened(request: SignatureRequest, *, ip=None, user_agent="", now=None) -> None:
+    """« Lien ouvert », once an hour per device (`_log_unless_repeated`).
+    Nothing is written in the session: a client that keeps no cookie would
+    leave a session row per hit."""
+    _log_unless_repeated(request, Kind.LINK_OPENED, now=now, ip=ip, user_agent=user_agent)
 
 
 # -- The one-time code ------------------------------------------------------------------------------------------
@@ -828,6 +887,21 @@ def _codes_in_the_last_hour(request: SignatureRequest, now, method: str) -> int:
         if (detail or {}).get("what") == "code"
     )
     return sent + failed_mails
+
+
+def _wrong_codes_with_this_link(request: SignatureRequest) -> int:
+    """The codes typed wrong since the link was made or last renewed."""
+    count = 0
+    for kind, detail in (
+        SignatureEvent.objects.filter(request=request, kind__in=(Kind.CODE_FAILED, Kind.LINK_RENEWED))
+        .order_by("id")
+        .values_list("kind", "detail")
+    ):
+        if kind == Kind.LINK_RENEWED:
+            count = 0
+        elif str((detail or {}).get("reason", "")).startswith("code erroné"):
+            count += 1
+    return count
 
 
 def waiting_code_method(request: SignatureRequest, now=None) -> str:
@@ -875,6 +949,8 @@ def issue_code(request: SignatureRequest, method: str, *, now=None, ip=None, use
     request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method"])
     if method == Identification.CODE_BY_EMAIL and waiting_code_method(request, now) == Identification.CODE_HANDED_OVER:
         raise CodeError(HANDED_OVER_CODE_WAITING)
+    if method == Identification.CODE_BY_EMAIL and _wrong_codes_with_this_link(request) >= CODE_FAILURES_PER_LINK:
+        raise CodeError(TOO_MANY_WRONG_CODES)
     if _codes_in_the_last_hour(request, now, method) >= CODES_PER_HOUR:
         raise CodeError(
             f"Déjà {CODES_PER_HOUR} codes demandés dans l'heure : attendez un peu avant d'en demander un autre."
@@ -902,9 +978,12 @@ def _session_key(request) -> str:
     return f"staff-signature-identified-{request.uuid}"
 
 
-def is_identified(session, request: SignatureRequest) -> bool:
-    """Whether THIS session verified a code for THIS request."""
+def is_identified(session, request: SignatureRequest, now=None) -> bool:
+    """Whether THIS session verified a code for THIS request, within
+    `IDENTIFICATION_VALIDITY`."""
     if request.code_verified_at is None:
+        return False
+    if _now(now) - request.code_verified_at > IDENTIFICATION_VALIDITY:
         return False
     return session.get(_session_key(request)) == _moment(request.code_verified_at)
 
@@ -919,7 +998,8 @@ _RESERVATION_ROUNDS = 3
 def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, user_agent="") -> None:
     """Check the code the employee typed; on success remember it in his
     session for this request only and use the code up. Every refusal is a
-    `CodeError` and a `code_failed` event.
+    `CodeError` and a `code_failed` event - one an hour per device for a
+    refusal before any code was compared (`_log_unless_repeated`).
 
     **A try is reserved before the code is compared** (security audit
     SIGN-1): one conditional UPDATE - this very code, fewer than
@@ -933,19 +1013,28 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
     now = _now(now)
     request = _waiting(request, now)
     digits = "".join(str(typed or "").split())
+    guessed_out = _wrong_codes_with_this_link(request) >= CODE_FAILURES_PER_LINK
 
-    def refuse(message, reason):
-        log_event(request, Kind.CODE_FAILED, at=now, ip=ip, user_agent=user_agent, detail={"reason": reason})
+    def refuse(message, reason, *, compared=True):
+        # A code compared is always an event; a refusal before any comparison
+        # can be posted in a loop, so it is said once an hour per device.
+        detail = {"reason": reason}
+        if compared:
+            log_event(request, Kind.CODE_FAILED, at=now, ip=ip, user_agent=user_agent, detail=detail)
+        else:
+            _log_unless_repeated(request, Kind.CODE_FAILED, now=now, ip=ip, user_agent=user_agent, detail=detail)
         raise CodeError(message)
 
     for _round in range(_RESERVATION_ROUNDS):
         request.refresh_from_db(fields=["code_hash", "code_sent_at", "code_attempts", "code_method", "identification"])
         if not request.code_hash:
-            refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours")
+            refuse("Aucun code en cours : demandez un nouveau code.", "aucun code en cours", compared=False)
         if now > request.code_sent_at + CODE_VALIDITY:
-            refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré")
+            refuse("Ce code a expiré (il vaut 15 minutes) : demandez-en un nouveau.", "code expiré", compared=False)
         if request.code_attempts >= CODE_MAX_ATTEMPTS:
-            refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
+            refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais", compared=False)
+        if guessed_out and request.code_method != Identification.CODE_HANDED_OVER:
+            refuse(TOO_MANY_WRONG_CODES, "trop de codes erronés avec ce lien", compared=False)
         stored, method = request.code_hash, request.code_method
         with transaction.atomic():
             reserved = SignatureRequest.objects.filter(
@@ -954,7 +1043,7 @@ def check_code(request: SignatureRequest, typed, session, *, now=None, ip=None, 
         if reserved:
             break
     else:
-        refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais")
+        refuse("Trop d'essais avec ce code : demandez un nouveau code.", "trop d'essais", compared=False)
     # This try's number, or a later one when guesses arrived together: the
     # tries left are never said to be more than they are.
     attempts = SignatureRequest.objects.filter(pk=request.pk).values_list("code_attempts", flat=True).first() or 0
@@ -1028,7 +1117,7 @@ def sign_for_employee(
     certified and the authority that issued his certificate."""
     now = _now(now)
     request = _waiting(request, now)
-    if not is_identified(session, request):
+    if not is_identified(session, request, now):
         raise IdentificationRequired(
             "Identifiez-vous d'abord avec le code à usage unique, sur cette page, avant de signer."
         )
@@ -1145,7 +1234,12 @@ def countersign_request(
         employee_signed = private_files.read_checked(
             request.uuid, private_files.EMPLOYEE_SIGNED, request.employee_pdf_sha256
         )
-    except (private_files.AlteredFileError, FileNotFoundError) as error:
+    except FileNotFoundError as error:
+        logger.warning("Demande %s : le document signé par le salarié est introuvable (%s)", request.uuid, error)
+        raise RequestError(
+            f"{FILE_MISSING.format(name=private_files.EMPLOYEE_SIGNED)} Rien n'a été contresigné."
+        ) from None
+    except private_files.AlteredFileError as error:
         raise RequestError(
             f"Le document signé avant contreseing a changé sur le disque ({error}) : rien n'a été contresigné."
         ) from None
@@ -1238,12 +1332,26 @@ def record_download(request: SignatureRequest, name: str, *, now=None, ip=None, 
     log_event(request, Kind.DOWNLOADED, at=now, ip=ip, user_agent=user_agent, detail={"file": name})
 
 
+def note_download(request: SignatureRequest, name: str, *, now=None, ip=None, user_agent="") -> None:
+    """« Document téléchargé » through the link: once an hour per device and
+    file (`_log_unless_repeated`) - a PDF viewer asks for the same file more
+    than once, and anyone holding the link as often as he likes."""
+    if name not in private_files.FILE_NAMES:
+        raise ValueError(f"Fichier inconnu : {name!r}")
+    _log_unless_repeated(request, Kind.DOWNLOADED, now=now, ip=ip, user_agent=user_agent, detail={"file": name})
+
+
 def verify_request(request: SignatureRequest, *, now=None, ip=None, user_agent="") -> signing.Verification:
     """« Vérifier »: `signing.verify` on the newest document, logged."""
     try:
         name, data = latest_document(request)
     except (private_files.AlteredFileError, FileNotFoundError) as error:
-        result = signing.Verification(error=str(error))
+        message = str(error)
+        if isinstance(error, FileNotFoundError) and error.filename:
+            # The OS's, naming the path; latest_document's own names none.
+            logger.warning("Demande %s : document introuvable pour « Vérifier » (%s)", request.uuid, error)
+            message = FILE_MISSING.format(name=os.path.basename(error.filename))
+        result = signing.Verification(error=message)
         name = ""
     else:
         result = signing.verify(data)

@@ -12,7 +12,8 @@ from datetime import date
 from django.test import TestCase
 from django.urls import reverse
 
-from recipes.models import PosProduct, RecipeSale
+from recipes.links import link
+from recipes.models import PosProduct, PosProductDailyQuantity, RecipeSale
 from recipes.pos.laddition_xlsx import ParsedExport
 from recipes.sales import record_sales
 from recipes.tasks import sync_pos_products
@@ -538,3 +539,24 @@ class BulkIgnoreTests(TestCase):
         product.refresh_from_db()
         self.assertTrue(product.ignored)
         self.assertIsNone(product.recipe)
+
+    def test_a_product_still_linked_is_set_aside_as_one_row_would_be(self):
+        """The ticks are on rows still to link, but the page can be stale: a
+        product linked meanwhile (another tab, an import's link by name) is
+        taken off its recipe with its sales and its happy-hour name, as the
+        row's own « Ignorer » does - not left counted on the recipe."""
+        recipe = make_recipe(name="Moscow Mule")
+        product = PosProduct.objects.get(name="Mule")
+        PosProductDailyQuantity.objects.create(product=product, sold_on=date(2026, 6, 1), quantity=4)
+        link(product, recipe, happy_hour=True)
+        self.assertTrue(RecipeSale.objects.filter(recipe=recipe, source="laddition").exists())
+
+        response = self.client.post(reverse("recipes:pos_products_bulk"), {"selected": ["Mule", "Café"]}, follow=True)
+        self.assertFalse(RecipeSale.objects.filter(recipe=recipe, source="laddition").exists())
+        recipe.refresh_from_db()
+        self.assertEqual(recipe.happy_hour_name, "")
+        self.assertEqual(
+            list(PosProduct.objects.filter(name__in=["Mule", "Café"]).values_list("ignored", "recipe")),
+            [(True, None), (True, None)],
+        )
+        self.assertTrue(any("2 produits ignorés" in str(m) for m in response.context["messages"]))

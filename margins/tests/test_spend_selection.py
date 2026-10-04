@@ -27,14 +27,17 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from unittest import mock
 
 from django.db import connection
+from django.db.models import Prefetch
+from django.db.models.sql import Query
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from common import DateRange
 from invoices.importing import spread_charges
-from invoices.models import Invoice
+from invoices.models import Invoice, InvoiceLine
 from margins import computation
 from margins.computation import (
     CHARGES_KEY,
@@ -554,9 +557,9 @@ class TheColumnsReadTests(TestCase):
         make_invoice(supplier=landlord, reconciliation_adjustment=Decimal("45.00"))
 
     def figures(self, invoices) -> dict:
+        """What « Marges » reads of each: its two totals and their split."""
         return {
-            invoice.pk: (invoice.total_ht, invoice.total_ttc, computation.where_it_went(invoice))
-            for invoice in invoices
+            invoice.pk: (computation.invoice_money(invoice), computation.where_it_went(invoice)) for invoice in invoices
         }
 
     def test_every_shape_is_read_with_no_query(self):
@@ -565,8 +568,27 @@ class TheColumnsReadTests(TestCase):
         with self.assertNumQueries(0):
             self.figures(invoices)
 
+    def test_no_queryset_is_made_per_invoice(self):
+        """The lines are filed on each invoice as a list: as its manager's
+        cache, Django clones the lines' queryset once per invoice to file
+        them - three hundred clones for a year of « Marges »."""
+
+        def clones_to_load() -> int:
+            with mock.patch.object(Query, "clone", autospec=True, side_effect=Query.clone) as clone:
+                list(computation.with_lines(Invoice.objects.all()))
+            return clone.call_count
+
+        few = clones_to_load()
+        supplier = make_supplier(name="Autre grossiste")
+        for _ in range(16):
+            line(make_invoice(supplier=supplier), None, "1.00")
+        self.assertEqual(clones_to_load(), few)
+
     def test_the_columns_read_give_what_the_whole_rows_give(self):
-        whole = Invoice.objects.select_related("supplier").prefetch_related(computation.lines_prefetch())
+        # Whole rows, as nothing in the app loads them any more: the reference.
+        whole = Invoice.objects.select_related("supplier").prefetch_related(
+            Prefetch("lines", InvoiceLine.objects.select_related("product__stock_type"))
+        )
         self.assertEqual(
             self.figures(computation.with_lines(Invoice.objects.all())),
             self.figures(whole),

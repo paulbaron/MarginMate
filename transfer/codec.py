@@ -73,6 +73,24 @@ def _missing(model_field, name) -> None:
         raise FieldValueError(f"« {name} » : valeur manquante")
 
 
+#: Django's range for an IntegerField on every backend but SQLite, whose own
+#: runs to 2**63 - 1. load() bounds no integer - a section bounds a position
+#: by what its page takes, in its own words -, so a count no page bounds (a
+#: till's day, a case's size) is held to this by its section: from 2**63 its
+#: row was not stored, and just under it the rebuild's sums overflowed - the
+#: preview was a 500 (audit 04/10/2026). Past it, no sum of a bar's rows
+#: reaches what SQLite holds.
+MAX_COUNT = 2**31 - 1
+
+
+def check_count(name: str, value: int | None) -> None:
+    """A count load() read, within MAX_COUNT either side of 0."""
+    if value is not None and abs(value) > MAX_COUNT:
+        raise FieldValueError(
+            f"« {name} » : nombre hors limites (« {value} ») : 2 147 483 647 au plus, en plus ou en moins"
+        )
+
+
 def load(model, name: str, value):
     model_field = _field(model, name)
     if value is None:

@@ -35,7 +35,7 @@ from django.urls import NoReverseMatch, reverse
 from staff.models import ABSENCE_KINDS, Employee, Establishment, Timesheet, TimesheetDay
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from staff.tests.support import employee
-from staff.timesheet import apply_range, month_days, save_month
+from staff.timesheet import PostedDay, apply_range, month_days, save_month
 
 JUNE = date(2026, 6, 1)  # Monday 1 to Tuesday 30, no public holiday
 MAY = date(2026, 5, 1)  # holidays on the 1st, 8th, 14th and 25th
@@ -933,6 +933,37 @@ class MonthShortcutTests(PageTestCase):
                 )
             ],
         )
+
+    def test_a_holiday_saved_worked_is_left_and_said(self):
+        """The button is pressed for the holidays not worked: one already
+        saved worked keeps its hours and its note, and the answer names it."""
+        save_month(self.person, MAY, [PostedDay(date(2026, 5, 14), hours=Decimal("9"), note="ouvert, payé double")])
+        form, _response = self.holidays_form()
+        answer = self.send(form)
+        days = stored(self.person, MAY)
+        self.assertEqual(days[14], ("travail", Decimal("9.00"), "ouvert, payé double"))
+        self.assertEqual(days[1], ("ferie", Decimal("0.00"), ""))
+        self.assertEqual(
+            self.messages_of(answer),
+            [
+                (
+                    "En Férié chômé, 0 h : 1er mai (Fête du Travail) et 8 mai (Victoire 1945) — 2 jours modifiés. "
+                    "Jour de repos laissé tel quel : 25 mai (Lundi de Pentecôte). Férié travaillé laissé tel quel : "
+                    "14 mai (Ascension)."
+                )
+            ],
+        )
+
+    def test_a_month_whose_only_holiday_was_worked_says_so(self):
+        """July 2026: 14 July, a Tuesday, worked."""
+        save_month(self.person, JULY, [PostedDay(date(2026, 7, 14), hours=Decimal("10"))])
+        form, _response = self.holidays_form(JULY)
+        answer = self.send(form)
+        self.assertEqual(
+            self.messages_of(answer),
+            ["Férié travaillé laissé tel quel : 14 juillet (Fête nationale). Rien n'a été modifié."],
+        )
+        self.assertEqual(stored(self.person, JULY)[14], ("travail", Decimal("10.00"), ""))
 
     def test_holidays_all_on_days_off_change_nothing_and_say_why(self):
         """April 2026: Easter Monday, a Monday."""

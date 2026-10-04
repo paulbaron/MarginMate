@@ -22,6 +22,7 @@ import re
 from datetime import date
 from decimal import Decimal
 from html import unescape
+from unittest import mock
 
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -105,6 +106,12 @@ class LinkPage(Fixtures):
 
     def invoices_of(self, line):
         return set(line.payments.values_list("invoice__invoice_number", flat=True))
+
+    def drawn_unlink(self, line) -> dict:
+        """What « Délier » on `line`'s row posts: the invoices the row shows."""
+        target = reverse("bank:bank_line_action", args=[line.pk])
+        form = next(form for form in _forms(self.linked()) if f'action="{target}"' in form and 'value="unlink"' in form)
+        return {"shown": [value for name, value in HIDDEN.findall(form) if name == "shown"]}
 
 
 class SeveralInvoicesOnOneLineTests(LinkPage, TestCase):
@@ -382,7 +389,7 @@ class UnlinkTests(LinkPage, TestCase):
         self.assertNotContains(self.linked(), "de plus que la dépense")
 
     def test_the_whole_line_is_unlinked_in_one_go(self):
-        self.act(self.debit, "unlink")
+        self.act(self.debit, "unlink", **self.drawn_unlink(self.debit))
         self.assertFalse(self.debit.payments.exists())
 
     def test_taking_the_last_invoice_off_leaves_the_line_settled_by_hand(self):
@@ -407,12 +414,91 @@ class UnlinkTests(LinkPage, TestCase):
         self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002", "F-0003"})
         self.assertContains(self.client.get(response.url), "Choisissez la facture")
 
-    def test_no_invoice_expected_still_clears_every_link(self):
-        self.act(self.debit, "no_invoice")
+    def test_no_invoice_expected_is_refused_on_a_line_that_pays_invoices(self):
+        """« Pas de facture » is never drawn on a linked row: a POST of it
+        there is a stale page or a crafted one, and it took all three
+        invoices off in silence, for good."""
+        answer = self.act(self.debit, "no_invoice")
         self.debit.refresh_from_db()
-        self.assertFalse(self.debit.payments.exists())
-        self.assertTrue(self.debit.no_invoice)
-        self.assertEqual(self.client.get(self.url, {"vue": "sans-facture"}).context["stats"]["no_invoice_count"], 1)
+        self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002", "F-0003"})
+        self.assertFalse(self.debit.no_invoice)
+        self.assertContains(self.client.get(answer.url), "rattachée entre-temps")
+
+
+class StalePageTests(LinkPage, TestCase):
+    """« Pas de facture » and « Rapprocher automatiquement » are drawn on a
+    row that pays nothing; another tab, an import's automatic pass or
+    « Propositions » may link it before the click. « Délier » is drawn on a
+    row that pays something, and may find it paying something else."""
+
+    def setUp(self):
+        super().setUp()
+        self.debit = self.line(PAYEE, "-120.00")
+
+    def drawn_with(self, action):
+        target = reverse("bank:bank_line_action", args=[self.debit.pk])
+        row = [form for form in _forms(self.client.get(self.url)) if f'action="{target}"' in form]
+        self.assertTrue(any(f'name="action" value="{action}"' in form for form in row))
+
+    def test_a_stale_no_invoice_keeps_the_link_made_since(self):
+        self.drawn_with("no_invoice")
+        self.act(self.debit, "link", invoice=[self.first.pk, self.second.pk])
+        answer = self.act(self.debit, "no_invoice")
+        self.debit.refresh_from_db()
+        self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002"})
+        self.assertFalse(self.debit.no_invoice)
+        self.assertContains(self.client.get(answer.url), "rattachée entre-temps")
+
+    def test_a_stale_reopen_keeps_the_link_made_since(self):
+        # Settled by hand with nothing on it: the row offers « Rapprocher
+        # automatiquement ».
+        self.act(self.debit, "link", invoice=[self.third.pk])
+        self.act(self.debit, "unlink", **self.drawn_unlink(self.debit))
+        self.drawn_with("reopen")
+        self.act(self.debit, "link", invoice=[self.first.pk, self.second.pk])
+        # Refused before the automatic pass, not only before the reopen: the
+        # pass leaves this line alone either way, so only the mock tells.
+        with mock.patch("bank.reconcile.reconcile") as automatic_pass:
+            answer = self.act(self.debit, "reopen")
+        automatic_pass.assert_not_called()
+        self.debit.refresh_from_db()
+        self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0002"})
+        self.assertEqual(set(self.debit.payments.values_list("method", flat=True)), {InvoicePayment.Method.MANUAL})
+        self.assertTrue(self.debit.settled_by_hand)
+        self.assertContains(self.client.get(answer.url), "rattachée entre-temps")
+
+    def test_a_stale_unlink_keeps_the_link_made_since(self):
+        """« Délier » is drawn on a row paying F-0003; another tab takes it
+        off and links F-0001 instead. The stale click took F-0001 off too,
+        an invoice the reader never saw on that row."""
+        self.act(self.debit, "link", invoice=[self.third.pk])
+        drawn = self.drawn_unlink(self.debit)
+        self.assertEqual(drawn, {"shown": [str(self.third.pk)]})
+        self.act(self.debit, "unlink", **drawn)
+        self.act(self.debit, "link", invoice=[self.first.pk])
+        answer = self.act(self.debit, "unlink", **drawn)
+        self.assertEqual(self.invoices_of(self.debit), {"F-0001"})
+        self.assertContains(self.client.get(answer.url), "changé entre-temps")
+        # One invoice more than the row showed, or none posted at all (a
+        # crafted POST): refused the same way.
+        self.act(self.debit, "link", invoice=[self.third.pk])
+        for posted in (drawn, {}):
+            with self.subTest(posted=posted):
+                self.act(self.debit, "unlink", **posted)
+                self.assertEqual(self.invoices_of(self.debit), {"F-0001", "F-0003"})
+
+    def test_an_unlink_showing_nothing_on_a_line_paying_nothing_changes_nothing(self):
+        """A page drawn before the rows carried what they showed, whose line
+        another tab has since unlinked: nothing to take off, and the line is
+        not turned « settled by hand » (out of the automatic pass) by it."""
+        self.act(self.debit, "link", invoice=[self.third.pk])
+        self.act(self.debit, "unlink", **self.drawn_unlink(self.debit))
+        self.debit.settled_by_hand = False
+        self.debit.save(update_fields=["settled_by_hand"])
+        answer = self.act(self.debit, "unlink")
+        self.debit.refresh_from_db()
+        self.assertFalse(self.debit.settled_by_hand)
+        self.assertContains(self.client.get(answer.url), "changé entre-temps")
 
 
 class DeletedDocumentTests(LinkPage, TestCase):

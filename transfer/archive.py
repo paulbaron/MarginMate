@@ -55,7 +55,23 @@ CHUNK = 1024 * 1024
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_MEMBERS = 100_000
 MAX_FILE_BYTES = 200 * 1024**2
-MAX_JSON_BYTES = 512 * 1024**2
+MAX_JSON_BYTES = 256 * 1024**2
+#: The manifest: a few KB in a real archive, read before anything else.
+MAX_MANIFEST_BYTES = 16 * 1024**2
+#: A JSON member's values, counted on its bytes before it is parsed (every
+#: `[`, `{` and `,`, strings' included - an upper bound): 2.6 MB compressed of
+#: « [[],[],…] » under MAX_JSON_BYTES parsed into ~170 million lists, some
+#: 11 GB, and the server every bar shares went down (security audit
+#: 04/10/2026). A real section is about 25 values per row: a million rows fit.
+#: Counted across the archive, the manifest included: every section's parse
+#: stays in memory until the import ends, and one member just under the cap
+#: per section was some 10 GB again (audit 04/10/2026).
+MAX_JSON_VALUES = 25_000_000
+#: The manifest's own share: a real one is about 5 values a file, and
+#: holds MAX_MEMBERS files at most. With the whole budget, a 16 MB one of
+#: « [[],[],…] » was parsed at every stage, preview and import, and kept
+#: whole in the stage's state.json (review 04/10/2026).
+MAX_MANIFEST_VALUES = 10 * MAX_MEMBERS
 MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_RATIO = 200
 RATIO_MIN_BYTES = 10 * 1024**2
@@ -520,16 +536,27 @@ def shown_moment(value) -> datetime | None:
 DAMAGED = (zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, OSError, NotImplementedError, RuntimeError)
 
 
-def _read_json(zf: zipfile.ZipFile, member: str, what: str):
-    """A JSON member, read in chunks under MAX_JSON_BYTES whatever its header
-    claims, NaN and Infinity refused, and text no UTF-8 write takes."""
+def json_values_bound(data: bytes) -> int:
+    """About how many values parsing `data` makes, counted on its bytes: every
+    `[`, `{` and `,`, those inside strings included."""
+    return data.count(b"[") + data.count(b"{") + data.count(b",")
+
+
+def _read_json(zf: zipfile.ZipFile, member: str, what: str, values_limit: int, max_bytes: int | None = None):
+    """A JSON member and the values it counted, read in chunks under
+    MAX_JSON_BYTES (or `max_bytes`) whatever its header claims, under
+    `values_limit` values, NaN and Infinity refused, and text no UTF-8 write
+    takes."""
+    limit = MAX_JSON_BYTES if max_bytes is None else max_bytes
     chunks = []
     total = 0
+    values = 0
     try:
         with zf.open(member) as handle:
             for chunk in iter(lambda: handle.read(CHUNK), b""):
                 total += len(chunk)
-                if total > MAX_JSON_BYTES:
+                values += json_values_bound(chunk)
+                if total > limit or values > values_limit:
                     raise ArchiveError(f"Archive refusée : {what} est trop gros.")
                 chunks.append(chunk)
     except DAMAGED as exc:
@@ -545,7 +572,7 @@ def _read_json(zf: zipfile.ZipFile, member: str, what: str):
         raise ArchiveError(f"Archive refusée : {what} est illisible.") from None
     if unencodable(text, data):
         raise ArchiveError(UNENCODABLE.format(what=what))
-    return data
+    return data, values
 
 
 class _VerifiedStream(io.RawIOBase):
@@ -646,6 +673,8 @@ class ArchiveReader:
         # Each section file parsed once, whichever sections read it: an older
         # archive's banque.json is both « Banque » and « Règles de la banque ».
         self._files_parsed: dict[str, dict] = {}
+        #: MAX_JSON_VALUES is the archive's, not each member's (_read_json).
+        self._values_left = MAX_JSON_VALUES
         try:
             with open(self.path, "rb") as handle:
                 magic = handle.read(len(ZIP_MAGIC))
@@ -687,7 +716,16 @@ class ArchiveReader:
 
         if MANIFEST not in infos_by_name:
             raise ArchiveError(NOT_ARCHIVE)
-        manifest = _read_json(self._zip, MANIFEST, MANIFEST)
+        if infos_by_name[MANIFEST].file_size > MAX_MANIFEST_BYTES:
+            raise ArchiveError(f"Archive refusée : {MANIFEST} est trop gros.")
+        manifest, values = _read_json(
+            self._zip,
+            MANIFEST,
+            MANIFEST,
+            values_limit=min(self._values_left, MAX_MANIFEST_VALUES),
+            max_bytes=MAX_MANIFEST_BYTES,
+        )
+        self._values_left -= values
         if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
             raise ArchiveError(NOT_ARCHIVE)
         version = manifest.get("version")
@@ -774,7 +812,8 @@ class ArchiveReader:
     def _parsed(self, member: str) -> dict:
         """A section file, parsed once for every section reading it."""
         if member not in self._files_parsed:
-            data = _read_json(self._zip, member, member)
+            data, values = _read_json(self._zip, member, member, values_limit=self._values_left)
+            self._values_left -= values
             if not isinstance(data, dict):
                 raise ArchiveError(f"Archive refusée : {member} est illisible.")
             self._files_parsed[member] = data

@@ -6,10 +6,12 @@ ticked « charges », and its credit note AFR1176742, -3,92 €, signed twice to
 
 from decimal import Decimal
 from io import StringIO
+from unittest import mock
 
 from django.core.management import call_command
 from django.test import TestCase
 
+from invoices.importing import LineTooWideError
 from invoices.models import Invoice, InvoiceLine, Supplier
 from invoices.receipts import import_document
 from invoices.tests.einvoice_files import CII_TWO_RATES
@@ -76,3 +78,15 @@ class RereadEInvoicesTests(TestCase):
         self.invoice.refresh_from_db()
         self.assertEqual(self.invoice.printed_total_ttc, D("20.00"))
         self.assertIn("Laissé : Brasserie du Canal n° FA-2026-0042", said)
+
+    def test_a_line_too_wide_is_said_and_left(self):
+        """A figure wider than its column refuses the reading like the other
+        refusals: said, that document left as it was, the run carried on -
+        not a traceback that stops it."""
+        self.filed_wrong()
+        refusal = LineTooWideError("« Abonnement » : le montant HT dépasse ce que MarginMate peut enregistrer.")
+        with mock.patch("invoices.management.commands.reread_einvoices.reread_document", side_effect=refusal):
+            said = self.run_command()
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.printed_total_ttc, D("20.00"))
+        self.assertIn("Laissé : Brasserie du Canal n° FA-2026-0042 - « Abonnement » : le montant HT", said)

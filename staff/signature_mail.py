@@ -24,12 +24,16 @@ request in an hour, and `TENANT_MAILS_PER_DAY` signature mails of any kind
 (links, codes, copies, failed sends included) for the whole tenant in 24
 hours, counted from the requests' own events. Over either, nothing is sent:
 the owner's page still shows the link, to hand over himself; the
-employee's page says to ask the employer for the code.
+employee's page says to ask the employer for the code. The codes by e-mail
+have their own share: `REQUEST_CODES_PER_DAY` for one request in 24 hours,
+one at a time (`CODE_ON_ITS_WAY`) - « Recevoir un code », three an hour,
+was enough alone to use up the whole tenant's day.
 """
 
 from __future__ import annotations
 
 import smtplib
+import threading
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -51,6 +55,11 @@ REQUEST_MAILS_PER_HOUR = 3
 #: Every signature mail of one tenant in 24 hours: a link, a code and a
 #: final copy for twenty employees on the same day is 60.
 TENANT_MAILS_PER_DAY = 60
+#: Codes by e-mail for ONE request in 24 hours, failed sends included: the
+#: three an hour (signature_requests.CODES_PER_HOUR) made 72, and anyone
+#: holding the link used up the tenant's 60 - every other employee's link
+#: and copy refused for a day.
+REQUEST_CODES_PER_DAY = 6
 #: The events that are a mail sent - or tried: a failed send counts, so a
 #: broken server is not hammered either.
 _MAIL_EVENTS = (Kind.LINK_SENT, Kind.CODE_SENT, Kind.COPY_SENT, Kind.MAIL_FAILED)
@@ -64,9 +73,17 @@ TENANT_CAP_REACHED = (
     "Déjà {count} e-mails de signature envoyés depuis 24 heures : {what} n'a pas été envoyé, "
     "transmettez-le vous-même (SMS, messagerie, en main propre)."
 )
-#: The employee's page, when the tenant's day is used up: the code comes
-#: from the employer instead.
+#: The employee's page, when the tenant's day or the request's is used up:
+#: the code comes from the employer instead.
 CODE_CAP_REACHED = "Le code ne peut plus être envoyé par e-mail aujourd'hui : demandez-le à votre employeur."
+#: « Recevoir un code » posted again while the mail of the last one is on
+#: its way: the counts read the `code_sent` logged once it has left, so
+#: posts at once all passed them.
+CODE_ON_ITS_WAY = "Un code est déjà en cours d'envoi : attendez-le quelques instants."
+#: The requests whose code mail is being sent, in this process (`serve` is
+#: one): an entry lives for the send only.
+_codes_on_their_way: set = set()
+_codes_lock = threading.Lock()
 
 
 def _request_mails_in_the_last_hour(request: SignatureRequest, now) -> int:
@@ -76,6 +93,17 @@ def _request_mails_in_the_last_hour(request: SignatureRequest, now) -> int:
         1
         for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
         if (detail or {}).get("what") != "code"
+    )
+    return sent + failed
+
+
+def _request_codes_in_the_last_day(request: SignatureRequest, now) -> int:
+    events = SignatureEvent.objects.filter(request=request, at__gt=now - timedelta(days=1), at__lte=now)
+    sent = events.filter(kind=Kind.CODE_SENT).count()
+    failed = sum(
+        1
+        for detail in events.filter(kind=Kind.MAIL_FAILED).values_list("detail", flat=True)
+        if (detail or {}).get("what") == "code"
     )
     return sent + failed
 
@@ -92,7 +120,10 @@ def cap_reached(request: SignatureRequest, what: str, *, now=None) -> str:
     count = _tenant_mails_in_the_last_day(now)
     if count >= TENANT_MAILS_PER_DAY:
         return TENANT_CAP_REACHED.format(count=count, what=what)
-    if what != "le code":
+    if what == "le code":
+        if _request_codes_in_the_last_day(request, now) >= REQUEST_CODES_PER_DAY:
+            return CODE_CAP_REACHED
+    else:
         count = _request_mails_in_the_last_hour(request, now)
         if count >= REQUEST_MAILS_PER_HOUR:
             return REQUEST_CAP_REACHED.format(count=count, what=what)
@@ -201,6 +232,18 @@ def send_code(request: SignatureRequest, *, now=None, ip=None, user_agent="") ->
     request no longer waiting)."""
     if not can_email(request):
         raise signature_requests.CodeError(_unavailable(request, "le code"))
+    with _codes_lock:
+        if request.uuid in _codes_on_their_way:
+            raise signature_requests.CodeError(CODE_ON_ITS_WAY)
+        _codes_on_their_way.add(request.uuid)
+    try:
+        return _send_code(request, now=now, ip=ip, user_agent=user_agent)
+    finally:
+        with _codes_lock:
+            _codes_on_their_way.discard(request.uuid)
+
+
+def _send_code(request: SignatureRequest, *, now=None, ip=None, user_agent="") -> MailOutcome:
     # Before a code is issued: refused, the one waiting stays good.
     if cap_reached(request, "le code", now=now):
         raise signature_requests.CodeError(CODE_CAP_REACHED)

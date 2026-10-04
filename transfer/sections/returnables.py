@@ -609,6 +609,9 @@ class ReturnablesSection(Section):
                 }
                 for name in ("width", "height"):  # no default: a photo without them cannot be stored
                     photo_values[name] = codec.load(PickupPhoto, name, item.get(name))
+                    # Nothing else bounds them (no full_clean): from 2**63 the
+                    # insert's OverflowError failed the whole preview.
+                    codec.check_count(name, photo_values[name])
                 refs = {name: self._ref(item.get(name)) for name in PHOTO_FILES}
                 parsed.photos.append(_Photo(values=photo_values, item=item, refs=refs))
         return parsed

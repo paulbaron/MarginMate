@@ -454,11 +454,47 @@ class RulePageTests(Fixtures, TestCase):
     def test_a_rule_can_be_paused_then_deleted(self):
         rule = IgnoreRule.objects.create(pattern="URSSAF")
         action = reverse("bank:rule_action", args=[rule.pk])
-        self.client.post(action, {"action": "toggle"})
+        self.client.post(action, {"action": "suspendre"})
         rule.refresh_from_db()
         self.assertFalse(rule.is_active)
         self.client.post(action, {"action": "delete"})
         self.assertFalse(IgnoreRule.objects.exists())
+
+    def test_each_button_posts_the_state_it_wants(self):
+        IgnoreRule.objects.create(pattern="URSSAF", description="Active")
+        IgnoreRule.objects.create(pattern="LOYER", description="Suspendue", is_active=False)
+        page = self.client.get(self.url)
+        self.assertContains(page, 'name="action" value="suspendre"', count=1)
+        self.assertContains(page, 'name="action" value="reactiver"', count=1)
+
+    def test_a_second_suspend_leaves_the_rule_suspended(self):
+        """A double click, or a second tab drawn before the first click:
+        a « toggle » flipped the rule straight back to active."""
+        rule = IgnoreRule.objects.create(pattern="URSSAF", description="Cotisations")
+        action = reverse("bank:rule_action", args=[rule.pk])
+        self.client.post(action, {"action": "suspendre"})
+        with mock.patch("bank.reconcile.reconcile") as automatic_pass:
+            answer = self.client.post(action, {"action": "suspendre"}, follow=True)
+        rule.refresh_from_db()
+        self.assertFalse(rule.is_active)
+        automatic_pass.assert_not_called()
+        self.assertContains(answer, "Règle « Cotisations » déjà suspendue.")
+
+    def test_a_second_reactivate_leaves_the_rule_active(self):
+        rule = IgnoreRule.objects.create(pattern="URSSAF", description="Cotisations", is_active=False)
+        action = reverse("bank:rule_action", args=[rule.pk])
+        self.client.post(action, {"action": "reactiver"})
+        answer = self.client.post(action, {"action": "reactiver"}, follow=True)
+        rule.refresh_from_db()
+        self.assertTrue(rule.is_active)
+        self.assertContains(answer, "Règle « Cotisations » déjà active.")
+
+    def test_a_toggle_from_a_page_drawn_before_is_refused(self):
+        rule = IgnoreRule.objects.create(pattern="URSSAF")
+        answer = self.client.post(reverse("bank:rule_action", args=[rule.pk]), {"action": "toggle"}, follow=True)
+        rule.refresh_from_db()
+        self.assertTrue(rule.is_active)
+        self.assertContains(answer, "Action inconnue.")
 
     def test_rule_actions_only_answer_a_post(self):
         rule = IgnoreRule.objects.create(pattern="URSSAF")

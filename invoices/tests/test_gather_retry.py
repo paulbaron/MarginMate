@@ -19,7 +19,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from invoices.models import ScrapeJob
+from invoices.models import InvoiceType, ScrapeJob
 from recipes.models import SalesImportJob
 
 
@@ -130,6 +130,14 @@ class GatherPeriodTests(TestCase):
         )
         self.assertNotEqual(self.start_date_shown()[0], date(2026, 1, 1))
 
+    def test_a_period_typed_before_2000_is_not_offered_again(self):
+        """A gather asked from « 26 » (0026-09-01) before the period was
+        checked: offered again, the date box refused its own value and the
+        start had to be typed again. The earliest a document may be dated is
+        offered instead."""
+        gather_job(ScrapeJob.Status.FAILED, range_start=date(26, 9, 1), range_end=date(26, 9, 18))
+        self.assertEqual(self.start_date_shown(), (date(2000, 1, 1), date(2000, 1, 1)))
+
     def test_a_gather_that_went_well_offers_what_arrived_since(self):
         gather_job(ScrapeJob.Status.SUCCESS, range_start=date(2026, 1, 1), range_end=date(2026, 9, 18), progress={})
         self.assertNotEqual(self.start_date_shown()[0], date(2026, 1, 1))
@@ -155,6 +163,97 @@ class GatherRequestTests(TestCase):
         response = self.post(["METRO"])
         self.assertEqual(ScrapeJob.objects.count(), 1)
         self.assertContains(response, "déjà en cours")
+
+
+class GatherPeriodBoundsTests(TestCase):
+    """A year typed as « 26 » is 0026 in a date box: Metro was searched in
+    8 028 windows of 91 days from 0026-09-01, in one signed-in session, and
+    every mailbox from its first mail - for hours, blocking every other
+    gather and the deploy. A period starts in 2000 at the earliest (the
+    rule for a document's date, forms.EARLIEST_DOCUMENT_DATE), ends today
+    at the latest, and starts before it ends."""
+
+    def post(self, start, end):
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            response = self.client.post(
+                reverse("invoices:gather"), {"start_date": start, "end_date": end, "sources": ["METRO"]}, follow=True
+            )
+        return response, thread
+
+    def test_a_year_typed_as_two_digits_starts_nothing(self):
+        response, thread = self.post("0026-09-01", timezone.localdate().isoformat())
+        self.assertFalse(ScrapeJob.objects.exists())
+        thread.assert_not_called()
+        self.assertContains(response, "Période impossible")
+
+    def test_an_end_in_the_future_starts_nothing(self):
+        response, _thread = self.post("2026-09-01", "9999-12-31")
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_start_after_the_end_starts_nothing(self):
+        response, _thread = self.post("2026-09-18", "2026-09-01")
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_period_left_blank_still_starts(self):
+        self.post("", "")
+        self.assertEqual(ScrapeJob.objects.count(), 1)
+
+    def test_a_period_from_2000_to_today_starts(self):
+        """Alone: a second post would meet the first's job and be turned away
+        as « déjà en cours » before its period was looked at."""
+        today = timezone.localdate()
+        self.post("2000-01-01", today.isoformat())
+        job = ScrapeJob.objects.get()
+        self.assertEqual((job.range_start, job.range_end), (date(2000, 1, 1), today))
+
+    def test_the_boxes_say_so_to_the_browser(self):
+        page = self.client.get(reverse("invoices:invoice_list"))
+        today = timezone.localdate().isoformat()
+        self.assertContains(page, f'name="start_date" min="2000-01-01" max="{today}"')
+        self.assertContains(page, f'name="end_date" min="2000-01-01" max="{today}"')
+
+    def test_a_source_test_takes_the_same_rule(self):
+        from invoices.forms import gather_range_problem
+
+        self.assertTrue(gather_range_problem(date(26, 9, 1), None))
+        self.assertTrue(gather_range_problem(None, timezone.localdate() + timedelta(days=1)))
+        self.assertTrue(gather_range_problem(date(2026, 9, 2), date(2026, 9, 1)))
+        self.assertEqual(gather_range_problem(None, None), "")
+        self.assertEqual(gather_range_problem(date(2000, 1, 1), timezone.localdate()), "")
+
+    def mailbox(self, action):
+        return {
+            "name": "Traiteur Exemple - Factures",
+            "supplier": "new",
+            "new_name": "Traiteur Exemple",
+            "source_kind": "EMAIL",
+            "parser_key": "",
+            "is_active": "on",
+            "action": action,
+            "sender_pattern": r"factures@traiteur\.exemple",
+            "subject_pattern": "",
+            "body_pattern": "",
+            "attachment_pattern": r"\.pdf$",
+            "test_start_date": "0026-09-01",
+            "test_end_date": "2026-09-01",
+        }
+
+    def test_a_mailbox_test_says_why_it_starts_nothing(self):
+        """Put on the form, the refusal sat on a box the page draws by hand,
+        without its errors: « Tester » did nothing, and said nothing."""
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            response = self.client.post(reverse("invoices:invoice_type_create"), self.mailbox("test"))
+        thread.assert_not_called()
+        self.assertFalse(ScrapeJob.objects.exists())
+        self.assertContains(response, "Période impossible")
+
+    def test_a_mailbox_saves_whatever_its_test_dates(self):
+        """The test dates are only « Tester »'s: they never stopped a save."""
+        response = self.client.post(reverse("invoices:invoice_type_create"), self.mailbox("save"))
+        self.assertRedirects(response, reverse("invoices:invoice_type_list"), fetch_redirect_response=False)
+        self.assertTrue(InvoiceType.objects.filter(name="Traiteur Exemple - Factures").exists())
 
 
 class MetroPauseOnThePageTests(TestCase):

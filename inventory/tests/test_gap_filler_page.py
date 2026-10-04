@@ -3744,3 +3744,13 @@ class EmptyGapsTableTests(ExclusionTestCase):
         self.assertEqual(table_of(html, GAPS_TABLE), "")
         self.assertEqual(gap_sentences(html), [ALL_LEFT_OUT])
         self.assertNotIn(NO_RECIPE_USES_ONE, html)
+
+
+class CalendarEdgeTests(PageTestCase):
+    """A count dated on the calendar's last day - typed before its form
+    refused it, or restored from somewhere - is the latest one, and the menu
+    is read from the day after it, which does not exist."""
+
+    def test_a_count_on_the_last_day_still_opens_the_page(self):
+        make_stock_take(taken_at=timezone.make_aware(datetime(9999, 12, 31, 23, 0)))
+        self.get()

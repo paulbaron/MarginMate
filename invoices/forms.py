@@ -10,6 +10,7 @@ from accounts.tenancy import integrations_allowed
 from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands, is_id, selection_too_big
 
 from . import integrations
+from .einvoice import MAX_AMOUNT, MAX_UNIT, UNIT
 from .models import (
     AUTO_GATHER_END_BEFORE_START,
     EmailInvoiceSource,
@@ -55,6 +56,42 @@ def check_document_date(value: date | None) -> date:
             f"Date impossible : entre le {EARLIEST_DOCUMENT_DATE:%d/%m/%Y} et aujourd'hui ({today:%d/%m/%Y})."
         )
     return value
+
+
+def gather_range_problem(start: date | None, end: date | None) -> str:
+    """What is wrong with a period to search for documents, "" when nothing
+    (a blank end is left to the search's own defaults).
+
+    The documents' own rule, 2000 to today (check_document_date), and the
+    start before the end. A year typed as « 26 » is 0026 in a date box:
+    Metro was searched from 0026-09-01 in 8 028 windows of 91 days, in one
+    signed-in session, and every mailbox from its first mail."""
+    today = timezone.localdate()
+    given = [day for day in (start, end) if day is not None]
+    if any(not EARLIEST_DOCUMENT_DATE <= day <= today for day in given) or (len(given) == 2 and start > end):
+        return (
+            f"Période impossible : entre le {EARLIEST_DOCUMENT_DATE:%d/%m/%Y} et aujourd'hui ({today:%d/%m/%Y}), "
+            "et le début avant la fin."
+        )
+    return ""
+
+
+#: A line's rate, in percent: never above 100, as the VAT table's own field
+#: says (VatRowForm). %% - the validator's message is formatted with its limit.
+RATE_ERRORS = {"max_value": "Un taux ne dépasse pas 100 %%."}
+
+
+def unit_price_problem(total: Decimal, quantity: Decimal) -> str:
+    """What is wrong with the unit price a line would store, "" when nothing.
+
+    Both line pages store the amount divided by the count, and 1 500 € over
+    0,001 - or 1 250 000 € for a forgotten comma - is wider than
+    `unit_cost_ht` (10,4): the database takes it, then cannot read the line
+    back (importing._fitting). Said here, on the box that needs changing."""
+    unit = (total / quantity).quantize(UNIT)
+    if abs(unit) <= MAX_UNIT:
+        return ""
+    return f"Prix unitaire impossible ({group_thousands(unit)} € l'unité) : vérifiez la quantité et le montant."
 
 
 class ManualInvoiceForm(forms.ModelForm):
@@ -136,7 +173,13 @@ class ManualInvoiceLineForm(SpreadChargeRowMixin, BlankRowTolerantForm):
     # otherwise-empty row look filled in, or a blank trailing row (and any
     # row removed client-side) blocks the save. See BlankRowTolerantFormMixin.
     vat_rate = forms.DecimalField(
-        label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"), initial=Decimal("20")
+        label="TVA (%)",
+        max_digits=5,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        max_value=Decimal("100"),
+        initial=Decimal("20"),
+        error_messages=RATE_ERRORS,
     )
 
     # The stored line a row shows, when correcting an invoice: it keeps what
@@ -165,6 +208,10 @@ class ManualInvoiceLineForm(SpreadChargeRowMixin, BlankRowTolerantForm):
                 self.total_field,
                 "Un retour a une quantité et un montant négatifs, un achat les deux positifs.",
             )
+        if not self.errors and total is not None:
+            problem = unit_price_problem(total, cleaned["quantity"])
+            if problem:
+                self.add_error("quantity", problem)
         return cleaned
 
 
@@ -314,7 +361,14 @@ class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
         min_value=Decimal("0"),
         widget=forms.NumberInput(attrs={"step": "0.01", "placeholder": "remise"}),
     )
-    vat_rate = forms.DecimalField(label="TVA (%)", max_digits=5, decimal_places=2, min_value=Decimal("0"))
+    vat_rate = forms.DecimalField(
+        label="TVA (%)",
+        max_digits=5,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        max_value=Decimal("100"),
+        error_messages=RATE_ERRORS,
+    )
     # « Ce n'est pas un produit » - a delivery, printed once for the whole
     # order. The line stays exactly as the document prints it, in the total
     # and in every check; what it costs goes onto the goods it brought
@@ -445,7 +499,21 @@ class LineCorrectionForm(SpreadChargeRowMixin, BlankRowTolerantForm):
         discount = cleaned.get("discount_ttc") or Decimal("0")
         if discount and discount > abs(self._printed_ttc()):
             self.add_error("discount_ttc", "La remise dépasse le montant de la ligne.")
+        if not self.errors:
+            self._refuse_too_wide(field)
         return cleaned
+
+    def _refuse_too_wide(self, field: str) -> None:
+        """The figures `amounts` will store, against their columns: the unit
+        price (unit_price_problem) and, on a ticket, the printed amount - an
+        HT typed near the column's own limit no longer fits once its VAT is
+        added."""
+        amounts = self.amounts()
+        problem = unit_price_problem(amounts["total_ht"], self.cleaned_data["quantity"])
+        if problem:
+            self.add_error("quantity", problem)
+        elif amounts["printed_ttc"] is not None and abs(amounts["printed_ttc"]) > MAX_AMOUNT:
+            self.add_error(field, f"Montant TTC impossible ({group_thousands(amounts['printed_ttc'])} €).")
 
     def _rate(self) -> Decimal:
         return self.cleaned_data["vat_rate"] / Decimal("100")

@@ -19,6 +19,7 @@ hundred thousand pixels."""
 
 import os
 import shutil
+import tempfile
 from unittest import mock
 
 import pypdfium2 as pdfium
@@ -30,7 +31,7 @@ from PIL import Image
 
 from accounts import paths
 from common import MEGABYTE, UPLOAD_MAX_FILE_BYTES, file_too_big, selection_too_big, weight
-from invoices import ocr
+from invoices import ocr, pdfium_sandbox, pdfium_worker
 from invoices.forms import InvoiceUploadForm, ManualInvoiceForm, ReceiptBatchUploadForm
 from invoices.models import Invoice, ReceiptBatch, Supplier
 from invoices.receipt_batches import stage_batch
@@ -245,7 +246,10 @@ class PdfImportFormTests(TestCase):
 
 
 class PdfCostTests(SimpleTestCase):
-    """`ocr.page_images` decides what a PDF may cost before it renders it."""
+    """`ocr.page_images` decides what a PDF may cost before it renders it -
+    in the process PDFium runs in (invoices/pdfium_worker.py), given the
+    caps of the moment: `refused_before_drawing` asks that process for the
+    French sentence, and the worker itself, here, that nothing was drawn."""
 
     def setUp(self):
         self.folder = os.path.join(paths.media_root(), "limites-ocr")
@@ -269,13 +273,27 @@ class PdfCostTests(SimpleTestCase):
         Image.new("RGB", pixels, "white").save(path, "PDF")
         return path
 
+    def refused_before_drawing(self, path) -> str:
+        """What page_images says of `path`; and that the worker refuses it
+        with the same words before it renders a page or decodes an image."""
+        with self.assertRaises(ocr.DocumentTooBig) as refused:
+            list(ocr.page_images(path))
+        limits = {name: getattr(ocr, name) for name in pdfium_worker.LIMITS}
+        with (
+            mock.patch.object(pdfium.PdfPage, "render") as render,
+            mock.patch.object(pdfium.PdfImage, "get_bitmap") as bitmap,
+        ):
+            said = pdfium_worker.render(path, self.folder, limits)
+        render.assert_not_called()
+        bitmap.assert_not_called()
+        self.assertEqual(said, {"refused": str(refused.exception)})
+        return str(refused.exception)
+
     def test_more_pages_than_the_cap_is_refused_before_any_render(self):
         path = self.blank_pdf("long.pdf", 3)
-        with mock.patch.object(ocr, "MAX_PAGES", 2), mock.patch.object(pdfium.PdfPage, "render") as render:
-            with self.assertRaises(ocr.DocumentTooBig) as refused:
-                list(ocr.page_images(path))
-        render.assert_not_called()
-        self.assertEqual(str(refused.exception), "Document trop long pour être lu : 3 pages, 2 au plus.")
+        with mock.patch.object(ocr, "MAX_PAGES", 2):
+            said = self.refused_before_drawing(path)
+        self.assertEqual(said, "Document trop long pour être lu : 3 pages, 2 au plus.")
 
     def test_thirty_pages_is_the_cap(self):
         self.assertEqual(ocr.MAX_PAGES, 30)
@@ -297,14 +315,9 @@ class PdfCostTests(SimpleTestCase):
 
     def test_a_page_too_big_even_at_the_lowest_scale_is_refused_before_any_render(self):
         path = self.blank_pdf("immense.pdf", 2)
-        with (
-            mock.patch.object(ocr, "RENDER_MAX_PIXELS", 100_000),
-            mock.patch.object(pdfium.PdfPage, "render") as render,
-        ):
-            with self.assertRaises(ocr.DocumentTooBig) as refused:
-                list(ocr.page_images(path))
-        render.assert_not_called()
-        self.assertIn("Page trop grande pour être lue (page 1 : 10,6 × 10,6 cm)", str(refused.exception))
+        with mock.patch.object(ocr, "RENDER_MAX_PIXELS", 100_000):
+            said = self.refused_before_drawing(path)
+        self.assertIn("Page trop grande pour être lue (page 1 : 10,6 × 10,6 cm)", said)
 
     def test_a_declared_page_of_the_audit_s_size_is_refused_without_a_render(self):
         """The audit's bomb: a page of 14 400 pt (5 m) is 60 000 px square at
@@ -312,23 +325,14 @@ class PdfCostTests(SimpleTestCase):
         bytes and refused - nothing is rendered."""
         path = self.blank_pdf("bombe.pdf", 1, size=(14400, 14400))
         self.assertLess(os.path.getsize(path), 2000)
-        with mock.patch.object(pdfium.PdfPage, "render") as render:
-            with self.assertRaises(ocr.DocumentTooBig):
-                list(ocr.page_images(path))
-        render.assert_not_called()
+        self.assertIn("Page trop grande pour être lue", self.refused_before_drawing(path))
 
     def test_a_scan_s_own_image_is_checked_before_it_is_decoded(self):
         path = self.photo_pdf("scan.pdf")
         (image,) = list(ocr.page_images(path))
         self.assertEqual(image.size, (40, 20))
-        with (
-            mock.patch.object(ocr, "IMAGE_MAX_PIXELS", 100),
-            mock.patch.object(pdfium.PdfImage, "get_bitmap") as bitmap,
-        ):
-            with self.assertRaises(ocr.DocumentTooBig) as refused:
-                list(ocr.page_images(path))
-        bitmap.assert_not_called()
-        self.assertIn("Image trop grande pour être lue", str(refused.exception))
+        with mock.patch.object(ocr, "IMAGE_MAX_PIXELS", 100):
+            self.assertIn("Image trop grande pour être lue", self.refused_before_drawing(path))
 
     def test_a_photo_file_too_many_pixels_is_refused_from_its_header(self):
         path = os.path.join(self.folder, "photo.png")
@@ -341,53 +345,42 @@ class PdfCostTests(SimpleTestCase):
         """French, for the person: a batch shows it on that file's line."""
         self.assertTrue(issubclass(ocr.DocumentTooBig, ValueError))
 
-    def test_every_call_into_pdfium_holds_the_process_s_lock_and_no_page_keeps_it(self):
-        """PDFium is not thread-safe, and a folder's thread read its files
-        with no lock (receipt_batches._read_file) beside a request's OCR, a
-        gather's, a shop chosen - in the one process serving every bar. Each
-        call into it now takes `ocr.PDFIUM_LOCK`; a page handed to the
+    def test_pdfium_s_process_runs_under_the_server_s_lock_and_no_page_keeps_it(self):
+        """A folder's thread reads its files with no lock
+        (receipt_batches._read_file) beside a request's OCR, a gather's, a
+        shop chosen - in the one process serving every bar: PDFium's process
+        runs under `ocr.PDFIUM_LOCK`, one at a time; a page handed to the
         caller - who OCRs it for seconds - holds nothing."""
-        calls = []
+        runs = []
 
-        def held(name, original):
-            def wrapped(*args, **kwargs):
-                calls.append((name, ocr.PDFIUM_LOCK._is_owned()))
-                return original(*args, **kwargs)
+        def held(*args, **kwargs):
+            runs.append(ocr.PDFIUM_LOCK._is_owned())
+            return run(*args, **kwargs)
 
-            return wrapped
-
-        patches = [
-            mock.patch.object(pdfium.PdfPage, "render", held("render", pdfium.PdfPage.render)),
-            mock.patch.object(pdfium.PdfPage, "get_size", held("get_size", pdfium.PdfPage.get_size)),
-            mock.patch.object(pdfium.PdfImage, "get_bitmap", held("get_bitmap", pdfium.PdfImage.get_bitmap)),
-            mock.patch.object(pdfium.PdfDocument, "close", held("close", pdfium.PdfDocument.close)),
-        ]
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
+        run = pdfium_sandbox.run
         for path in (self.blank_pdf("deux.pdf", 2, size=(72, 36)), self.photo_pdf("scan-verrou.pdf")):
-            with self.subTest(path=os.path.basename(path)):
-                calls.clear()
+            with self.subTest(path=os.path.basename(path)), mock.patch.object(pdfium_sandbox, "run", held):
+                runs.clear()
                 pages = 0
                 for image in ocr.page_images(path):
                     pages += 1
                     self.assertFalse(ocr.PDFIUM_LOCK._is_owned(), "a page handed over still holds the lock")
                     self.assertEqual(image.mode, "RGB")
                 self.assertGreaterEqual(pages, 1)
-                self.assertIn("close", [name for name, _ in calls])
-                self.assertEqual([name for name, owned in calls if not owned], [])
+                self.assertEqual(runs, [True])
         self.assertFalse(ocr.PDFIUM_LOCK._is_owned())
 
-    def test_a_document_left_half_read_is_closed_under_the_lock(self):
+    def test_a_document_left_half_read_leaves_nothing_behind(self):
         path = self.blank_pdf("abandon.pdf", 2, size=(72, 36))
-        with mock.patch.object(
-            pdfium.PdfDocument,
-            "close",
-            autospec=True,
-            side_effect=lambda document: closed.append(ocr.PDFIUM_LOCK._is_owned()),
-        ):
-            closed = []
+        made, mkdtemp = [], tempfile.mkdtemp
+
+        def recorded(*args, **kwargs):
+            made.append(mkdtemp(*args, **kwargs))
+            return made[-1]
+
+        with mock.patch("tempfile.mkdtemp", recorded):
             pages = ocr.page_images(path)
             next(pages)
+            self.assertTrue(os.path.isfile(os.path.join(made[0], "2")))
             pages.close()
-        self.assertEqual(closed, [True])
+        self.assertFalse(os.path.exists(made[0]))

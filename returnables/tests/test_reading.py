@@ -9,6 +9,7 @@ invoices/tests/pdf_files.write_pdf into a temporary folder.
 
 import io
 import os
+import struct
 import tempfile
 import zlib
 from datetime import date
@@ -695,6 +696,9 @@ class PdfTextTests(SimpleTestCase):
                 extracted.append(self.text)
                 return self.text
 
+            def close(self):
+                extracted.append("closed")
+
         class Document:
             def __init__(self, pages):
                 self.pages = pages
@@ -719,7 +723,8 @@ class PdfTextTests(SimpleTestCase):
         with mock.patch.object(reading, "MAX_TEXT_CHARS", 10), document, counted:
             with self.assertRaises(SlipError):
                 pdf_text(b"%PDF-")
-        self.assertEqual(extracted, ["x" * 20])
+        # Each page released once read: up to MAX_PAGE_GLYPHS characters each.
+        self.assertEqual(extracted, ["x" * 20, "closed"])
         # No page at all is a broken file, not a scan - pdfplumber not even opened.
         document, counted = opened([])
         with document as opening, counted:
@@ -763,6 +768,11 @@ def pdf_with_streams(streams) -> bytes:
             b"<< /Filter [" + names + b"] /Length " + str(len(raw)).encode() + b" >>\nstream\n" + raw + b"\nendstream"
         )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    return pdf_of_objects(objects)
+
+
+def pdf_of_objects(objects) -> bytes:
+    """`objects` (bodies, numbered from 1, the catalog first) as a PDF."""
     output = bytearray(b"%PDF-1.4\n")
     offsets = []
     for number, body in enumerate(objects, start=1):
@@ -774,6 +784,46 @@ def pdf_with_streams(streams) -> bytes:
         output += f"{offset:010d} 00000 n \n".encode()
     output += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
     return bytes(output)
+
+
+#: Each run of it draws DRAWN 20 points lower than the last (a page's
+#: graphics state carries from one content stream to the next).
+DRAWN_LOWER_EACH_TIME = b"1 0 0 1 0 -20 cm " + DRAWN
+
+
+def pdf_listing_one_stream(times: int, size: int) -> bytes:
+    """A one-page PDF whose /Contents lists one stream - DRAWN_LOWER_EACH_TIME
+    padded to `size` bytes - `times` times."""
+    # `times` copies, then every reference turned to the first: the same
+    # length, so the cross-reference offsets still hold.
+    content = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN_LOWER_EACH_TIME.ljust(size)))] * times)
+    copies = " ".join(f"{4 + index} 0 R" for index in range(times))
+    listed = " ".join(f"{4:<{len(str(4 + index))}} 0 R" for index in range(times))
+    return content.replace(f"/Contents [{copies}]".encode(), f"/Contents [{listed}]".encode())
+
+
+def pdf_drawing_a_form(times: int, size: int) -> bytes:
+    """A one-page PDF drawing one form XObject - DRAWN padded to `size`
+    bytes - `times` times, each 20 points lower."""
+    form = zlib.compress(DRAWN.ljust(size))
+    content = b" ".join([b"/Fm1 Do 1 0 0 1 0 -20 cm"] * times)
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 6 0 R >> /XObject << /Fm1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 595 842] /Filter /FlateDecode /Length "
+            + str(len(form)).encode()
+            + b" >>\nstream\n"
+            + form
+            + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
 
 
 class InflateBoundTests(SimpleTestCase):
@@ -878,3 +928,505 @@ class InflateBoundTests(SimpleTestCase):
         with mock.patch.object(reading, "MAX_INFLATE_STAGE", 2_559):
             with self.assertRaises(reading.InflateLimit):
                 pdftypes.rldecode(runs)
+
+
+def drawing_glyphs(count: int) -> bytes:
+    """A one-page PDF of a few hundred bytes whose one Tj draws `count`
+    glyphs: it compresses about 1000:1, so no byte or inflate cap sees it."""
+    return pdf_with_streams(
+        [(["FlateDecode"], zlib.compress(b"BT /F1 1 Tf 40 700 Td (" + b"A" * count + b") Tj ET\n"))]
+    )
+
+
+def drawing_images(count: int, inline: bool = False) -> bytes:
+    """A one-page PDF of a few hundred bytes drawing a 1x1 image `count`
+    times: one image XObject by Do, or as many inline images."""
+    drawn = b"BI /W 1 /H 1 /BPC 8 /CS /G ID x EI\n" if inline else b"/Im1 Do\n"
+    content = zlib.compress(DRAWN + drawn * count)
+    image = b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 6 0 R >> /XObject << /Im1 5 0 R >> >> >>"
+            ),
+            b"<< /Filter /FlateDecode /Length "
+            + str(len(content)).encode()
+            + b" >>\nstream\n"
+            + content
+            + b"\nendstream",
+            image + b" /Length 1 >>\nstream\n\x00\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
+
+
+class GlyphBoundTests(SimpleTestCase):
+    """pdfminer makes a character object for every glyph a page draws,
+    about 2 KB each, held until the page is done: an 813-byte slip drawing
+    200 000 glyphs took 500 MB and 7 s before MAX_TEXT_CHARS could refuse
+    it, 600 000 glyphs 1,4 GB - in the one process serving every bar.
+    Every pdfminer reader stops at MAX_PAGE_GLYPHS a page, before the
+    character is made. MACHINE SAFETY: the cap is patched DOWN; nothing
+    here draws more than a few thousand glyphs."""
+
+    def test_a_page_drawing_past_the_cap_is_too_long_before_its_characters_are_made(self):
+        from pdfminer import converter
+
+        bomb = drawing_glyphs(5_000)
+        self.assertLess(len(bomb), 1_000)
+        made = []
+
+        class Counted(converter.LTChar):
+            def __init__(self, *args, **kwargs):
+                made.append(1)
+                super().__init__(*args, **kwargs)
+
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), mock.patch.object(converter, "LTChar", Counted):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        self.assertEqual(len(made), 1_000)
+        # Within the cap the same file reads: a real slip is never refused.
+        self.assertEqual(pdf_text(bomb), "A" * 5_000)
+
+    def test_the_cap_holds_for_every_pdfminer_reader_not_only_the_slips(self):
+        """Achats' text layer and the suppliers' readers open PDFs through
+        pdfplumber too."""
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            with self.assertRaises(Exception) as caught, pdfplumber.open(io.BytesIO(drawing_glyphs(5_000))) as pdf:
+                pdf.pages[0].extract_words()
+        # pdfplumber re-raises it as its own PdfminerException.
+        self.assertTrue(reading.glyphs_refused(caught.exception), repr(caught.exception))
+        self.assertFalse(reading.glyphs_refused(ValueError("autre chose")))
+
+    def test_path_segments_count_as_glyphs(self):
+        """pdfminer and pdfplumber keep every point of a path painted:
+        2 MB of « 0 0 m 1 1 l S » took 520 MB and 22 s. Many strokes, or one
+        path of many segments, alike."""
+        strokes = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m 1 1 l S\n" * 600))])
+        one_path = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m " + b"1 1 l " * 1_200 + b"S\n"))])
+        for drawn in (strokes, one_path):
+            with self.subTest(size=len(drawn)):
+                with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(drawn)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                self.assertEqual(pdf_text(drawn), "REPRISE VIDE")
+
+    def test_a_path_s_segments_count_once_however_many_subpaths_it_has(self):
+        """pdfminer paints a path of several « m » one subpath at a time,
+        through the same paint_path: 800 segments are 800, not 1 600."""
+        subpaths = pdf_with_streams([(["FlateDecode"], zlib.compress(DRAWN + b"0 0 m 1 1 l " * 400 + b"S\n"))])
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            self.assertEqual(pdf_text(subpaths), "REPRISE VIDE")
+
+    def test_images_drawn_count_as_glyphs(self):
+        """pdfminer and pdfplumber keep a figure and an image for every
+        image a page draws, about 2 KB: a 4 KB bon drawing one 1x1 image
+        400 000 times took 866 MB and 17 s, and was read. Drawn by Do or
+        inline, alike."""
+        for drawn in (drawing_images(1_500), drawing_images(1_500, inline=True)):
+            with self.subTest(size=len(drawn)):
+                with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(drawn)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                self.assertEqual(pdf_text(drawn), "REPRISE VIDE")
+
+    def test_the_cap_is_a_page_s_not_the_document_s(self):
+        from invoices.tests.test_pdf_page_cap import pdf_of_pages
+
+        with mock.patch.object(reading, "MAX_PAGE_GLYPHS", 1_000):
+            self.assertEqual(pdf_text(pdf_of_pages(2, line="A" * 800)), "\n".join(["A" * 800] * 2))
+
+
+class InterpretedContentBoundTests(SimpleTestCase):
+    """pdfminer decodes a stream once and charges it once, but interprets it
+    each time a page runs it - at about 3 s a MB: a 1,4 KB slip listing a
+    0,5 MB stream twelve times took 20 s, past a 2 MB inflate total. What
+    the interpreter runs shares the reading's MAX_INFLATE_TOTAL too, counted
+    on every run. MACHINE SAFETY: the totals are patched down to a few KB."""
+
+    def test_a_stream_listed_again_is_counted_again(self):
+        listed = pdf_listing_one_stream(3, 3_000)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(listed)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 9_100):
+            self.assertEqual(pdf_text(listed), "\n".join(["REPRISE VIDE"] * 3))
+
+    def test_a_form_drawn_again_is_counted_again(self):
+        drawn = pdf_drawing_a_form(3, 3_000)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 7_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(drawn)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_INFLATE_TOTAL", 9_100):
+            self.assertEqual(pdf_text(drawn), "\n".join(["REPRISE VIDE"] * 3))
+
+    def test_a_bon_s_total_is_what_a_bon_needs(self):
+        """The UBA invoices' streams inflate 260 KB at most, fonts included;
+        8 MB of path operators held a thread a minute and a half."""
+        self.assertEqual(reading.MAX_INFLATE_TOTAL, 4 * 1024 * 1024)
+        self.assertLess(reading.MAX_INFLATE_TOTAL, reading.MAX_INFLATE_STAGE)
+
+
+def mapping_codes(*ranges: bytes, fonts: int = 1) -> bytes:
+    """A one-page PDF printing DRAWN with `fonts` fonts, each with a ToUnicode
+    map holding `ranges` (« 1 beginbfrange <00000000> <001FFFFF> <0041>
+    endbfrange » makes pdfminer an entry for each of two million codes)."""
+    cmap = b"/CIDInit /ProcSet findresource begin begincmap\n" + b"\n".join(ranges) + b"\nendcmap end\n"
+    names = b" ".join(f"/F{index + 1} {5 + 2 * index} 0 R".encode() for index in range(fonts))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << "
+        + names
+        + b" >> >> >>",
+        b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+    ]
+    for index in range(fonts):
+        objects += [
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode "
+            + str(6 + 2 * index).encode()
+            + b" 0 R >>",
+            b"<< /Length " + str(len(cmap)).encode() + b" >>\nstream\n" + cmap + b"\nendstream",
+        ]
+    return pdf_of_objects(objects)
+
+
+def format_2_reading_again(ranges: int, codes: int) -> bytes:
+    """A TrueType cmap subtable of format 2 whose `ranges` sub-headers all
+    point at the same `codes` glyph numbers: pdfminer reads them again for
+    each - `ranges` x `codes` codes from a few hundred bytes."""
+    import struct
+
+    keys = [0] * 256
+    keys[1] = 8 * (ranges - 1)
+    headers_at = 6 + 512
+    glyphs_at = headers_at + 8 * ranges
+    headers = b"".join(
+        struct.pack(">HHhH", 0, codes, 0, glyphs_at - (headers_at + 8 * index + 6)) for index in range(ranges)
+    )
+    return (
+        struct.pack(">HHH", 2, 0, 0) + struct.pack(">256H", *keys) + headers + struct.pack(f">{codes}H", *[1] * codes)
+    )
+
+
+def cid_widths(key: bytes, widths: bytes) -> bytes:
+    """A one-page PDF whose one font is a CID font declaring `widths` as its
+    /W (or /W2, written vertically): « 0 2000000 500 » is an entry for each
+    of two million codes."""
+    writing = b"V" if key == b"W2" else b"H"
+    content = b"BT /F1 10 Tf 40 700 Td <0001> Tj ET\n"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Essai /Encoding /Identity-"
+            + writing
+            + b" /DescendantFonts [6 0 R] >>",
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Essai "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            b"/FontDescriptor << /FontBBox [0 0 1000 1000] >> /" + key + b" " + widths + b" >>",
+        ]
+    )
+
+
+def bfrange(first: int, last: int) -> bytes:
+    return f"1 beginbfrange <{first:08X}> <{last:08X}> <0000> endbfrange".encode()
+
+
+def truetype_mapping(first: int, last: int, subtable: bytes = b"") -> bytes:
+    """A one-page PDF whose one font is an embedded TrueType font with no
+    ToUnicode: pdfminer reads its cmap instead - one format 12 group,
+    codes `first` to `last`, each made an entry (or `subtable`)."""
+    import struct
+
+    group = subtable or struct.pack(">HHIIIIII", 12, 0, 28, 0, 1, first, last, 1)
+    cmap = struct.pack(">HHHHI", 0, 1, 3, 10, 12) + group
+    font = struct.pack(">IHHHH", 0x00010000, 1, 16, 0, 0) + struct.pack(">4sIII", b"cmap", 0, 28, len(cmap)) + cmap
+    content = b"BT /F1 10 Tf 40 700 Td <0001> Tj ET\n"
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Essai /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+            (
+                b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Essai "
+                b"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 7 0 R >>"
+            ),
+            (
+                b"<< /Type /FontDescriptor /FontName /Essai /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 "
+                b"/Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>"
+            ),
+            b"<< /Length " + str(len(font)).encode() + b" >>\nstream\n" + font + b"\nendstream",
+        ]
+    )
+
+
+class CMapBoundTests(SimpleTestCase):
+    """pdfminer expands a font's ToUnicode ranges code by code, an entry of
+    about 120 bytes each: « <00000000> <001FFFFF> <0041> » in an 872-byte
+    file took 360 MB in Achats' text layer, and <FFFFFFFF> means four
+    billion. A TrueType font's cmap, read when a font has no ToUnicode, the
+    same. Every pdfminer reader now stops a reading's fonts at
+    MAX_CMAP_CODES codes, before the next is made. MACHINE SAFETY: the cap
+    is patched DOWN; nothing here maps more than a few thousand codes."""
+
+    def mapped(self, content: bytes, reader=pdf_text) -> list:
+        """The codes mapped while `reader` reads `content`, and what it gave."""
+        from pdfminer.cmapdb import FileUnicodeMap
+
+        made, add = [], FileUnicodeMap.add_cid2unichr
+
+        def counted(cmap, cid, code):
+            add(cmap, cid, code)
+            made.append(cid)
+
+        counted.code_bound = True
+        with mock.patch.object(FileUnicodeMap, "add_cid2unichr", counted):
+            try:
+                return [len(made), reader(content)]
+            except Exception as error:  # noqa: BLE001 - what the reader raised is the result
+                return [len(made), error]
+
+    def test_a_range_past_the_cap_is_too_long_before_its_codes_are_made(self):
+        bomb = mapping_codes(bfrange(0, 0x1FFFFF))
+        self.assertLess(len(bomb), 1_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            made, said = self.mapped(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertEqual(made, 1_000)
+        self.assertEqual(reading.MAX_CMAP_CODES, 200_000)
+
+    def test_every_form_of_range_counts(self):
+        """begincidrange too, and a range's array form."""
+        cidrange = b"1 begincidrange <0000> <0FFF> 1 endcidrange"
+        array = b"1 beginbfrange <0000> <05DB> [" + b"<0041> " * 1_500 + b"] endbfrange"
+        for content in (mapping_codes(cidrange), mapping_codes(array)):
+            with self.subTest(size=len(content)):
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(content)
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                # Within it, read - as the map says: its codes are not text.
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 5_000):
+                    self.assertEqual(len(pdf_text(content)), len("REPRISE VIDE"))
+
+    def test_within_the_cap_the_document_reads(self):
+        self.assertEqual(pdf_text(mapping_codes(bfrange(0, 900))), "REPRISE VIDE")
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(mapping_codes(bfrange(0, 900))), "REPRISE VIDE")
+
+    def test_the_cap_is_the_document_s_every_font_together(self):
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(mapping_codes(bfrange(0, 599))), "REPRISE VIDE")
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(mapping_codes(bfrange(0, 599), fonts=2))
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+
+    def test_a_truetype_font_s_own_map_counts_too(self):
+        bomb = truetype_mapping(0, 5_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            with self.assertRaises(SlipError) as caught:
+                pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 12_000):
+            # Counted as read, and again as mapped.
+            self.assertTrue(pdf_text(bomb))
+
+    def test_a_truetype_map_read_again_counts_each_time(self):
+        """Format 2 (and 4) may point every range at the same bytes."""
+        bomb = truetype_mapping(0, 0, format_2_reading_again(20, 100))
+        self.assertLess(len(bomb), 3_000)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+            pdf_text(bomb)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 3_000):
+            self.assertTrue(pdf_text(bomb))
+
+    def test_a_cid_font_s_widths_count_before_they_are_made(self):
+        """/W « 0 2000000 500 », in 809 bytes, took 160 MB; /W2 the same."""
+        for key, widths in (
+            (b"W", b"[0 5000 500]"),
+            (b"W", b"[0 [" + b"500 " * 900 + b"] 2000 2500 500]"),
+            (b"W2", b"[0 5000 1000 500 880]"),
+        ):
+            with self.subTest(key=key, size=len(widths)):
+                with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000), self.assertRaises(SlipError) as caught:
+                    pdf_text(cid_widths(key, widths))
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        self.assertEqual(pdf_text(cid_widths(b"W", b"[0 900 500 1000 [500 600]]")), "(cid:1)")
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            self.assertEqual(pdf_text(cid_widths(b"W", b"[0 900 500 1000 [500 600]]")), "(cid:1)")
+
+    def test_a_map_read_outside_any_reading_is_bounded_alone(self):
+        """pdfplumber opened with no reading under way (no inflate_budget):
+        each map is held to the cap by itself."""
+        with mock.patch.object(reading, "MAX_CMAP_CODES", 1_000):
+            with (
+                self.assertRaises(Exception) as caught,
+                pdfplumber.open(io.BytesIO(mapping_codes(bfrange(0, 5_000)))) as pdf,
+            ):
+                pdf.pages[0].extract_words()
+            self.assertTrue(reading.codes_refused(caught.exception), repr(caught.exception))
+            with pdfplumber.open(io.BytesIO(mapping_codes(bfrange(0, 599), fonts=2))) as pdf:
+                self.assertEqual(pdf.pages[0].extract_text(), "REPRISE VIDE")
+
+
+def ink_in_object_stream(numbers: int, page_inside: bool = True) -> bytes:
+    """A one-page PDF printing DRAWN whose page sits in an object stream beside
+    an ink annotation of `numbers` coordinates - the security review's file:
+    whatever wants the page (counting the pages) has pdfminer parse the
+    whole stream, the annotation's every number built. Not `page_inside`:
+    the annotation alone, which only weighing the page's drawings wants."""
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>"
+    )
+    ink = b"<< /Type /Annot /Subtype /Ink /Rect [0 0 595 842] /InkList [[" + b"10 " * numbers + b"]] >>"
+    held = [(3, page), (6, ink)] if page_inside else [(6, ink)]
+    pairs, at = [], 0
+    for number, body in held:
+        pairs.append(f"{number} {at}")
+        at += len(body) + 1
+    first = (" ".join(pairs) + " ").encode()
+    packed = zlib.compress(first + b" ".join(body for _number, body in held))
+    loose = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        4: b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+        5: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        7: (
+            f"<< /Type /ObjStm /N {len(held)} /First {len(first)} /Filter /FlateDecode /Length {len(packed)} >>\n"
+            "stream\n".encode()
+            + packed
+            + b"\nendstream"
+        ),
+    }
+    if not page_inside:
+        loose[3] = page
+    output, offsets = bytearray(b"%PDF-1.5\n"), {}
+    for number, body in sorted(loose.items()):
+        offsets[number] = len(output)
+        output += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(output)
+    rows = {0: (0, 0, 65535), 8: (1, xref, 0)}
+    rows.update({number: (2, 7, index) for index, (number, _body) in enumerate(held)})
+    table = b"".join(struct.pack(">BIH", *rows.get(number, (1, offsets.get(number), 0))) for number in range(9))
+    output += f"8 0 obj\n<< /Type /XRef /Size 9 /W [1 4 2] /Root 1 0 R /Length {len(table)} >>\nstream\n".encode()
+    output += table + f"\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(output)
+
+
+def page_holding(junk: bytes) -> bytes:
+    """A one-page PDF printing DRAWN whose page dictionary holds `junk`."""
+    return pdf_of_objects(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 5 0 R >> >> " + junk + b" >>",
+            b"<< /Length " + str(len(DRAWN)).encode() + b" >>\nstream\n" + DRAWN + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]
+    )
+
+
+class ParseBoundTests(SimpleTestCase):
+    """pdfminer builds every object it parses whole, and parses a whole
+    object stream as soon as one of its objects is wanted: a 55 KB file
+    whose object stream held an ink annotation of 4 million points beside
+    its page took 24 s and 1,1 GB to count its pages. Every pdfminer reader
+    now stops a reading at MAX_PARSED_TOKENS tokens, a token at
+    MAX_TOKEN_BYTES, an object stream at MAX_OBJECT_STREAM_BYTES, before
+    more is built. MACHINE SAFETY: the caps are patched DOWN; nothing here
+    parses more than a few thousand tokens."""
+
+    def parsed(self, content: bytes) -> list:
+        """The tokens pdfminer's object parser read while pdf_text read
+        `content`, and what it gave."""
+        from pdfminer.pdfparser import PDFParser
+
+        made, nexttoken = [], PDFParser.nexttoken
+
+        def counted(parser):
+            made.append(1)
+            return nexttoken(parser)
+
+        counted.parse_bound = True
+        with mock.patch.object(PDFParser, "nexttoken", counted):
+            try:
+                return [len(made), pdf_text(content)]
+            except Exception as error:  # noqa: BLE001 - what the reader raised is the result
+                return [len(made), error]
+
+    def test_an_object_stream_past_the_tokens_is_too_long_before_it_is_built(self):
+        bomb = ink_in_object_stream(5_000)
+        self.assertLess(len(bomb), 1_000)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000):
+            made, said = self.parsed(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertLessEqual(made, 1_001)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 20_000):
+            self.assertEqual(pdf_text(bomb), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_PARSED_TOKENS, 100_000)
+
+    def test_comments_count_as_tokens(self):
+        """One nexttoken reads a run of them whole: counted one by one."""
+        content = page_holding(b"%\n" * 2_000)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000), self.assertRaises(SlipError) as caught:
+            pdf_text(content)
+        self.assertEqual(caught.exception.message, reading.TOO_LONG)
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 5_000):
+            self.assertEqual(pdf_text(content), "REPRISE VIDE")
+
+    def test_a_token_past_its_bytes_is_too_long(self):
+        """pdfminer copies a long token again for every 4 KB it reads of it:
+        8 MB of string took 1,6 s, of hexadecimal 3,7 s."""
+        for junk in (b"/Junk (" + b"a" * 20_000 + b")", b"/Junk <" + b"41" * 10_000 + b">", b"%" * 20_000 + b"\n"):
+            with self.subTest(junk=junk[:7]):
+                with mock.patch.object(reading, "MAX_TOKEN_BYTES", 8_192), self.assertRaises(SlipError) as caught:
+                    pdf_text(page_holding(junk))
+                self.assertEqual(caught.exception.message, reading.TOO_LONG)
+                with mock.patch.object(reading, "MAX_TOKEN_BYTES", 64 * 1024):
+                    self.assertEqual(pdf_text(page_holding(junk)), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_TOKEN_BYTES, 1024 * 1024)
+
+    def test_an_object_stream_past_its_bytes_is_too_long_before_it_is_parsed(self):
+        bomb = ink_in_object_stream(500)
+        with mock.patch.object(reading, "MAX_OBJECT_STREAM_BYTES", 1_000):
+            made, said = self.parsed(bomb)
+        self.assertIsInstance(said, SlipError)
+        self.assertEqual(said.message, reading.TOO_LONG)
+        self.assertLess(made, 200)
+        with mock.patch.object(reading, "MAX_OBJECT_STREAM_BYTES", 4_000):
+            self.assertEqual(pdf_text(bomb), "REPRISE VIDE")
+        self.assertEqual(reading.MAX_OBJECT_STREAM_BYTES, 1024 * 1024)
+
+    def test_a_document_read_outside_any_reading_is_bounded_alone(self):
+        """pdfminer opened with no reading under way (no inflate_budget):
+        the document is held to the cap by itself."""
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdfpage import PDFPage
+        from pdfminer.pdfparser import PDFParser
+
+        with mock.patch.object(reading, "MAX_PARSED_TOKENS", 1_000):
+            with self.assertRaises(reading.ParseLimit):
+                list(PDFPage.create_pages(PDFDocument(PDFParser(io.BytesIO(ink_in_object_stream(5_000))))))
+            document = PDFDocument(PDFParser(io.BytesIO(ink_in_object_stream(500))))
+            self.assertEqual(len(list(PDFPage.create_pages(document))), 1)

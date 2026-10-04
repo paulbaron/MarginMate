@@ -75,6 +75,7 @@ from .models import (
 )
 from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
 from .services import (
+    conversion_refusal,
     link_product_to_stock_type,
     merge_stock_types,
     product_base_amount,
@@ -414,7 +415,9 @@ def catalogue_context(request) -> dict:
         # handing it straight over would silently drop that day's sales. So
         # the day before goes in its place.
         sold = quantities_sold(
-            window.start - timedelta(days=1) if window.start else None,
+            # The calendar's first day has no day before it: from the
+            # beginning is the same sales.
+            window.start - timedelta(days=1) if window.start and window.start > date.min else None,
             window.end,
             unit_costs=unit_costs,
             available=available,
@@ -1106,9 +1109,18 @@ class StockTypeUpdateView(CategoryAutocompleteMixin, UpdateView):
         # Without this, changing "Prosecco" from Unité to Litre would save
         # the new unit but leave every purchase still counted as bottles.
         old_unit = StockType.objects.get(pk=self.object.pk).unit
+        products = list(self.object.products.all()) if self.object.unit != old_unit else []
+        # Asked before anything is saved: from Unité to Litre a line's measured
+        # volume becomes what its cost is divided by, and a tiny one makes a
+        # unit cost no stock movement holds.
+        refused = f"Unité « {self.object.get_unit_display()} » refusée"
+        for product in products:
+            refusal = conversion_refusal(product, self.object.unit, product.stock_equivalent, refused=refused)
+            if refusal:
+                form.add_error("unit", refusal)
+                return self.form_invalid(form)
         response = super().form_valid(form)
         if self.object.unit != old_unit:
-            products = list(self.object.products.all())
             for product in products:
                 update_product_conversion(product, unit=self.object.unit, stock_equivalent=product.stock_equivalent)
             if products:
@@ -1155,6 +1167,11 @@ def merge_stock_type(request, pk):
     target_id = request.POST.get("target_id", "")
     # A posted id that is not one is not found - not a server error.
     target = get_object_or_404(StockType, pk=target_id if is_id(target_id) else None)
+    if target.pk == source.pk:
+        # Never offered by the page; posted by hand, it deleted the item with
+        # its losses and counts - what delete_stock_type refuses.
+        messages.error(request, "Fusion impossible : choisissez un autre article que celui-ci.")
+        return redirect("inventory:stock_type_update", pk=source.pk)
     if source.unit != target.unit:
         messages.error(
             request,
@@ -1373,24 +1390,32 @@ def edit_product_conversion(request, product_id):
     product = get_object_or_404(Product, pk=product_id)
     stock_equivalent = _parse_positive_decimal(request.POST.get("stock_equivalent", ""), default=None)
     if stock_equivalent is None:
-        messages.error(request, "Facteur invalide.")
+        messages.error(request, "Facteur invalide : un nombre positif d'au plus 4 décimales est attendu.")
         return redirect("inventory:stock_list")
     if product.stock_type is None:
         messages.error(request, f"« {product.raw_name} » n'est rangé dans aucun article.")
+        return redirect("inventory:stock_list")
+    refusal = conversion_refusal(product, product.stock_type.unit, stock_equivalent)
+    if refusal:
+        messages.error(request, refusal)
         return redirect("inventory:stock_list")
     # product.unit always mirrors its stock type's unit now (see
     # assign_product) - there's nothing left for a human to choose here
     # beyond the conversion factor itself.
     update_product_conversion(product, unit=product.stock_type.unit, stock_equivalent=stock_equivalent)
-    messages.success(request, f'"{product.raw_name}" mis à jour (facteur {stock_equivalent}, {product.stock_type}).')
+    # 0.7, 24 - not the 0.7000, 24.0000 read_amount quantizes to.
+    factor = format(stock_equivalent.normalize(), "f")
+    messages.success(request, f'"{product.raw_name}" mis à jour (facteur {factor}, {product.stock_type}).')
     return redirect("inventory:stock_list")
 
 
 def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
     """The article a suggestion names: the existing one it matched, or the
-    new one it describes. One that matched an article since deleted (an
-    undo, a merge) names NOTHING - made again by name it would resurrect
-    what somebody removed, silently, under « Approuver »."""
+    new one it describes - unsaved, made by the caller once the suggestion
+    is taken (a refused one left an empty article on the Stock page). One
+    that matched an article since deleted (an undo, a merge) names NOTHING -
+    made again by name it would resurrect what somebody removed, silently,
+    under « Approuver »."""
     matched_id = suggestion.get("matched_stock_type_id")
     if matched_id:
         stock_type = StockType.objects.filter(pk=matched_id).first()
@@ -1403,11 +1428,7 @@ def _resolve_suggestion_stock_type(suggestion: dict) -> StockType | None:
         return None
     unit = suggestion.get("new_stock_type_unit") or UnitChoices.UNIT
     category = (suggestion.get("new_stock_type_category") or "").strip()
-    stock_type, _created = StockType.objects.get_or_create(
-        name__iexact=name,
-        defaults={"name": name, "unit": unit, "category": category},
-    )
-    return stock_type
+    return StockType.objects.filter(name__iexact=name).first() or StockType(name=name, unit=unit, category=category)
 
 
 # The one confidence « Approuver les N sûres » takes: what the leave-one-out
@@ -1447,6 +1468,7 @@ def approve_all_suggestions(request):
     approved = 0
     remade = 0
     no_longer_sure = 0
+    no_factor = 0
     skip_reasons = Counter()
     for product in list(products):
         suggestion = product.ai_suggestion
@@ -1458,6 +1480,11 @@ def approve_all_suggestions(request):
             if only_sure and suggestion.get("confidence") != APPROVE_SCOPES[scope]:
                 no_longer_sure += 1
                 continue
+        if suggestion.get("stock_equivalent") == "":
+            # Suggested without a factor (finer than its column): a person's
+            # to type. Cleared, it would only be made again the same.
+            no_factor += 1
+            continue
         stock_equivalent = _parse_positive_decimal(str(suggestion.get("stock_equivalent", "")), default=None)
         stock_type = _resolve_suggestion_stock_type(suggestion)
 
@@ -1466,6 +1493,8 @@ def approve_all_suggestions(request):
             reason = "aucun article identifié"
         elif stock_equivalent is None:
             reason = f"facteur de conversion invalide ({suggestion.get('stock_equivalent')!r})"
+        elif conversion_refusal(product, stock_type.unit, stock_equivalent):
+            reason = f"facteur de conversion hors limites ({suggestion.get('stock_equivalent')!r})"
 
         if reason:
             skip_reasons[reason] += 1
@@ -1477,6 +1506,12 @@ def approve_all_suggestions(request):
             product.save(update_fields=["ai_suggestion"])
             continue
 
+        if stock_type.pk is None:
+            # get_or_create, not save(): another tab may have made it since.
+            stock_type, _created = StockType.objects.get_or_create(
+                name__iexact=stock_type.name,
+                defaults={"name": stock_type.name, "unit": stock_type.unit, "category": stock_type.category},
+            )
         # product.unit always mirrors stock_type.unit - see assign_product.
         link_product_to_stock_type(product, stock_type, unit=stock_type.unit, stock_equivalent=stock_equivalent)
         approved += 1
@@ -1488,6 +1523,8 @@ def approve_all_suggestions(request):
         remade_note = f" {remade} suggestion(s) refaite(s) d'abord : les classements avaient changé."
     if no_longer_sure:
         remade_note += f" {no_longer_sure} laissé(s) à classer, leur suggestion refaite n'étant plus sûre."
+    if no_factor:
+        remade_note += f" {no_factor} laissé(s) à classer, leur facteur étant à saisir."
     if skipped:
         detail = ", ".join(f"{count} ({reason})" for reason, count in skip_reasons.most_common())
         messages.warning(
@@ -1505,15 +1542,17 @@ def approve_all_suggestions(request):
 
 
 def _parse_positive_decimal(raw: str, default: Decimal) -> Decimal | None:
-    """Returns the parsed value, `default` if blank, or None if invalid."""
+    """Returns the parsed value, `default` if blank, or None if invalid.
+
+    Valid is what Product.stock_equivalent (10,4) holds, never rounded: a
+    wider factor was stored anyway and every read of the product then raised,
+    so nothing in the app could correct it again. And no NaN or Infinity,
+    which Decimal() takes."""
     raw = raw.strip()
     if not raw:
         return default
-    try:
-        value = Decimal(raw.replace(",", "."))
-    except InvalidOperation:
-        return None
-    return value if value > 0 else None
+    value = read_amount(raw, places=4, digits=10)
+    return value if value is not None and value > 0 else None
 
 
 def assign_product(request, product_id):
@@ -1534,8 +1573,15 @@ def assign_product(request, product_id):
         # needs review, and a charge never does), but the address took it:
         # classified, the rent became bottles, with a stock movement behind.
         error = f"« {product.raw_name} » est un poste de charge : il ne se range dans aucun article."
+    elif product.stock_type_id is not None:
+        # The panel lists only what is left to classify; a panel drawn before
+        # another tab classified this one still posts, and moves nothing.
+        error = (
+            f"« {product.raw_name} » est déjà rangé dans « {product.stock_type.name} » : retirez-le d'abord "
+            "ou changez son facteur depuis la page Stock."
+        )
     elif stock_equivalent is None:
-        error = "« 1 produit = » doit être un nombre positif."
+        error = "« 1 produit = » doit être un nombre positif d'au plus 4 décimales."
     elif not name:
         error = "Donnez le nom de l'article."
     if error:
@@ -1552,6 +1598,14 @@ def assign_product(request, product_id):
         unit = request.POST.get("new_stock_type_unit") or UnitChoices.UNIT
         if unit not in UnitChoices.values:
             unit = UnitChoices.UNIT
+    else:
+        unit = stock_type.unit
+    # Asked before the new article is made: a refusal writes nothing.
+    refusal = conversion_refusal(product, unit, stock_equivalent)
+    if refusal:
+        messages.error(request, refusal)
+        return _review_panel(request) if _is_htmx(request) else redirect("inventory:stock_list")
+    if created:
         category = request.POST.get("new_stock_type_category", "").strip()
         stock_type = StockType.objects.create(name=name, unit=unit, category=category)
 
@@ -2051,10 +2105,29 @@ def _stock_take_form_view(request, stock_take):
             with transaction.atomic():
                 stock_take = form.save()
                 lines = formset.save(commit=False)
-                for line in lines:
-                    _save_stock_take_line(line)
+                # Deleted first: a row taken out and the same product typed
+                # again in one save met the line still there (one per product).
                 for obj in formset.deleted_objects:
                     obj.delete()
+                # So are the saved lines moved to another product or article:
+                # one put onto the product the next still held (a shift, a
+                # swap) met it there. Each is written again under its own pk
+                # (save() inserts what its UPDATE no longer finds), its
+                # sources rebuilt with it.
+                stored = {
+                    pk: source
+                    for pk, *source in StockTakeLine.objects.filter(
+                        pk__in=[line.pk for line in lines if line.pk]
+                    ).values_list("pk", "product_id", "stock_type_id")
+                }
+                moved = [
+                    line.pk
+                    for line in lines
+                    if line.pk and stored.get(line.pk) != [line.product_id, line.stock_type_id]
+                ]
+                StockTakeLine.objects.filter(pk__in=moved).delete()
+                for line in lines:
+                    _save_stock_take_line(line)
             messages.success(request, "Inventaire enregistré.")
             return redirect("inventory:stock_take_detail", pk=stock_take.pk)
     else:
@@ -2111,6 +2184,11 @@ def value_stock_take_line(request):
     try:
         quantity = Decimal((request.GET.get("quantity") or "").replace(",", "."))
     except InvalidOperation:
+        return JsonResponse({"ok": False, "error": "quantity"})
+    # What the save's counted_quantity (10,4) and StockTakeLineForm take:
+    # Decimal() also reads NaN, Infinity and 1e999999, which were a 500 or a
+    # million-digit answer here.
+    if not quantity.is_finite() or quantity < 0 or quantity >= Decimal("1000000"):
         return JsonResponse({"ok": False, "error": "quantity"})
     as_of = parse_date(request.GET.get("as_of") or "") or timezone.localdate()
 

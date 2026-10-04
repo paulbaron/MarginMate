@@ -203,15 +203,20 @@ class EmailInvoiceSource(models.Model):
         return f"Source email de {self.invoice_type}"
 
     def clean(self):
+        # The motif guard, as the gather will compile them (security audit
+        # 04/10/2026): a bare re.compile accepted a pattern whose matching
+        # hangs on one email anybody can send.
+        from returnables.patterns import PatternError, check_invoice_mail_pattern
+
         errors = {}
         for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
             value = getattr(self, field_name)
             if not value:
                 continue
             try:
-                re.compile(value)
-            except re.error as exc:
-                errors[field_name] = f"Expression régulière invalide : {exc}"
+                check_invoice_mail_pattern(value, field_label="Expression régulière invalide")
+            except PatternError as exc:
+                errors[field_name] = exc.message
         if errors:
             raise ValidationError(errors)
 

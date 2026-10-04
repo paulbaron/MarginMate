@@ -229,15 +229,50 @@ class LinkTests(RequestCase):
             requests_.absolute_link(path, lambda value: "http://testserver" + value), "http://testserver" + path
         )
 
-    def test_opening_is_logged_once_per_session(self):
+    def test_opening_is_logged_once_an_hour_per_device(self):
+        """Not once per session: a client that keeps no cookie - a script, a
+        link preview - wrote an event at every hit."""
         request, _token = self.create()
-        session = {}
         for _ in range(3):
-            requests_.note_link_opened(request, session, ip=IP, user_agent=PHONE)
-        requests_.note_link_opened(request, {}, ip=IP, user_agent=PHONE)
-        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 2)
+            requests_.note_link_opened(request, ip=IP, user_agent=PHONE, now=NOW)
+        requests_.note_link_opened(request, ip="198.51.100.4", user_agent=PHONE, now=NOW)
+        requests_.note_link_opened(request, ip=IP, user_agent=PHONE, now=NOW + dt.timedelta(minutes=61))
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 3)
         opened = request.events.filter(kind=Kind.LINK_OPENED).first()
         self.assertEqual((opened.ip, opened.user_agent), (IP, PHONE))
+
+    def test_ten_openings_an_hour_at_most_whatever_the_devices_say(self):
+        request, _token = self.create()
+        for number in range(30):
+            requests_.note_link_opened(request, ip=IP, user_agent=f"Robot/{number}", now=NOW)
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 10)
+        requests_.note_link_opened(request, ip=IP, user_agent="Robot/0", now=NOW + dt.timedelta(minutes=61))
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 11)
+
+    def test_two_hundred_openings_in_a_request_s_life_at_most(self):
+        """Ten an hour was still ~10 000 hash-chained events over a link's
+        fortnight - more with each « Nouveau lien » - for a script changing
+        its device at every hit: the owner's month page and the proof file
+        grew with them."""
+        request, _token = self.create()
+        for hour in range(25):
+            for number in range(10):
+                at = NOW + dt.timedelta(hours=hour)
+                requests_.note_link_opened(request, ip=IP, user_agent=f"Robot/{number}", now=at)
+        self.assertEqual(self.kinds(request).count(Kind.LINK_OPENED), 200)
+        # Counted per kind and detail: the opened link takes nothing from a download.
+        requests_.note_download(request, private_files.DOCUMENT, ip=IP, user_agent=PHONE, now=NOW)
+        self.assertEqual(self.kinds(request).count(Kind.DOWNLOADED), 1)
+
+    def test_the_life_cap_counts_each_file_on_its_own(self):
+        request, _token = self.create()
+        with mock.patch.object(requests_, "REPEATED_EVENTS_PER_REQUEST", 2):
+            for hour in range(3):
+                at = NOW + dt.timedelta(hours=hour)
+                requests_.note_download(request, private_files.DOCUMENT, ip=IP, user_agent=PHONE, now=at)
+            requests_.note_download(request, private_files.EMPLOYEE_SIGNED, ip=IP, user_agent=PHONE, now=NOW)
+        files = [event.detail["file"] for event in request.events.filter(kind=Kind.DOWNLOADED)]
+        self.assertEqual(files, [private_files.DOCUMENT, private_files.DOCUMENT, private_files.EMPLOYEE_SIGNED])
 
 
 class LockTests(RequestCase):
@@ -340,7 +375,7 @@ class CodeTests(RequestCase):
         request, _token = self.create()
         code = requests_.issue_code(request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
         requests_.check_code(request, f" {code[:3]} {code[3:]} ", self.session, now=NOW, ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW))
         request.refresh_from_db()
         self.assertEqual(request.code_verified_at, NOW)
         self.assertEqual(request.code_hash, "")
@@ -363,6 +398,27 @@ class CodeTests(RequestCase):
         self.assertFalse(requests_.is_identified(self.session, request))
         self.assertEqual(self.kinds(request).count(Kind.CODE_FAILED), 6)
 
+    def test_a_refusal_before_any_comparison_is_logged_once_an_hour_per_device(self):
+        """Every code compared is an event; « aucun code en cours », posted
+        in a loop, was one each time too."""
+        request, _token = self.create()
+        for _ in range(20):
+            with self.assertRaises(requests_.CodeError) as caught:
+                requests_.check_code(request, "123456", self.session, now=NOW, ip=IP, user_agent=PHONE)
+            self.assertIn("Aucun code en cours", str(caught.exception))
+        failed = request.events.filter(kind=Kind.CODE_FAILED)
+        self.assertEqual([event.detail["reason"] for event in failed], ["aucun code en cours"])
+        code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW)
+        wrong = "000000" if code != "000000" else "111111"
+        for _ in range(7):
+            with self.assertRaises(requests_.CodeError):
+                requests_.check_code(request, wrong, self.session, now=NOW, ip=IP, user_agent=PHONE)
+        reasons = [event.detail["reason"] for event in request.events.filter(kind=Kind.CODE_FAILED)]
+        self.assertEqual(sum(reason.startswith("code erroné") for reason in reasons), 5)
+        # The fifth used the code up: the last two found none, said already.
+        self.assertEqual(reasons.count("aucun code en cours"), 1)
+        self.assertEqual(len(reasons), 6)
+
     def test_a_code_lasts_fifteen_minutes(self):
         request, _token = self.create()
         code = requests_.issue_code(request, SignatureRequest.Identification.CODE_HANDED_OVER, now=NOW)
@@ -379,7 +435,34 @@ class CodeTests(RequestCase):
             ip=IP,
             user_agent=PHONE,
         )
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=30)))
+
+    def test_a_verified_code_identifies_for_an_hour_only(self):
+        """Not for the session's two weeks: on a shared phone, whoever
+        reopens the link days later must not sign in his name."""
+        request, _token = self.create()
+        self.identified(request)
+        request.refresh_from_db()
+        window = requests_.IDENTIFICATION_VALIDITY
+        self.assertEqual(window, dt.timedelta(hours=1))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + window))
+        self.assertFalse(requests_.is_identified(self.session, request, now=NOW + window + dt.timedelta(seconds=1)))
+        with self.assertRaises(requests_.IdentificationRequired):
+            requests_.sign_for_employee(
+                request,
+                drawn_signature(),
+                session=self.session,
+                statement_accepted=True,
+                now=NOW + dt.timedelta(hours=2),
+                ip=IP,
+                user_agent=PHONE,
+            )
+        request.refresh_from_db()
+        self.assertEqual(request.status, Status.PENDING)
+        # A new code, a new hour.
+        self.identified(request, now=NOW + dt.timedelta(hours=2))
+        request.refresh_from_db()
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(hours=2, minutes=59)))
 
     def test_three_codes_an_hour(self):
         request, _token = self.create()
@@ -405,7 +488,7 @@ class CodeTests(RequestCase):
         save_month(other_person, JUNE, [])
         other, _token_2 = self.create(person=other_person)
         self.identified(request)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW))
         self.assertFalse(requests_.is_identified(self.session, other))
         with self.assertRaises(requests_.IdentificationRequired):
             requests_.sign_for_employee(
@@ -876,7 +959,7 @@ class CodeChannelTests(RequestCase):
                 )
             self.assertEqual(str(caught.exception), requests_.HANDED_OVER_CODE_WAITING)
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=3), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=3)))
 
     def test_a_handed_over_code_that_can_no_longer_be_used_protects_nothing(self):
         request, _token = self.create()
@@ -895,7 +978,7 @@ class CodeChannelTests(RequestCase):
         requests_.issue_code(request, Identification.CODE_BY_EMAIL, now=NOW)
         code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=1))
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=2), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=2)))
 
     def test_the_owner_still_gives_a_code_after_three_asked_by_email(self):
         request, _token = self.create()
@@ -906,7 +989,7 @@ class CodeChannelTests(RequestCase):
         self.assertIn("3 codes", str(caught.exception))
         code = requests_.issue_code(request, Identification.CODE_HANDED_OVER, now=NOW + dt.timedelta(minutes=4))
         requests_.check_code(request, code, self.session, now=NOW + dt.timedelta(minutes=5), ip=IP, user_agent=PHONE)
-        self.assertTrue(requests_.is_identified(self.session, request))
+        self.assertTrue(requests_.is_identified(self.session, request, now=NOW + dt.timedelta(minutes=5)))
 
     def test_the_code_waiting_and_its_method(self):
         request, _token = self.create()

@@ -255,6 +255,13 @@ _IMAGE_LIBRARIES = ("PIL",)
 _PDF_LIBRARIES = ("pypdfium2", "pdfminer", "pdfplumber")
 
 
+class UnreadablePdf(RuntimeError):
+    """A PDF the app itself found unreadable, said as a PDF library's error
+    is (UNREADABLE_PDF): what PDFium could not open in the process it runs
+    in, or pdfminer could not weigh before (invoices.ocr.page_images). Its
+    words are for the server's log."""
+
+
 def _raised_in(exc: BaseException) -> str:
     """The module the exception was raised in (its innermost Python frame)."""
     trace, module = exc.__traceback__, ""
@@ -279,6 +286,8 @@ def error_kind(exc: BaseException) -> str:
             return UNREADABLE_IMAGE
     except ImportError:  # pragma: no cover - Pillow is a requirement
         pass
+    if isinstance(exc, UnreadablePdf):
+        return UNREADABLE_PDF
     try:
         from pypdfium2 import PdfiumError
 

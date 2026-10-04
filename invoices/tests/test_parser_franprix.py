@@ -149,8 +149,25 @@ class FranprixDiscountedTests(SimpleTestCase):
         self.assertEqual(failed(self.invoice), [])
 
     def test_ticket_number_and_date(self):
-        self.assertEqual(self.invoice.invoice_number, "004211-01-385")
+        self.assertEqual(self.invoice.invoice_number, "004211-01-385-20260715")
         self.assertEqual(self.invoice.invoice_date.isoformat(), "2026-07-15")
+
+
+class FranprixTicketNumberTests(SimpleTestCase):
+    def test_the_till_s_count_is_dated(self):
+        """ "R1 004211-01 385": the store, the till and the till's count of the
+        day, which comes round - bare, a ticket of 19/09/2026 was refused as
+        the 23/03/2025 one printing the same till and count."""
+        later = parse(DISCOUNTED.replace("15-07-2026 WEDNESDAY", "19-09-2026 SATURDAY"))
+        self.assertEqual(later.invoice_number, "004211-01-385-20260919")
+        self.assertNotEqual(later.invoice_number, parse(DISCOUNTED).invoice_number)
+
+    def test_an_undated_count_is_no_number(self):
+        """Without its date the count names no ticket: no number at all, rather
+        than one another day's ticket holds."""
+        invoice = parse(DISCOUNTED.replace("15-07-2026 WEDNESDAY  17:39\n", ""))
+        self.assertIsNone(invoice.invoice_date)
+        self.assertEqual(invoice.invoice_number, "")
 
 
 class FranprixWordsDoNotMatterTests(SimpleTestCase):

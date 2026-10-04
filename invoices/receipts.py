@@ -49,7 +49,7 @@ from common import error_for_page, format_money
 from . import einvoice
 from .identifiers import describe as describe_identifier
 from .identifiers import document_identifiers, may_print
-from .importing import DuplicateInvoiceError, RoutedToReturnablesError, import_parsed_invoice
+from .importing import PDF_NO_DATE, DuplicateInvoiceError, RoutedToReturnablesError, import_parsed_invoice
 from .models import Invoice, InvoiceLine, ShopItemPrice, Supplier, label_for_unit_price
 from .ocr import (
     DocumentTooBig,
@@ -1991,7 +1991,7 @@ def reread_receipt(invoice: Invoice) -> bool:
     checked ticket: its lines are what a person confirmed. Returns whether it
     changed.
     """
-    from .importing import InvoiceLinesInUseError, refile_as_charge, replace_invoice_lines
+    from .importing import InvoiceLinesInUseError, LineTooWideError, refile_as_charge, replace_invoice_lines
 
     if invoice.reviewed_at is not None or not invoice.ocr_text:
         return False
@@ -2006,8 +2006,13 @@ def reread_receipt(invoice: Invoice) -> bool:
     except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
         return False
     if charge:
-        # Not the lines a ticket reader makes of it: what it charges.
-        return refile_as_charge(invoice, parsed)
+        # Not the lines a ticket reader makes of it: what it charges. A
+        # figure too wide keeps the old reading, as below: raised, it stopped
+        # the reread_receipts command on a traceback.
+        try:
+            return refile_as_charge(invoice, parsed)
+        except LineTooWideError:
+            return False
     dated = date_check(parsed.invoice_date or invoice.invoice_date)
     checks = [_as_dict(check) for check in parsed.checks + ([dated] if dated else [])]
     if not parsed.lines or not _sum_check_passed(checks) or _failures(checks) >= _failures(invoice.parse_checks):
@@ -2032,7 +2037,7 @@ def reread_receipt(invoice: Invoice) -> bool:
                     "status",
                 ]
             )
-    except InvoiceLinesInUseError:
+    except (InvoiceLinesInUseError, LineTooWideError):
         return False
     return True
 
@@ -2135,10 +2140,13 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
     if supplier.expenses_only:
         from .importing import refile_as_charge
 
-        invoice.ocr_text = parsed.source_text
-        invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
-        invoice.save(update_fields=["ocr_text", "invoice_date"])
-        refile_as_charge(invoice, parsed)
+        # One piece: a reading refused (LineTooWideError) left its text, and
+        # its date, saved beside the old lines.
+        with transaction.atomic():
+            invoice.ocr_text = parsed.source_text
+            invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
+            invoice.save(update_fields=["ocr_text", "invoice_date"])
+            refile_as_charge(invoice, parsed)
         return f"Document relu : {invoice.lines.count()} poste(s) de charge."
     label_placeholder_lines(supplier, parsed)
     invoice_date = parsed.invoice_date or invoice.invoice_date
@@ -2554,6 +2562,33 @@ def einvoice_supplier(text: str) -> tuple[Supplier | None, list[str]]:
     return Supplier.objects.filter(code=parser.supplier_code).first(), found
 
 
+EINVOICE_NO_DATE = "Date absente de la facture électronique : saisissez-la dans « Corriger les lignes »."
+# Around the date it names (einvoice_date_problem).
+_BAD_DATE_BEFORE = "Date invraisemblable sur la facture électronique ("
+_BAD_DATE_AFTER = ") : corrigez-la dans « Corriger les lignes »."
+_DATE_PROBLEMS = re.compile(
+    r"\s*(?:"
+    + "|".join(
+        (
+            re.escape(EINVOICE_NO_DATE),
+            re.escape(PDF_NO_DATE),
+            re.escape(_BAD_DATE_BEFORE) + r"[0-9/]+" + re.escape(_BAD_DATE_AFTER),
+        )
+    )
+    + ")"
+)
+
+
+def without_date_problem(message: str) -> str:
+    """`error_message` without the sentence asking for the date - once a
+    date has been typed in, which is what it asks. Kept, it held the
+    document in « Documents à corriger » for good: nothing else writes that
+    message again. Everything else it says stays, the supplier's arithmetic
+    first of all: reported and never repaired."""
+    left, found = _DATE_PROBLEMS.subn("", message)
+    return left.strip() if found else message
+
+
 def einvoice_date_problem(invoice_date: date | None) -> list[str]:
     """What is wrong with an electronic invoice's date, in one sentence.
 
@@ -2570,15 +2605,10 @@ def einvoice_date_problem(invoice_date: date | None) -> list[str]:
     from .forms import EARLIEST_DOCUMENT_DATE
 
     if invoice_date is None:
-        return ["Date absente de la facture électronique : saisissez-la dans « Corriger les lignes »."]
+        return [EINVOICE_NO_DATE]
     today = timezone.localdate()
     if not EARLIEST_DOCUMENT_DATE <= invoice_date <= today:
-        return [
-            (
-                f"Date invraisemblable sur la facture électronique ({invoice_date:%d/%m/%Y}) : "
-                "corrigez-la dans « Corriger les lignes »."
-            )
-        ]
+        return [f"{_BAD_DATE_BEFORE}{invoice_date:%d/%m/%Y}{_BAD_DATE_AFTER}"]
     return []
 
 

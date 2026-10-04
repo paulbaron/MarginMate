@@ -156,7 +156,7 @@ Confiance : {{ confidence_counts.high|default:0 }} haute, {{ confidence_counts.m
                 <label class="review-field">
                     <span>1 produit =</span>
                     <input type="text" name="stock_equivalent" inputmode="decimal"
-                           value="{% if s %}{{ s.stock_equivalent }}{% else %}1{% endif %}">
+                           value="{% if s %}{{ s.stock_equivalent }}{% else %}1{% endif %}"{% if s and not s.stock_equivalent %} required{% endif %}>
                 </label>
                 <button class="btn btn-small" type="submit">Classer</button>
             </form>

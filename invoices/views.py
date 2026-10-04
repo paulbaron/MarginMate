@@ -1,7 +1,9 @@
+import hashlib
 import json
 import logging
 import os
 import re
+import secrets
 import tempfile
 import threading
 from datetime import date, timedelta
@@ -66,11 +68,14 @@ from .forms import (
     ShopItemPriceForm,
     VatTableFormSet,
     WebsiteInvoiceSourceForm,
+    gather_range_problem,
     line_initial,
 )
 from .importing import (
     DuplicateInvoiceError,
     InvoiceLinesInUseError,
+    LineTooWideError,
+    RoutedToReturnablesError,
     corrected_line,
     import_parsed_invoice,
     parse_and_import,
@@ -180,6 +185,7 @@ def upload_invoice(request):
     uploaded = form.cleaned_data["source_file"]
     suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    is_slip = False
     try:
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
@@ -216,6 +222,7 @@ def upload_invoice(request):
                 OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
+        is_slip = isinstance(exc, RoutedToReturnablesError)
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
         # The app's refusals in their words, anything else by kind: never the
         # exception's own text, which can name the server's files (audit
@@ -236,6 +243,14 @@ def upload_invoice(request):
         return redirect("invoices:receipt_review", pk=invoice.pk)
     finally:
         os.unlink(tmp_path)
+    if created:
+        # Made before the file was read, it stays: an empty supplier is a
+        # legitimate one (deleted from its page if need be), but not a
+        # silent one - the retry under the same name says « existe déjà ».
+        # A slip is no invoice to retry under it: its sentence says where it
+        # went, or where to drop it.
+        then = "" if is_slip else " : choisissez-le dans la liste"
+        messages.info(request, f"Fournisseur {supplier.name} créé, sans ce document{then}.")
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
 
 
@@ -273,8 +288,37 @@ def invoice_preview(request, pk):
     )
 
 
+#: The hand-typed invoices this login made, by the one-time value of the
+#: page that made each (`jeton`): that page posted again - a double tap, a
+#: phone resending after a slow answer - opens the invoice it made rather
+#: than filing the purchase twice. A number would be refused as a duplicate
+#: (import_parsed_invoice), but most paper invoices typed here have none.
+#: In the session, and only the last few. Kept with what was posted: a page
+#: given back by the browser with its old value, another invoice typed on
+#: it, is that other invoice.
+MANUAL_INVOICES_MADE = "manual_invoices_made"
+MANUAL_INVOICES_KEPT = 20
+
+
+def _posted(request) -> str:
+    """What a page sent, but for the values that differ each time it is sent."""
+    fields = sorted(
+        (key, request.POST.getlist(key)) for key in request.POST if key not in ("csrfmiddlewaretoken", "jeton")
+    )
+    files = sorted((key, upload.name, upload.size) for key, upload in request.FILES.items())
+    return hashlib.sha256(repr((fields, files)).encode()).hexdigest()
+
+
 def create_manual_invoice(request):
     if request.method == "POST":
+        token = request.POST.get("jeton", "")[:64]
+        made = request.session.get(MANUAL_INVOICES_MADE, {})
+        made_pk, made_from = made.get(token, (None, ""))
+        posted = _posted(request)
+        already = Invoice.objects.filter(pk=made_pk).first() if made_from == posted else None
+        if already is not None:
+            messages.info(request, f"Facture déjà créée : {already}")
+            return redirect("invoices:invoice_detail", pk=already.pk)
         form = ManualInvoiceForm(request.POST, request.FILES)
         formset = ManualInvoiceLineFormSet(request.POST)
         if form.is_valid() and formset.is_valid():
@@ -318,17 +362,26 @@ def create_manual_invoice(request):
                     source_file_path=tmp_path,
                     display_filename=uploaded.name if uploaded else None,
                 )
+                if token:
+                    made[token] = (invoice.pk, posted)
+                    request.session[MANUAL_INVOICES_MADE] = dict(list(made.items())[-MANUAL_INVOICES_KEPT:])
                 messages.success(request, f"Facture créée : {invoice}")
                 return redirect("invoices:invoice_detail", pk=invoice.pk)
             except DuplicateInvoiceError as exc:
                 messages.warning(request, str(exc))
+            except LineTooWideError as exc:
+                messages.error(request, str(exc))
             finally:
                 if tmp_path:
                     os.unlink(tmp_path)
     else:
         form = ManualInvoiceForm()
         formset = ManualInvoiceLineFormSet()
-    return render(request, "invoices/manual_invoice_form.html", {"form": form, "formset": formset})
+    return render(
+        request,
+        "invoices/manual_invoice_form.html",
+        {"form": form, "formset": formset, "jeton": secrets.token_urlsafe(16)},
+    )
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -403,6 +456,12 @@ def trigger_gather(request):
     else:
         start_date = _parse_date(request.POST.get("start_date"))
         end_date = _parse_date(request.POST.get("end_date"))
+        problem = gather_range_problem(start_date, end_date)
+        if problem:
+            # Before any job or thread: Metro would be searched window by
+            # window over the whole period, every mailbox from that day.
+            messages.error(request, problem)
+            return redirect(back)
         started = gathering.start_gather(
             source_codes, start_date, end_date, metro_now=metro_now, trigger=ScrapeJob.Trigger.MANUAL
         )
@@ -540,21 +599,27 @@ def invoice_type_form(request, pk=None):
             if source_form.is_valid():
                 start = source_form.cleaned_data["test_start_date"] or (timezone.localdate() - timedelta(days=30))
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
-                test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
-                thread = threading.Thread(
-                    target=bound(test_email_pattern_task),
-                    args=(
-                        test_job.id,
-                        start,
-                        end,
-                        source_form.cleaned_data["sender_pattern"],
-                        source_form.cleaned_data["subject_pattern"],
-                        source_form.cleaned_data["body_pattern"],
-                        source_form.cleaned_data["attachment_pattern"],
-                    ),
-                    daemon=True,
-                )
-                thread.start()
+                # Here, not in the form's clean(): the test dates are drawn by
+                # hand without their errors, and they never stop a save.
+                problem = gather_range_problem(start, end)
+                if problem:
+                    messages.error(request, problem)
+                else:
+                    test_job = ScrapeJob.objects.create(kind=ScrapeJob.Kind.TEST)
+                    thread = threading.Thread(
+                        target=bound(test_email_pattern_task),
+                        args=(
+                            test_job.id,
+                            start,
+                            end,
+                            source_form.cleaned_data["sender_pattern"],
+                            source_form.cleaned_data["subject_pattern"],
+                            source_form.cleaned_data["body_pattern"],
+                            source_form.cleaned_data["attachment_pattern"],
+                        ),
+                        daemon=True,
+                    )
+                    thread.start()
         else:
             if type_form.is_valid() and source_form.is_valid():
                 saved = _save_invoice_type(request, type_form, invoice_type, source_form, "email", return_to)
@@ -694,6 +759,10 @@ def _test_website(request, type_form, website_form):
         return None
     start = _parse_date(request.POST.get("test_start_date")) or (timezone.localdate() - timedelta(days=90))
     end = _parse_date(request.POST.get("test_end_date")) or timezone.localdate()
+    problem = gather_range_problem(start, end)
+    if problem:
+        messages.error(request, problem)
+        return None
     site = website_form.save(commit=False)
     name = (type_form.data.get("name") or "").strip() or "Site"
     supplier_id = type_form.data.get("supplier") or ""
@@ -929,9 +998,14 @@ def receipt_batch_assign(request, pk, index):
             entry = import_with_shop(batch, index, supplier)
     except ShopChoiceError as exc:
         messages.error(request, str(exc))
+        # A slip no format files (receipt_batches._unfiled_slip) is no more
+        # the new shop's than one filed in Consignes, as upload_invoice says.
+        slip = isinstance(exc.__cause__, RoutedToReturnablesError)
+        _say_shop_made_anyway(request, supplier, created, in_consignes=slip)
         return redirect("invoices:receipt_batch", pk=batch.pk)
     if entry["status"] != "ok":
         messages.warning(request, entry["message"])
+        _say_shop_made_anyway(request, supplier, created, in_consignes=entry.get("consignes", False))
         return redirect("invoices:receipt_batch", pk=batch.pk)
     messages.success(request, f"{entry['name']} importé comme ticket {supplier.name} : vérifiez-le d'après la photo.")
     _say_supplier_changes(request, changes)
@@ -939,6 +1013,16 @@ def receipt_batch_assign(request, pk, index):
         _say_new_shop(request, supplier)
     # Checked within its import - the batch may still be running meanwhile.
     return redirect(reverse("invoices:receipt_review", args=[entry["invoice_id"]]) + f"?lot={batch.pk}")
+
+
+def _say_shop_made_anyway(request, supplier, created: bool, in_consignes: bool = False) -> None:
+    """A new shop named for a file that was not filed under it: made before
+    the file was read, it stays (see upload_invoice), and is said."""
+    if created:
+        # A slip, put in Consignes or to be dropped there, leaves no file to
+        # name a shop for.
+        then = "" if in_consignes else " : choisissez-la dans la liste"
+        messages.info(request, f"Enseigne {supplier.name} créée, sans ce fichier{then}.")
 
 
 def _say_new_shop(request, supplier) -> None:
@@ -1043,11 +1127,19 @@ def supplier_expenses(request, pk):
                 + (f" {freed} poste(s) repassent à classer." if freed else "")
             )
         else:
-            done = redo_as_expenses(supplier)
+            done, left = redo_as_expenses(supplier)
             said = (
                 f"{supplier.name} : ses documents sont des charges - une ligne par taux de TVA, aucun produit à classer"
                 + (f" ({done} document(s) déjà enregistré(s) refaits ainsi)." if done else ".")
             )
+            if left:
+                from .receipts import _describe
+
+                said += (
+                    f" {len(left)} document(s) gardent leurs lignes, un montant y dépassant ce que MarginMate peut "
+                    f"enregistrer : {', '.join(_describe(invoice) for invoice in left)} - corrigez-les document "
+                    "par document."
+                )
         supplier_changes.record(
             supplier, SupplierChange.Kind.CHARGES, said, data={"expenses_only": supplier.expenses_only}
         )
@@ -1320,7 +1412,7 @@ def _lot_of(request):
 
 def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> bool:
     """Store what the page says. Returns whether it was saved."""
-    from .receipts import _describe, learn_identifiers, recheck_after_review
+    from .receipts import _describe, learn_identifiers, recheck_after_review, without_date_problem
 
     document = DOCUMENT_RECEIPT if invoice.is_receipt else DOCUMENT_INVOICE
     stored = {line.pk: line for line in invoice.lines.all()}
@@ -1374,6 +1466,12 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
                 # with none, the charge came out settled.
                 charge_state(invoice, invoice.printed_total_ttc)
             fields = ["invoice_date", "printed_total_ttc"]
+            # The header form only takes a date between 2000 and today: the
+            # sentence the import left asking for one is answered.
+            message = without_date_problem(invoice.error_message)
+            if message != invoice.error_message:
+                invoice.error_message = message
+                fields.append("error_message")
             doubted = bool(invoice.supplier_doubt)
             if doubted:
                 # Validated here, it is this supplier's: stored before the
@@ -1414,7 +1512,7 @@ def _save_corrections(request, invoice, formset, header_form, vat_form=None) -> 
             if invoice.is_receipt or doubted:
                 _answer_first_document(request, invoice)
             invoice.save(update_fields=fields)
-    except InvoiceLinesInUseError as exc:
+    except (InvoiceLinesInUseError, LineTooWideError) as exc:
         messages.error(request, str(exc))
         return False
     return True
@@ -1534,7 +1632,7 @@ def _reread_from_page(request, invoice) -> None:
 
     try:
         messages.success(request, reread_document(invoice))
-    except (RereadError, InvoiceLinesInUseError) as exc:
+    except (RereadError, InvoiceLinesInUseError, LineTooWideError) as exc:
         messages.error(request, str(exc))
 
 

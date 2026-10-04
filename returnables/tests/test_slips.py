@@ -468,6 +468,19 @@ class StoreUploadsTests(NeverAnInvoiceMixin, NoNetworkTestCase):
         self.assertEqual(summary.refusals, [f"casse.pdf : {UNEXPECTED}"])
         self.assertEqual(summary.created, 1)
 
+    def test_past_a_minute_the_files_left_are_not_read(self):
+        """A bad file holds the request seconds: what is left once the
+        upload has run a minute is said « pas lu », never read. The clock
+        is simulated: the upload starts at 0, the second file at 61 s."""
+        clock = iter([0, 0])
+        late = Upload("T2.pdf", pdf_of(texts.EMPTY.text))
+        with mock.patch.object(slips, "monotonic", lambda: next(clock, slips.UPLOAD_SECONDS + 1)):
+            summary = store_uploads([Upload("T1.pdf", pdf_of(texts.NORMAL.text)), late, Upload("T3.pdf", b"x")])
+        self.assertEqual(late.reads, 0)
+        self.assertEqual(summary.created, 1)
+        self.assertEqual(summary.refusals, [f"T2.pdf : {slips.NOT_READ}", f"T3.pdf : {slips.NOT_READ}"])
+        self.assertEqual(slips.NOT_READ, "pas lu : l'envoi a duré plus d'une minute, renvoyez-le.")
+
     def test_a_chosen_format_reads_every_document(self):
         other = make_format(name="Choisi à la main", supplier=make_supplier())
         summary = store_uploads([Upload("T1.pdf", pdf_of(texts.NORMAL.text))], fmt=other)

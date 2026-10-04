@@ -8,6 +8,9 @@ imports are replaced where a test says so, the heartbeat too. Every name and
 date is invented.
 """
 
+import os
+import shutil
+import tempfile
 from unittest import mock
 
 from django.db import OperationalError
@@ -156,7 +159,14 @@ class FailedImportTests(CoverageCase):
     def setUp(self):
         super().setUp()
         GatherCoverage.objects.create(code=self.email_code, searched_until=self.days_ago(14))
-        self.fetched = {"return_value": [("/nowhere/facture-10.pdf", self.days_ago(10))]}
+        # A file on disk: a reader's own documents are refused by their digest
+        # first (tasks._import_downloaded_file), which reads the file.
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        fetched = os.path.join(folder, "facture-10.pdf")
+        with open(fetched, "wb") as handle:
+            handle.write(b"%PDF-1.4 facture exemple")
+        self.fetched = {"return_value": [(fetched, self.days_ago(10))]}
 
     def assert_fetched_again(self, job, emit):
         self.assertIn("error", job.progress[self.email_code])

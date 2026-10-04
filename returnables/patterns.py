@@ -350,6 +350,29 @@ def _checked(pattern: str, required_groups: tuple, max_length: int):
     """Steps 2 to 7 of the check, cached: only a pattern that passed is kept
     (lru_cache does not keep an exception). It holds compiled patterns and
     no tenant's data, so it needs no tenant key."""
+    _check_shape(pattern)
+
+    # 6. Only now, compiled - anything it raises is a refusal, not a 500.
+    try:
+        compiled = regex.compile(pattern, FLAGS)
+    except Exception as error:  # noqa: BLE001 - anything compile raises is a refusal, not a 500
+        raise _Refused(_translate(getattr(error, "msg", ""), None)) from None
+
+    # 7. A pattern that finds something on an empty line finds it everywhere.
+    try:
+        empty = compiled.search("", timeout=PATTERN_TIMEOUT, concurrent=True)
+    except TimeoutError:
+        raise _Refused("le motif est trop lent") from None
+    if empty is not None:
+        raise _Refused("le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne")
+    if any(name not in compiled.groupindex for name in required_groups):
+        raise _Refused(f"le motif doit contenir {_groups_sentence(required_groups)}")
+    return compiled
+
+
+def _check_shape(pattern: str) -> None:
+    """Steps 2 to 5b: the pattern's shape, read without compiling it -
+    _Refused when a rule is broken."""
     # 2. The standard parser shows the pattern's shape and expands nothing.
     try:
         parsed = sre_parser.parse(pattern, re.IGNORECASE | re.MULTILINE)
@@ -392,23 +415,6 @@ def _checked(pattern: str, required_groups: tuple, max_length: int):
     # compiles (see _check_regex_tree): a disagreement between the two
     # parsers can no longer hide a repetition.
     _check_regex_tree(pattern)
-
-    # 6. Only now, compiled - anything it raises is a refusal, not a 500.
-    try:
-        compiled = regex.compile(pattern, FLAGS)
-    except Exception as error:  # noqa: BLE001 - anything compile raises is a refusal, not a 500
-        raise _Refused(_translate(getattr(error, "msg", ""), None)) from None
-
-    # 7. A pattern that finds something on an empty line finds it everywhere.
-    try:
-        empty = compiled.search("", timeout=PATTERN_TIMEOUT, concurrent=True)
-    except TimeoutError:
-        raise _Refused("le motif est trop lent") from None
-    if empty is not None:
-        raise _Refused("le motif accepte une ligne vide : il trouverait quelque chose sur n'importe quelle ligne")
-    if any(name not in compiled.groupindex for name in required_groups):
-        raise _Refused(f"le motif doit contenir {_groups_sentence(required_groups)}")
-    return compiled
 
 
 def compile_pattern(text, *, field_label: str, required_groups=(), max_length: int = MAX_PATTERN_LENGTH):
@@ -633,6 +639,65 @@ def mail_matcher(text, *, log=None) -> MailMatcher:
     find_matching_emails with: the pattern checked like any other (PatternError
     otherwise), case-insensitive, timed."""
     return MailMatcher(compile_pattern(text, field_label="Motif de mail"), log)
+
+
+#: An invoice source's mail pattern: its own length (the model's column),
+#: the body it is matched on, and the time one match may take.
+INVOICE_MAIL_PATTERN_LENGTH = 500
+INVOICE_MAIL_TEXT_LIMIT = 200_000
+INVOICE_MAIL_TIMEOUT = 1.0
+
+
+@functools.lru_cache(maxsize=256)
+def _invoice_mail_compiled(pattern: str):
+    _check_shape(pattern)
+    try:
+        # No flag: an invoice source's patterns were always matched like
+        # `re.compile(pattern)` - case-sensitive unless they say (?i), and a
+        # blank-matching « .* » is accepted.
+        return regex.compile(pattern)
+    except Exception as error:  # noqa: BLE001 - anything compile raises is a refusal, not a 500
+        raise _Refused(_translate(getattr(error, "msg", ""), None)) from None
+
+
+def check_invoice_mail_pattern(text, *, field_label: str = "Motif de mail"):
+    """An invoice source's pattern (EmailInvoiceSource) checked by the motif
+    guard and compiled with `re`'s meaning - or PatternError. It used to be
+    a bare `re.compile`: no shape check, no timeout, on a body anybody on the
+    internet writes (security audit 04/10/2026)."""
+    pattern = (text or "").strip()
+    if not pattern:
+        raise PatternError(f"{field_label} : le motif est vide.")
+    if len(pattern) > INVOICE_MAIL_PATTERN_LENGTH:
+        raise PatternError(f"{field_label} : {INVOICE_MAIL_PATTERN_LENGTH} caractères au plus ({len(pattern)} ici).")
+    try:
+        return _invoice_mail_compiled(pattern)
+    except _Refused as refused:
+        raise PatternError(f"{field_label} : {refused.reason}.") from None
+
+
+class InvoiceMailMatcher(MailMatcher):
+    """`.search(text)` for an invoice source: the first
+    INVOICE_MAIL_TEXT_LIMIT characters (a body, not only a header), timed; a
+    timeout is « no match », logged."""
+
+    def search(self, text):
+        try:
+            return self._pattern.search(
+                (text or "")[:INVOICE_MAIL_TEXT_LIMIT], timeout=INVOICE_MAIL_TIMEOUT, concurrent=True
+            )
+        except TimeoutError:
+            message = f"motif trop lent sur un mail : ignoré ({shown_pattern(self._pattern)})"
+            logger.warning(message)
+            if self._log is not None:
+                self._log(message)
+            return None
+
+
+def invoice_mail_matcher(text, *, log=None) -> InvoiceMailMatcher:
+    """The `compile` an invoice source's patterns are handed to
+    find_matching_emails with (the gather and « Tester »)."""
+    return InvoiceMailMatcher(check_invoice_mail_pattern(text), log)
 
 
 # -- Numbers, dates, times ------------------------------------------------------------------------------------------

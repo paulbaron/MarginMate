@@ -1154,6 +1154,72 @@ class AssetVersioningTests(TestCase):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=", html)
 
+    def collected(self):
+        """A STATIC_ROOT holding a copy of marginmate.css dated 1700000000,
+        as `serve`'s collectstatic leaves it, under the server's settings
+        (WhiteNoise serving that copy, indexed once)."""
+        from django.conf import settings
+
+        root = pathlib.Path(tempfile.mkdtemp(prefix="marginmate-tests-collected-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "css").mkdir()
+        copy = root / "css" / "marginmate.css"
+        shutil.copyfile(pathlib.Path(settings.BASE_DIR) / "static" / "css" / "marginmate.css", copy)
+        os.utime(copy, (1_700_000_000, 1_700_000_000))
+        served = self.settings(STATIC_ROOT=root, WHITENOISE_AUTOREFRESH=False, WHITENOISE_USE_FINDERS=False)
+        served.enable()
+        self.addCleanup(served.disable)
+        return copy
+
+    def test_on_the_server_it_dates_the_copy_served_once(self):
+        """`serve` serves the copy collectstatic made at its start, not the
+        source: a source edited while it runs (a pull before the restart)
+        got a new `?v=` over the old bytes - now kept a year by the browsers
+        (VersionedWhiteNoiseMiddleware). The copy's date is read once."""
+        from inventory.templatetags import assets
+
+        copy = self.collected()
+        self.assertEqual(assets.asset("css/marginmate.css"), "/static/css/marginmate.css?v=1700000000")
+        os.utime(copy, (1_700_000_100, 1_700_000_100))
+        with mock.patch.object(os.path, "getmtime", side_effect=AssertionError("dated again")):
+            self.assertEqual(assets.asset("css/marginmate.css"), "/static/css/marginmate.css?v=1700000000")
+
+    def test_on_the_server_a_file_with_no_copy_is_looked_for_there_once(self):
+        """A file added after the start's collectstatic has no copy to date,
+        and WhiteNoise, which indexed STATIC_ROOT once, will not serve one
+        made later: looking for it again at every page found nothing."""
+        from config.static import collected_version
+
+        self.collected()
+        self.assertIsNone(collected_version("css/essai-absent.css"))
+        with mock.patch.object(os.path, "getmtime", side_effect=AssertionError("looked for again")):
+            self.assertIsNone(collected_version("css/essai-absent.css"))
+
+    def test_on_the_server_the_address_asset_prints_is_kept_a_year(self):
+        """WhiteNoise said « max-age=60 » of every file: after a minute each
+        page asked again for its stylesheet and topbar.js before drawing
+        anything, a round trip through the tunnel. The address `{% asset %}`
+        prints names those bytes for as long as the server runs: kept a year.
+        Any other `v` (a guessed one would hold today's bytes a year at
+        Cloudflare) and the admin's plain addresses keep the minute."""
+        from django.http import HttpResponse
+        from django.test import RequestFactory
+
+        from config.static import VersionedWhiteNoiseMiddleware
+
+        self.collected()
+        middleware = VersionedWhiteNoiseMiddleware(lambda request: HttpResponse(status=404))
+        url = "/static/css/marginmate.css"
+        answer = middleware(RequestFactory().get(url, {"v": "1700000000"}))
+        self.assertEqual(answer.status_code, 200)
+        self.assertEqual(answer["Cache-Control"], "max-age=31536000, public, immutable")
+        again = middleware(RequestFactory().get(url, {"v": "1700000000"}, HTTP_IF_NONE_MATCH=answer["ETag"]))
+        self.assertEqual(again.status_code, 304)
+        self.assertEqual(again["Cache-Control"], "max-age=31536000, public, immutable")
+        for query in ({"v": "1700000999"}, {"v": ""}, {}):
+            with self.subTest(query=query):
+                self.assertEqual(middleware(RequestFactory().get(url, query))["Cache-Control"], "max-age=60, public")
+
 
 class InvoiceDetailTests(TestCase):
     """The reconciliation adjustment exists precisely so an invoice's total

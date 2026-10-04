@@ -226,6 +226,9 @@ TICKET_WORD_RE = re.compile(r"(?i)ticket\D{0,15}?(\d{4,10})(?!\d)")
 # Counted without the zeros a till pads it with: Wing Seng's « 000172 » is
 # such a count, and bare it was refused as another day's ticket.
 DAILY_COUNT_DIGITS = 4
+# "R1 007418-02 317": the store, the till and the till's count of the day,
+# which comes round too - bare, a ticket of 19/09/2026 would be refused as the
+# 23/03/2025 one. Dated, or no number at all when the date is unread.
 STORE_TILL_RE = re.compile(r"R\d\s*(\d{5,6}-\d{2})\s*(\d{2,4})")
 BARCODE_RE = re.compile(r"(?<!\d)(\d{18,26})(?!\d)")
 # An IBAN is a long digit run too once its spaces are taken out, and it is
@@ -239,7 +242,12 @@ IBAN_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{2,4}){3,9}(?![A-
 DOCUMENT_WORDS = r"(?:facture|document|commande|pi[eè]ce|avoir|bon\s+de\s+livraison)"
 # What a document's own reference is made of: its characters, and a dash a
 # PDF's rules left inside it ("FR-F033—763"), taken back out in _ticket_number.
-REFERENCE = r"[A-Z0-9][A-Z0-9\-/\u2013\u2014]{3,}"
+# A dot too ("20250314.38604"): cut at it, an ice supplier's number was its
+# date, and a second delivery that day was refused as a duplicate. Only
+# before a figure: a word glued after a sentence's dot (\u00ab 1234.Merci \u00bb) is no
+# part of the number. A sentence's dot after a number is stripped in
+# _ticket_number.
+REFERENCE = r"[A-Z0-9](?:[A-Z0-9\-/\u2013\u2014]|\.(?=\d)){3,}"
 # "N°", "No", "Nº" with an ordinal indicator, "#".
 NUMBER_MARK = r"(?:n\s*[°\u00bao]\.?|num[ée]ro|#)"
 DOCUMENT_NUMBER_RES = (
@@ -2179,7 +2187,7 @@ def _ticket_number(text: str, invoice_date: date | None) -> str:
                 return number
     match = STORE_TILL_RE.search(text.replace(" ", ""))
     if match:
-        return "-".join(match.groups())
+        return f"{'-'.join(match.groups())}-{invoice_date:%Y%m%d}" if invoice_date is not None else ""
     match = BARCODE_RE.search(text.replace(" ", ""))
     return match.group(1) if match else ""
 
