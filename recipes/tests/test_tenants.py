@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import tempfile
 import threading
-import unittest
 from datetime import date
 from decimal import Decimal
 from io import StringIO
@@ -65,22 +64,27 @@ class SalesTabTests(TwoTenantsTestCase):
         self.client.force_login(user)
         return self.client.get(reverse("recipes:sales_list")).content.decode()
 
+    def beta_s_account(self) -> None:
+        """Beta's L'Addition account, typed on its own « Identifiants »."""
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+
     def test_another_bar_is_offered_the_import(self):
         # Its own account (its « Identifiants »): the form is drawn there too.
+        self.beta_s_account()
         page = self.tab(self.user_b)
         self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("à configurer", page)
 
-    # MERGE NOTE for the till axis: this branch may not edit
-    # recipes/templates/recipes/_tab_sales.html, whose import form still says
-    # « Nécessite LADDITION_EMAIL et LADDITION_PASSWORD dans le fichier .env »
-    # - shown to every bar now that each fetches its own sales. The till
-    # axis rewrites that paragraph: once merged, this test passes and
-    # unittest reports an UNEXPECTED SUCCESS, which fails the run - take the
-    # decorator off then. Never ship the branch with it still failing.
-    @unittest.expectedFailure
+    @LADDITION_ACCOUNT
     def test_another_bar_s_tab_names_no_server_variable(self):
+        # The owner's .env values in the settings, Beta's own account typed:
+        # the card is drawn, and says nothing of the server's.
+        self.beta_s_account()
         page = self.tab(self.user_b)
+        self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("LADDITION_EMAIL", page)
         self.assertNotIn(".env", page)
 
@@ -104,6 +108,12 @@ class TriggerTests(TwoTenantsTestCase):
         return response, thread
 
     def test_another_bar_s_thread_works_for_another_bar(self):
+        # Its own account: the owner's .env values (LADDITION_ACCOUNT) are
+        # never another bar's (vault.server_setting).
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
         _response, thread = self.post(self.user_b)
         thread.assert_called_once()
         self.assertEqual(thread.call_args.kwargs["target"].tenant.pk, self.bar_b.pk)

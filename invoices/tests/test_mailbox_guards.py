@@ -41,7 +41,7 @@ from invoices.tests.test_email_search import fake_mailbox
 from returnables import patterns
 from returnables.patterns import PatternError
 from returnables.tests.test_patterns import NeverCompile, SlowPattern
-from tests.factories import make_supplier
+from tests.factories import make_invoice_type, make_supplier
 from tests.support import NoNetworkTestCase
 
 START, END = date(2026, 2, 1), date(2026, 2, 28)
@@ -306,6 +306,16 @@ class HostedMailboxTests(TwoTenantsTestCase):
                 bindings={"INVOICE_EMAIL_APP_PASSWORD": host},
             )
 
+    def beta_s_sources(self):
+        """A new hosted espace starts without the original bar's mailbox
+        source and slip format (invoices.seeds): Beta sets up its own."""
+        from returnables.tests.support import make_format
+
+        with bound_tenant(self.bar_b):
+            supplier = make_supplier(code="GROSSISTE_B", name="Grossiste Beta")
+            make_invoice_type(supplier=supplier, name="Grossiste Beta - Factures")
+            make_format(name="Grossiste Beta — bon du livreur", supplier=supplier)
+
     def search(self, tenant, message=None, **patterns_given):
         with (
             bound_tenant(tenant),
@@ -533,6 +543,7 @@ class HostedMailboxTests(TwoTenantsTestCase):
             self.assertEqual(vault.load().values, {})
 
     def test_the_gather_card_offers_another_bar_s_mailbox_once_filled_in(self):
+        self.beta_s_sources()
         with bound_tenant(self.bar_b):
             mailbox = [f"type-{pk}" for pk in InvoiceType.objects.values_list("pk", flat=True)]
             InvoiceType.objects.update(is_active=True)
@@ -673,6 +684,7 @@ class HostedMailboxTests(TwoTenantsTestCase):
                     self.assertTrue(imported, report.skipped)
 
     def test_consignes_offers_another_bar_s_slips_once_its_mailbox_is_filled_in(self):
+        self.beta_s_sources()
         self.client.force_login(self.user_b)
         page = self.client.get("/consignes/")
         self.assertContains(page, integrations.MAILBOX_TO_FILL)

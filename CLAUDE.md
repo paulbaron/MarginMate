@@ -3044,13 +3044,13 @@ its own - the views, the task bodies, each connector last:
   starts no browser: `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
   `test_ai_reading.py`, `test_chrome_policy.py`, `test_job_logs.py`,
   `accounts/tests/test_credentials_hosted.py`.
-- **Left to the till axis, and marked**: `recipes/templates/recipes/_tab_sales.html`
-  still says « Nécessite LADDITION_EMAIL et LADDITION_PASSWORD dans le
-  fichier .env » to every bar; `recipes/tests/test_tenants.py::
-  test_another_bar_s_tab_names_no_server_variable` is an
-  `expectedFailure` until that paragraph goes - then an unexpected success,
-  which fails the run: take the decorator off at the merge. The branch is
-  merged whole: its commits opened the connectors before hardening them.
+- **The till's tab names no server variable** to another bar
+  (`recipes/tests/test_tenants.py::test_another_bar_s_tab_names_no_server_variable`,
+  the owner's .env values in the settings and the bar's own account typed):
+  L'Addition's card is drawn only once its account is ready, and says
+  « Identifiants », never `LADDITION_EMAIL` nor « .env ». A new hosted
+  espace has no mailbox source nor slip format of its own (`invoices.seeds`):
+  a test of its mailbox gives it one (`HostedMailboxTests.beta_s_sources`).
 - **Not done, on purpose**: a kill switch per espace, an egress proxy that
   would let the portals open, a server-wide Metro throttle, fair OCR between
   bars, several mailboxes per espace. Every bar's store sits on the owner's
