@@ -304,6 +304,13 @@ robocopy "C:\MarginMate\backups\2026-10-01_101500\data" C:\MarginMate\data /E
 
 Retapez ensuite les mots de passe sur la page « Identifiants » (section 12).
 
+Ne remettez jamais **un seul fichier de base** à la main (`accounts.sqlite3`, ou le `db.sqlite3`
+d'un espace) sans arrêter d'abord le serveur et supprimer, à côté de lui, ses deux fichiers
+`-wal` et `-shm` : la base des comptes reste ouverte tant que le serveur tourne, et ces deux
+fichiers mêleraient des lignes plus récentes à la copie remise. Ils peuvent aussi rester après un
+arrêt brutal : c'est normal. La restauration complète ci-dessus (tout le dossier `data`) n'est pas
+concernée.
+
 La page « Données » de chaque espace permet aussi d'en exporter une archive.
 
 ## 9. Le journal
@@ -887,6 +894,41 @@ redemande votre mot de passe.
 Cette version ajoute deux migrations : `deploy.cmd` les applique lui-même (étape `migrate_tenants`,
 après la sauvegarde).
 
+## 14. Après la mise en ligne de l'audit du 04/10/2026
+
+Cette version n'ajoute aucune migration. Trois choses à faire une seule fois, après `deploy.cmd`,
+quand aucune récupération ne tourne.
+
+**1. Le seuil de rapprochement des produits.** L'ancien `.env.example` disait
+`PRODUCT_FUZZY_MATCH_THRESHOLD=92`, une valeur qui range un produit « ZERO » ou « LIGHT » sous le
+produit normal. Ouvrez `C:\MarginMate\app\.env` dans le Bloc-notes : s'il contient cette ligne avec
+92, remplacez 92 par 94 ou supprimez la ligne (94 est la valeur par défaut), puis relancez le
+serveur.
+
+**2. Les numéros de tickets à reprendre.** Les tickets Franprix sont désormais numérotés avec leur
+date, et les factures du fournisseur de glaçons avec leur vrai numéro (le point compris). Pour reprendre ceux déjà
+classés, pour chaque espace (son nom de dossier est dans `C:\MarginMate\data\tenants`) :
+
+```
+cd /d C:\MarginMate\app
+.venv\Scripts\python.exe manage.py tenant <dossier> refresh_document_numbers --dry-run
+.venv\Scripts\python.exe manage.py tenant <dossier> refresh_document_numbers
+```
+
+La première ligne montre ce qui changerait, sans rien enregistrer ; la seconde l'enregistre. Tant
+qu'elle n'a pas tourné, une deuxième photo d'un ticket Franprix déjà classé ne serait plus reconnue
+comme un doublon.
+
+**3. Les adresses e-mail des salariés.** Jusqu'ici, un employé à qui « Personnel » était coché pouvait
+changer l'adresse e-mail d'un collègue, où partent le lien de signature et son code. Ce n'est plus
+possible (section 13). Vérifiez une fois les adresses sur les fiches de vos salariés ; le journal de
+chaque demande de signature dit à quelle adresse le lien et le code sont partis.
+
+Facultatif : une sauvegarde « Données » (export complet) faite avant cette version ne ramène qu'un
+seul document par fournisseur parmi ceux saisis à la main sans numéro ni fichier. Refaites un export
+complet après la mise en ligne si vous gardez ces archives comme sauvegarde (les sauvegardes de la
+section 8 ne sont pas concernées).
+
 ## Limites connues
 
 - **Taille des envois.** Cloudflare, dans son offre gratuite, refuse les envois de plus de 100 Mo,
@@ -915,3 +957,11 @@ après la sauvegarde).
 - **Un seul processus.** Le serveur est un seul processus Waitress, avec 8 fils. C'est voulu :
   l'espace de chaque requête et le compteur de tentatives de connexion vivent dans ce processus.
 - **Pas de journal des visites.** Seules les erreurs et les refus sont notés.
+- **Les gros envois de bons et les PDF trop lourds.** « Ajouter des bons » prend 20 documents au plus
+  par envoi, et une minute de lecture au plus : envoyez une grosse pile en plusieurs fois. Un PDF dont
+  le contenu est anormalement lourd à lire ou à afficher est refusé avec un message, sans bloquer le
+  site des autres bars.
+- **Le code de signature.** Un code tapé sur la page de signature vaut une heure dans ce navigateur ;
+  au-delà, la page en redemande un. Six codes par e-mail au plus par relevé et par jour, et plus aucun
+  par e-mail après trente codes faux avec un même lien : le code que vous remettez vous-même marche
+  toujours, et « Nouveau lien » remet le compteur à zéro.
