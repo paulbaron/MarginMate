@@ -145,6 +145,41 @@ class RereadTicketTests(TestCase):
         self.assertEqual([line.raw_name for line in self.ticket.lines.all()], ["Pain Pita"])
         self.assertEqual(self.ticket.lines.get().total_ht, D("9.48"))
 
+    def test_a_charge_reading_no_column_holds_changes_nothing_either(self):
+        """A shop of charges is refiled as one line of its total: 1 500 000
+        is refused there (LineTooWideError), and the page said so - with the
+        new reading's text, and its date where there was none, already
+        saved beside the old lines."""
+        Supplier.objects.filter(pk=self.sabbh.pk).update(expenses_only=True)
+        Invoice.objects.filter(pk=self.ticket.pk).update(ocr_text="ANCIEN TEXTE", invoice_date=None)
+        absurd = ParsedInvoice(
+            supplier_code="SABBH",
+            invoice_number="",
+            invoice_date=date(2026, 7, 14),
+            printed_total_ttc=D("1500000.00"),
+            source_text="NOUVEAU TEXTE 1 500 000,00",
+            lines=[
+                ParsedLine(
+                    raw_name="Electricite",
+                    quantity=D("1"),
+                    total_volume=D("0"),
+                    unit_cost_ht=D("33.33"),
+                    total_ht=D("33.33"),
+                    vat_rate=D("0.2"),
+                )
+            ],
+        )
+        read = mock.Mock(parsed=absurd, problem="", preview=None)
+        with mock.patch("invoices.receipts.read_receipt", return_value=read):
+            response = self.client.post(self.url, {"action": "reread"})
+        self.assertTrue(any("dépasse ce que MarginMate" in message for message in messages_of(response)))
+        self.ticket.refresh_from_db()
+        self.assertEqual((self.ticket.ocr_text, self.ticket.invoice_date), ("ANCIEN TEXTE", None))
+        self.assertEqual(self.ticket.printed_total_ttc, D("10.00"))
+        self.assertEqual(
+            [(line.raw_name, line.total_ht) for line in self.ticket.lines.all()], [("Pain Pita", D("9.48"))]
+        )
+
     def test_a_line_a_stock_take_was_priced_from_stops_it(self):
         line = self.ticket.lines.get()
         count = make_stock_take_line(

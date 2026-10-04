@@ -2140,10 +2140,13 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
     if supplier.expenses_only:
         from .importing import refile_as_charge
 
-        invoice.ocr_text = parsed.source_text
-        invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
-        invoice.save(update_fields=["ocr_text", "invoice_date"])
-        refile_as_charge(invoice, parsed)
+        # One piece: a reading refused (LineTooWideError) left its text, and
+        # its date, saved beside the old lines.
+        with transaction.atomic():
+            invoice.ocr_text = parsed.source_text
+            invoice.invoice_date = parsed.invoice_date or invoice.invoice_date
+            invoice.save(update_fields=["ocr_text", "invoice_date"])
+            refile_as_charge(invoice, parsed)
         return f"Document relu : {invoice.lines.count()} poste(s) de charge."
     label_placeholder_lines(supplier, parsed)
     invoice_date = parsed.invoice_date or invoice.invoice_date
