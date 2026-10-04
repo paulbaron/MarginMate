@@ -4733,8 +4733,9 @@ imports (`transfer/legacy.py`).
   for suppliers and the payers retained (« Banque »: learnt from that
   bar's own links and choices, naming its payers), the treasury's points
   and adjustments (« Banque » too: that bar's own balances), « Combler les
-  écarts »' exclusions and duration (never exported, below), « Personnel »
-  and the « Identifiants » vault.
+  écarts »' exclusions and duration and « Prévoir les courses »' settings
+  and exclusions (never exported, below), « Personnel » and the
+  « Identifiants » vault.
 - **An archive written before a section existed is read as if it had it**
   (`archive.CARVED`, `carved`, `manifest_sections`, `manifest_counts`): one
   declaring « banque » - or « consignes » - and not the new key carries the
@@ -4945,7 +4946,10 @@ imports (`transfer/legacy.py`).
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
   fills it again when it is drawn), « Combler les écarts »' list
   (`GapFillEntry`, a scratch list that goes with its stock take), its
-  exclusions (`GapExclusion`) and its duration (`GapFillSetting`), the
+  exclusions (`GapExclusion`) and its duration (`GapFillSetting`),
+  « Prévoir les courses »' settings (`ShoppingSetting`) and exclusions
+  (`ShoppingExclusion`, CASCADE with its article and its store: a clear
+  deleting either takes the row), the
   notifications (`notifications`' reminders, alerts, settings and history,
   the central `accounts.PushDevice`), the automatic gathers
   (`invoices.AutoGather`), the automatic sales imports
@@ -5727,6 +5731,267 @@ sub-recipe level in `build_pools`, two per recipe in `choice_groups`, every
 recipe read once inside one `variation_scope`); the plan grows with the
 amount, a sale at a time and an engine call per sale that is not
 independent - which is what `MAX_AMOUNT` bounds.
+
+### « Prévoir les courses » (`/courses/`, `inventory/shopping.py`, `inventory/shopping_data.py`)
+
+What the owner usually takes at ONE store if he shops there TODAY, to last
+until the visit after it, from the purchase history alone - no stock count.
+**The list assumes the purchase is made today**: `?dans=` is how long that
+purchase must last (« Ces achats doivent tenir jusqu'au passage suivant,
+dans [N] jours »), never the day of a trip planned later - nothing plans a
+trip on another day, and the screen says so (« Si vous y allez
+aujourd'hui : de quoi tenir N jours, jusqu'au passage suivant », the
+review's finding: read as « my trip is in N days », a list prepared two
+days ahead dropped lines and doubled quantities). A GET page of
+« Produits & charges » (no `VIEW_AREAS` entry, not in `STOCK_TAKE_VIEWS`), entered from that
+page's header (« 🛒 Prévoir les courses »); « Rythme d'achat »
+(`/courses/rythme/`) answers his « à quelle régularité j'achète chaque
+article » for every article, or for one store's. Three layers:
+`shopping.py` is pure (stdlib only, no Django import; `Prepared.build` is
+its single entry), `shopping_data.prepare(today, settings, now)` is the one
+read of the database, and the views in `inventory/views.py` (not a
+`shopping_views.py`: `tests/test_json_islands.py` sweeps `*/views.py`)
+draw it. Designed and measured on a scratch harness over the owner's
+history before any code: the decisions below are the measured ones, and
+the figures stay out of this public repository.
+
+**One calibrated chance per article** already bought at the store:
+`sigmoid(logit(habit) + MODEL_C + MODEL_GAMMA·ln(clip(need, NEED_MIN,
+NEED_CAP)) − MODEL_DELTA·[bought on fewer than FEW_PURCHASES days])`.
+- *habit*: the share of the store's visits that took it, each visit
+  weighted `0.5 ** (age / memory)` (« Mémoire des habitudes », a visit that
+  many months old counts half), plus a prior worth one visit at 10 %,
+  counted **from the article's first purchase ANYWHERE** - a new article is
+  not diluted by the visits made before it existed (the owner's « je ne
+  l'achetais pas au début »), a dropped one fades visit after visit.
+- *need*: how used up the last purchase, made at ANY store, will be once
+  today's purchase has had to last - the typed days (`?dans=`), else the
+  store's usual gap (the median of the real gaps between its last 31
+  visits; 14 days under 3 visits). The till clock for an article the
+  recipes pour, the calendar clock (EW purchase rate, 90-day half-life) for
+  the others; no need under 3 purchase days.
+- **The three constants were fitted once**, by maximum likelihood with
+  `logit(habit)` as an offset, on the tuning half of the history only, then
+  checked on the halves never tuned on. They are named in `shopping.py`
+  with that provenance and pinned by `CalibrationTests`
+  (`inventory/tests/test_shopping.py`): **refit only with a recorded
+  procedure of the same kind, and update that test in the same change.**
+  They come from this one bar; whether another bar gets its own refit is
+  the owner's call.
+- The harness's reference paired each visit with itself for a store with
+  fewer than 31 visits (usual gap 0). Production takes the real gaps; a
+  refit with the fix moved the constants by less than their noise, so they
+  were kept - `UsualGapTests` pins the rule. Re-measuring means re-running
+  the harness with production's rule, not quoting the old figures.
+
+**The list and its folds** (`plan_store`, one `StorePlan`; each article in
+one section at most). « À acheter » holds every unguarded line at the
+threshold or above (« Proposer un article à partir de … % », 25 by
+default), sorted by chance; « Peut-être » [threshold/2, threshold) and the
+nagged lines; then « Nouveaux ici » (fewer than 3 purchase days, first
+bought within 90), « Plus acheté ? », « Acheté ailleurs maintenant » (10
+shown, « Et N autre(s). » under them), « À acheter ailleurs » (below),
+« Les plus achetés ici » (`|money` €). Nothing under the threshold is ever
+on the list; an empty list says so and opens « Peut-être » and « Les plus
+achetés ici »; a store under 5 visits says « Peu de passages ici : liste
+indicative. » and opens « Les plus achetés ici » only (« Peut-être » stays
+folded while the list has lines). **The empty list's sentence names only
+the folds drawn**: « Rien de sûr à racheter ici aujourd'hui. » then
+« Regardez « Peut-être » et vos achats habituels ci-dessous. », « Regardez
+« Peut-être » ci-dessous. », « Regardez vos achats habituels ci-dessous. »
+or nothing more - a store whose candidates all moved elsewhere sent the
+owner to a « Peut-être » not on the page. A store whose every
+article is excluded says so; « Premier passage ici » (no candidate at
+all) cannot come from the database - every movement has its article - and
+is tested on a handed-in `Prepared`. An article never bought at a store is
+never proposed there: no history rule reaches a first purchase.
+- **Two guards keep a line off the list, never silently**: a deposit-like
+  article (returns at least half of what was bought - in the fold
+  « Exclusions » as « consignes ? » with « Exclure la catégorie », or « Ne
+  plus proposer » for one with no category), and an article whose last 3
+  purchases were all at other stores (« Acheté ailleurs maintenant »).
+- **« plus acheté ? » and « en pause » are labels, not gates** (silent
+  for more than max(3 × its median interval, 60 days); « en pause » when a
+  recipe still sold it in the last 30 covered days): as gates they cost the
+  seasonal articles that come back after a winter's silence. The line keeps
+  its badge and its chance; the nag rule bounds its repeats.
+- **The nag rule**: a line listed and not bought at the store's last 3
+  visits (5 when the habit alone lists it) moves to « Peut-être » with
+  « Aurait été proposé à vos N derniers passages ici, sans être pris. ». Each of those
+  visits is REPLAYED on the data cut at it (same settings, at the store's
+  usual gap at that visit - a typed `?dans=` is today's page's and is never
+  replayed -, nag rule left out); a purchase there, or a visit under the
+  threshold, resets it. Keeping it or not is the owner's call (a calmer
+  list against a slightly more complete one).
+- **Quantity**: the median of the last 3 purchase days HERE, in article
+  units (Decimal), and in the store's own product - the product bought on
+  most of the last 5 days here (ties: the latest), counted as the
+  `statistics.median_high` of its units over its last 3 days, so always an
+  amount really bought; « (2 colis de 6) » when the colisage divides it;
+  article units alone for a product bought by measure or with no name. A
+  typed horizon longer than the usual gap takes as many usual quantities
+  as it holds usual gaps, rounded half up (the usual purchase covers one
+  gap: at a weekly store 8 days is 1, 14 is 2, 30 is 4; « 2 × (…) — pour
+  14 jours »). Never the article's rate, which would count another store's
+  share as this one's. Not measured: no ground truth.
+- One French sentence a line, built from the figures the chance uses
+  (« Pris 5 fois sur 8 passages en 6 mois ; dernier achat il y a 4 jours,
+  d'habitude tous les 7 jours. », an invented one), and the chance as
+  « 80 % · presque sûr » (rounded DOWN, so no line reads under the
+  threshold it passed; its `data-sort` the bare figure). The sentence and
+  the folds give the median interval between purchase days (rounded half
+  up, « tous les jours » for 1), never the cover the need uses: the silence
+  since the last purchase stretches that cover. The till part reads « la
+  caisse a vendu P % du dernier achat (…) » or « a écoulé tout » by the
+  percentage shown (P ≥ 100 is « tout »), never negative (a net refund
+  since the purchase reads 0 %); past a lagging import, « la caisse
+  aurait vendu environ P % … (il y a N jours, estimé depuis le JJ/MM) » /
+  « aurait écoulé tout … », JJ/MM the first day the import does not cover.
+- **The confidence word is calibrated only on lines with a live rhythm**: a
+  nagged line and a « plus acheté ? » line read « P % · à vérifier »
+  (`shopping.UNSURE_WORD`), their chance unchanged; « en pause » keeps its
+  calibrated word.
+- **« À acheter ailleurs »** (`_due_elsewhere`, 5 at most): an article
+  never bought here, bought on 3 days or more within the year, whose
+  calendar need at this store's horizon has come - the highest need first,
+  after these rules: the « plus acheté ? » rule applies (an abandoned
+  article is left out: its need would otherwise rank highest); an « en
+  pause » one stays, with its badge; it never points to a store the
+  article is « Pas ici » at, and leaves the article out when no other
+  offered store remains. Each row links to its usual store's list, says
+  « Dernier achat il y a N jours, d'habitude tous les N jours. » and has
+  « Ne plus proposer » (everywhere, asked first, said in « Exclusions »):
+  it is dismissed where it is read.
+- **« Rythme d'achat »** (`shopping.rhythms`): « plus acheté ? » / « en
+  pause » are decided before « nouveau », as on the store page. « Prochain
+  achat estimé » is « Dernier achat » + « Rythme » (rounded half up; « à
+  racheter » once today or past), blank for « plus acheté ? », « en
+  pause », « consigne ? » and under 3 purchase days. « Tendance » counts
+  the earlier rate from the first purchase when that is within the year,
+  and is blank with fewer than 90 such days. « Caisse / semaine » counts
+  the days the till import covers (and since the till started), and the
+  page says « Ventes de la caisse à jour au … : « Caisse / semaine »
+  s'arrête à cette date. » past a lag of 3 days (`shopping.till_note`,
+  public for it).
+
+**What is read** (`shopping_data.prepare`, a constant number of queries:
+`inventory/tests/test_shopping_data.py` pins 5 with the till off and 20
+with it on, and `test_shopping_page.PageCostTests` the whole page):
+- every PURCHASE movement of an invoice line, BOTH signs, in one streamed
+  scan, dated by its `occurred_on`, else its invoice's date - **never
+  `created_at`**; an undated document or one dated after today is left
+  out. A negative movement is a return (summed per article for the deposit
+  guard), **never a purchase nor a visit**. A visit is a day with a
+  positive purchase at the store, on any article, excluded ones included.
+  Today is history: a visit made this morning is the last one.
+- the stores offered: every supplier with a purchase, but the suppliers
+  of charges (`expenses_only`) and the AI pseudo-supplier; what was bought
+  at those still counts. « Autres enseignes » holds those under 3 visits in
+  the year.
+- **the till, only with « Tenir compte des ventes de la caisse » on** -
+  off, not one sales table is read and the engine never runs. The design's
+  Option A: `attribute_sales` runs ONCE over the window W = (last complete
+  day − 365, min(coverage, last complete day)], its capacity the window's
+  purchases floored at 0, then each article's figure is spread per day -
+  the exact pours by the day's sales, the « OU » share by what each day's
+  choices could have poured - so **the days add back up to the engine's
+  totals over W** (pinned). The till's start is clamped to W. **The till's
+  first day is the first day a till import recorded a sale** (a till
+  button's day, `PosProductDailyQuantity`, or a `RecipeSale` not typed by
+  hand: any source but « manual »), clamped to W. A sale typed by hand and
+  a sale document count as consumption and never start the till: older
+  than the import, one put months the till never read into k, and a young
+  import read « la caisse a vendu » far more than it had. Only a bar with
+  no till import at all starts from the first of its own sales
+  (`_till_first_day`). No sale in W (or a coverage older than it): the
+  till is off for the page.
+- **A lagging import extrapolates**: past `covered_until` the till clock
+  runs on at its recent rate, the line's till sentence says « aurait
+  vendu environ … estimé depuis le JJ/MM » (above), and the page warns
+  « Ventes de la caisse à jour au … : la suite est estimée à votre rythme
+  de vente. » once the lag passes 3 days (`STALE_DAYS`). k (bought per unit poured) is computed on
+  the covered purchases only, and used only between 0.25 and 5: outside,
+  the recipes do not explain the purchases and the calendar clock is used.
+
+**The page** (`views.shopping_list`; `shopping_rhythm` on the same prepared
+data and the same « plus acheté ? » / « en pause » rule). The two pages
+agree on the labels and on the next date; the list's « d'habitude tous les
+N jours » is the median over all purchase days while « Rythme » takes the
+gaps ending in the last year (else all), so the two figures can differ for
+an article whose rhythm changed. `?fournisseur=` (`is_id`; a store it does
+not offer falls back on the most visited, with « Enseigne introuvable :
+voici la plus fréquentée. ») and `?dans=` (ASCII digits 1 to 90,
+`read_bounded_number`; anything else is set aside with « Passage suivant :
+un nombre de jours de 1 à 90. ») - never a 500. Untyped, the days are
+« (votre rythme ici) » only from `views.GAP_MIN_VISITS` (3) visits, where
+`shopping._usual_gap` measures the store's own gap - « (par défaut) »
+under it, where they are `DEFAULT_GAP_DAYS`; the « Enseigne » menu says
+« tous les N jours » from the same count (`StatesTests` pins the view's
+constant to shopping's rule). Its forms all POST, a GET goes to the list, and
+each answers with ONE redirect to the list of the store it came from (its
+`dans` kept), its message said where it lands - `_messages_by_place` now
+takes the places (`GAP_FILLER_PLACES` keeps the gap filler's two; this page
+has `liste` above « À acheter », `reglages`, `exclusions`); with no store
+to draw, every message goes to the top:
+- « Réglages » (`shopping_settings`, `#reglages`): `seuil` 10-60, `memoire`
+  2-24 months, `caisse` (a checkbox); ASCII digits only, a refusal per
+  field and nothing written; « Valeurs par défaut » (`defaut`) deletes the
+  row. **Two forms, one submit button each**, each its own busy label
+  (« Enregistrement… », « Remise par défaut… »): ui.js labels the FIRST
+  busy button of the form sent, so beside « Enregistrer » in one form,
+  « Valeurs par défaut » turned the other button into « Enregistrement… »
+  and stayed live for a second press. `ShoppingSetting` (inventory 0021,
+  one row, pk 1, absent until something is saved - `current()` never
+  writes).
+- `shopping_exclude`: `article` everywhere (« Ne plus proposer », with
+  `data-confirm`; it deletes the article's « Pas ici » rows), `article` +
+  `chez` (« Pas ici », the store left out at - its own field: `fournisseur`
+  only says which list to go back to, and every form carries it) or
+  `categorie` (one some article carries; "" is the articles with none).
+  `retour` says where the message lands: `liste` (a line of « À
+  acheter »), `rythme` (« Rythme d'achat »'s « Ne jamais proposer »), else
+  the fold. An unreadable article, store or category is one message
+  (« … introuvable : rien n'a été exclu. ») and nothing is written.
+- `shopping_include` (`exclusion`): « Réinclus : … », « Cette exclusion
+  n'existe plus : rien n'a changé. », or « … reste exclu : … » when the
+  article stays out through its category or its everywhere row.
+- `ShoppingExclusion` (inventory 0021): an article XOR a category, a
+  category always everywhere, an article once everywhere and once per
+  store - check and unique constraints, `test_shopping_models`. **Neither
+  model is exported by « Données »**; both FKs are CASCADE (a clear deleting
+  an article or a supplier takes the rows; a merge drops the source's).
+- Migration `inventory/0021` is WRITTEN and left to be applied (the owner,
+  after a backup, `migrate_tenants`; deploy.cmd in production). Until then
+  not only /courses/ and its forms answer « no such table » (`prepare`
+  reads the exclusions on every draw): so does deleting or merging an
+  article (« Supprimer les articles vides », a merge, « Données » clearing
+  the associations) and deleting a supplier (its page, « Données ») - both
+  `ShoppingExclusion` foreign keys are CASCADE, so Django's collector reads
+  the table before it deletes.
+- **Ids**: only the ids a redirect lands on keep their French (`a-acheter`,
+  `reglages`, `exclusions`: `SHOPPING_ANCHORS`, the « Toolchain »
+  precedent); the other folds' are English (`maybe`, `most-bought`).
+- **On a phone** the lines are cards (`_shopping_lines.html`, and « À
+  acheter ailleurs »): the « Pourquoi » sentence runs across the card
+  (`.phone-card-wide`) - squeezed beside the quantity and the chance it
+  took a third of it. The days' label is a sentence: under 600 px it wraps
+  (`.filter-row.shopping-form label`; `.filter-row label` kept it on one
+  line, past the screen).
+- On a phone `.actions-compact` is a grid of two: the last of an odd count
+  of header buttons takes the row across (marginmate.css), so « Supprimer
+  les articles vides », « 🛒 Prévoir les courses » and « + Nouvel article »
+  read two then one (`test_products_phone_browser`, run by the owner).
+
+The tests: `test_shopping` (the pure module, every rule on invented data,
+a speed test; every fold's cap and year bound, the 90-day « Nouveaux ici »
+bound, k's lower bound and « one section at most » pinned),
+`test_shopping_models`, `test_shopping_data` (the till's first day:
+`TillWindowTests`, `TillStartOnTheLineTests`), `test_shopping_page` (every
+state and form of both pages, each form posted as the page draws it,
+placed messages, markup never echoed, the query cost), and the sweeps in
+`tests/test_views_smoke.py` (`make_shopping_history`, the invented fixture
+the others import; `ShoppingParameterSmokeTests`), `tests/test_ui.py`
+(the cards' labels, the wide « Pourquoi ») and `tests/test_navigation.py`.
 
 ### L'Addition (the till)
 

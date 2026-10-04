@@ -428,6 +428,105 @@ class GapFillSetting(models.Model):
         return cls.objects.filter(pk=cls.SINGLETON_PK).first() or cls(pk=cls.SINGLETON_PK)
 
 
+class ShoppingSetting(models.Model):
+    """« Prévoir les courses »' own settings for the espace: one row (pk 1),
+    absent until the owner changes something.
+
+    `threshold_percent`: a line is proposed from that chance on (« Proposer
+    un article à partir de … % de chances »), and the page shows the lines
+    from half of it under « Peut-être ». `memory_months`: how fast a habit
+    fades - a visit that many months old counts half (« Mémoire des
+    habitudes »). `use_till`: whether the till's sales say how much of the
+    last purchase is used up (« Tenir compte des ventes de la caisse »);
+    off, no till query is made. The ranges are the form's and the
+    database's (check constraints below). Never exported by « Données »:
+    like the exclusions, it belongs to this page (inventory/shopping.py)."""
+
+    SINGLETON_PK = 1
+    #: Inclusive bounds, as the form reads them and the database checks them.
+    THRESHOLD_RANGE = (10, 60)
+    MEMORY_RANGE = (2, 24)
+
+    threshold_percent = models.PositiveSmallIntegerField(default=25)
+    memory_months = models.PositiveSmallIntegerField(default=6)
+    use_till = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(id=1), name="shopping_setting_one_row"),
+            models.CheckConstraint(
+                condition=models.Q(threshold_percent__gte=10, threshold_percent__lte=60),
+                name="shopping_setting_threshold_in_range",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(memory_months__gte=2, memory_months__lte=24),
+                name="shopping_setting_memory_in_range",
+            ),
+        ]
+
+    @classmethod
+    def current(cls) -> "ShoppingSetting":
+        """The stored row, else the defaults unsaved: a page drawn writes
+        nothing."""
+        return cls.objects.filter(pk=cls.SINGLETON_PK).first() or cls(pk=cls.SINGLETON_PK)
+
+
+class ShoppingExclusion(models.Model):
+    """An article, or a whole category of articles, never proposed by
+    « Prévoir les courses » - everywhere, or (an article only) at one store
+    (« Pas ici »): the owner's choice, kept for the espace until he takes it
+    back.
+
+    `stock_type` for one article, `category` for every article filed under
+    that category name - those classified into it later included; a blank
+    category ("") is the articles with none. Exactly one of the two, and a
+    category is always left out everywhere: `supplier` is set only beside
+    an article. An article is left out once everywhere and once at each
+    store; excluding it everywhere deletes its store rows on the page, the
+    database does not ask it. Never exported by « Données »: like the
+    setting, it belongs to this page. CASCADE on both: the « Données »
+    clears delete articles and suppliers, and an article merged into another
+    or deleted takes its rows with it (like GapExclusion)."""
+
+    stock_type = models.ForeignKey(
+        StockType, null=True, blank=True, on_delete=models.CASCADE, related_name="shopping_exclusions"
+    )
+    category = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    supplier = models.ForeignKey(
+        "invoices.Supplier", null=True, blank=True, on_delete=models.CASCADE, related_name="shopping_exclusions"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(stock_type__isnull=False) & models.Q(category__isnull=True))
+                | (models.Q(stock_type__isnull=True) & models.Q(category__isnull=False)),
+                name="shopping_exclusion_article_or_category",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(category__isnull=True) | models.Q(supplier__isnull=True),
+                name="shopping_exclusion_category_everywhere",
+            ),
+            models.UniqueConstraint(
+                fields=["stock_type"],
+                condition=models.Q(supplier__isnull=True),
+                name="shopping_exclusion_article_once",
+            ),
+            models.UniqueConstraint(
+                fields=["stock_type", "supplier"], name="shopping_exclusion_article_once_per_store"
+            ),
+        ]
+
+    def __str__(self):
+        if self.stock_type_id is None:
+            return f"Catégorie « {self.category} »"
+        if self.supplier_id is None:
+            return str(self.stock_type)
+        return f"{self.stock_type} (chez {self.supplier})"
+
+
 class StockTakeLine(models.Model):
     """One counted product OR stock type within a StockTake - exactly one of
     the two (see the CheckConstraint below): a specific product when you

@@ -627,7 +627,10 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
 
         Two buttons since « Exporter… » and « Importer… » left for « Données »
         (01/10/2026): an article with no product brings « Supprimer les
-        articles vides » beside « + Nouvel article »."""
+        articles vides » beside « + Nouvel article ». Three since « 🛒 Prévoir
+        les courses » (04/10/2026), between them: the first two share a row,
+        the last - an odd one out - takes the next row across (marginmate.css,
+        `.actions-compact > :last-child:nth-child(odd)`)."""
         make_stock_type(name="Article vide exemple")
         self.first_visit()
         head = self.script(
@@ -635,17 +638,22 @@ class ProductsOnAPhoneInBrowserTests(StaticLiveServerTestCase):
             "return {left: row.left, right: row.right, buttons:"
             " Array.from(document.querySelectorAll('.page-header .actions .btn')).map(function (b) {"
             "  var r = b.getBoundingClientRect();"
-            "  return {top: r.top, left: r.left, right: r.right, width: r.width, height: r.height}; })};"
+            "  return {top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width,"
+            "   height: r.height}; })};"
         )
         buttons = head["buttons"]
-        self.assertEqual(len(buttons), 2)
-        first, second = buttons
-        self.assertAlmostEqual(first["top"], second["top"], delta=1, msg="the two buttons are not side by side")
+        self.assertEqual(len(buttons), 3)
+        first, second, third = buttons
+        self.assertAlmostEqual(first["top"], second["top"], delta=1, msg="the first two buttons are not side by side")
         # A column each, across the page: not two buttons of their own widths
         # wrapped wherever the line ran out.
         self.assertAlmostEqual(first["left"], head["left"], delta=1, msg="the buttons do not start at the page's edge")
         self.assertAlmostEqual(second["right"], head["right"], delta=1, msg="the two buttons do not fill the row")
         self.assertAlmostEqual(first["width"], second["width"], delta=1, msg="two buttons of two widths")
+        # The third under them, from edge to edge: not half a row beside nothing.
+        self.assertGreater(third["top"], max(first["bottom"], second["bottom"]) - 1, "the third is not under the two")
+        self.assertAlmostEqual(third["left"], head["left"], delta=1, msg="the third does not start at the page's edge")
+        self.assertAlmostEqual(third["right"], head["right"], delta=1, msg="the third does not take the row across")
         self.assertEqual([button["height"] for button in buttons if button["height"] < 44], [])
 
         figures = self.script(
