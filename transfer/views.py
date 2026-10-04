@@ -774,6 +774,9 @@ def data_import_stage(request, token):
         _preview_import(stage, strategies)
     except (ArchiveError, Busy) as exc:
         messages.error(request, str(exc))
+    except Exception as exc:  # a preview is rolled back; the stage is kept to try again
+        logger.exception("import preview failed")
+        messages.error(request, f"L'aperçu a échoué, rien n'a été changé : {safety.error_text(exc, logged=True)}")
     return redirect("transfer:data_import_stage", token=token)
 
 

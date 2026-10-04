@@ -1184,6 +1184,21 @@ class RefusalTests(MediaMixin, TestCase):
             report.skipped,
         )
 
+    def test_a_case_size_past_what_the_database_holds_skips_the_document(self):
+        """codec.load reads any int: a « colisage » from 2**63 was an
+        OverflowError on save, the preview a 500 (audit 04/10/2026)."""
+        for colisage in (10**20, 2**31):
+            with self.subTest(colisage=colisage):
+                report = self._import(
+                    self._edit("M-0001", lambda record, colisage=colisage: record["lines"][0].update(colisage=colisage))
+                )
+                self.assertIn(
+                    f"Facture Metro n° M-0001 : ligne n°1 : « colisage » : nombre hors limites (« {colisage} ») : "
+                    "2 147 483 647 au plus, en plus ou en moins",
+                    report.skipped,
+                )
+                self.assertFalse(Invoice.objects.filter(invoice_number="M-0001").exists())
+
     def test_an_unknown_status_skips_the_document(self):
         report = self._import(self._edit("U-0001", lambda record: record.update(status="PERDU")))
         self.assertIn("Facture UBA n° U-0001 : « status » : valeur inconnue (« PERDU »)", report.skipped)

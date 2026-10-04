@@ -625,6 +625,7 @@ class InvoicesSection(Section):
             product_key = (product_key[0], product_key[1])
             try:
                 values = {name: codec.load(line_model, name, item[name]) for name in LINE_FIELDS if name in item}
+                codec.check_count("colisage", values.get("colisage"))
             except codec.FieldValueError as exc:
                 raise codec.FieldValueError(f"{where} : {exc}") from None
             supplier = self._ctx.suppliers.resolve(product_key[0])

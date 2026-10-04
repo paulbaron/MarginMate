@@ -548,6 +548,19 @@ class ImportTests(FakeSectionsMixin, TestCase):
             self.post("importer")
         before.assert_called_once_with("import", set())
 
+    def test_a_preview_that_fails_is_said_and_keeps_the_stage(self):
+        """A value no section bounds yet failing in the database: said on the
+        page, never a 500 - the preview is rolled back (audit 04/10/2026)."""
+        failure = OverflowError("Python int too large to convert to SQLite INTEGER")
+        with (
+            mock.patch("transfer.views.run_import", side_effect=failure),
+            self.assertLogs("transfer.views", "ERROR"),
+        ):
+            response = self.post("previsualiser")
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+        self.assertEqual(said(response), [f"L'aperçu a échoué, rien n'a été changé : {safety.SERVER_ERROR}"])
+        self.assertIsNotNone(staging.get(self.stage.token))
+
     def test_a_confirm_other_than_the_preview_previews_again(self):
         self.post("previsualiser")
         StockType.objects.filter(name="Recette A").update(loss_percent="12.00")
