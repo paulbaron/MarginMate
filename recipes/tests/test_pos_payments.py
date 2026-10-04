@@ -776,13 +776,14 @@ class ImportCommandTests(TestCase):
         output = self.run_command()
         self.assertEqual(stored(), [(june(1), CB, Decimal("7.50"), 1)])
         self.assertIn("Paiements lus : 7,50 €", output)
-        self.assertIn("Recorded the payments of 1 till day(s)", output)
+        # The job's own words: one writer (tasks.store_reading) for both.
+        self.assertIn("Paiements enregistrés : 1 jour(s) de caisse remplacé(s), 0 déjà à jour.", output)
 
     def test_the_dry_run_reads_them_and_writes_nothing(self):
         output = self.run_command("--dry-run")
         self.assertEqual(stored(), [])
         self.assertIn("Paiements lus : 7,50 €", output)
-        self.assertNotIn("Recorded the payments", output)
+        self.assertNotIn("Paiements enregistrés", output)
         self.assertEqual(PosProductDailyQuantity.objects.count(), 0)
 
     def test_the_command_writes_the_days_sales_with_their_payments(self):
@@ -796,7 +797,7 @@ class ImportCommandTests(TestCase):
             list(PosProductDailyQuantity.objects.values_list("product__name", "sold_on", "revenue_ttc")),
             [("Pinte Exemple", june(1), Decimal("7.50"))],
         )
-        self.assertIn("1 till product(s) seen.", output)
+        self.assertIn("1 produits de caisse vus.", output)
         out = StringIO()
         call_command("laddition_backfill_payments", "--folder", str(Path(self.path).parent), "--dry-run", stdout=out)
         self.assertIn("1 jour(s) déjà à jour.", out.getvalue())

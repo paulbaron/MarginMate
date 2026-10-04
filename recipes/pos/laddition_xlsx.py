@@ -209,6 +209,10 @@ class ParsedExport:
     unusual_quantity_lines: int = 0
     #: (till name, day) pairs a later file restated - see parse_sales_exports.
     repeated_days: int = 0
+    #: Whether this reading read sales at all. False for a file of payments
+    #: alone (recipes/pos/till_file.py, « Encaissements »): its writer then
+    #: writes no sales and says nothing of them (tasks.store_reading).
+    sales_read: bool = True
 
     # -- the payments (the `SalesDocument` sheet) -------------------------------------
     #: {(day, method): DayPayment}, the method as PosDailyPayment.canonical

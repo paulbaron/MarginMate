@@ -42,8 +42,8 @@ from django.core.management.base import BaseCommand, CommandError
 from accounts import paths
 from recipes.integration import require_tenant_for_command
 from recipes.management.commands.laddition_backfill_revenue import SHOWN, euros
-from recipes.models import PosDailyPayment, PosProductDailyQuantity
-from recipes.payments import by_method, changed_days, day_total, oddities, replace_days
+from recipes.models import PosDailyPayment
+from recipes.payments import by_method, changed_days, day_total, days_with_sales, oddities, replace_days
 from recipes.pos.laddition_xlsx import (
     DayPayment,
     LadditionExportError,
@@ -206,7 +206,7 @@ class Command(BaseCommand):
         lines sheet holds no row for it no import can ever give it a day in
         « Ventes ». Listed with the others it drew, on every run, the advice
         to import again what no import brings."""
-        with_sales = set(PosProductDailyQuantity.objects.values_list("sold_on", flat=True).distinct())
+        with_sales = days_with_sales()
         missing = [day for day in sorted(readings) if day not in with_sales]
         without_sales = [(day, day_total(readings[day])) for day in missing if readings[day]]
         fill, unchanged = changed_days(readings, [day for day in readings if day in with_sales])

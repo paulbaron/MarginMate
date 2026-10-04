@@ -16,14 +16,14 @@ A day the reading does not cover is never touched.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import TypeVar
 
 from django.db import transaction
 
-from .models import PosDailyPayment
+from .models import PosDailyPayment, PosProductDailyQuantity
 
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
 BATCH = 500
@@ -43,6 +43,9 @@ class RecordedPayments:
     days_unchanged: int = 0
     rows_created: int = 0
     rows_deleted: int = 0
+    #: Days the reading paid something on and « Ventes » holds no sale of
+    #: (`beside_sales`): left as they are, and said.
+    days_without_sales: list = field(default_factory=list)
 
 
 def _shape(payments: dict) -> frozenset:
@@ -107,14 +110,41 @@ def replace_days(readings: dict, days) -> RecordedPayments:
     return result
 
 
-def record_payments(export) -> RecordedPayments:
+def days_with_sales(days=None) -> set[date]:
+    """The days « Ventes » holds a till sale of (`PosProductDailyQuantity`) -
+    among `days` when given (one query over their span), else all of them."""
+    queryset = PosProductDailyQuantity.objects.all()
+    if days is not None:
+        days = set(days)
+        if not days:
+            return set()
+        queryset = queryset.filter(sold_on__gte=min(days), sold_on__lte=max(days))
+    held = set(queryset.values_list("sold_on", flat=True).distinct())
+    return held if days is None else held & days
+
+
+def record_payments(export, *, beside_sales: bool = False) -> RecordedPayments:
     """Store the payments a parsed export read, every day it read replaced
     whole. An export whose payments were not read (no payments sheet, or
     one that failed) replaces nothing: its days keep what they have - the
-    same care the day's money takes (tasks._sync_pos_products)."""
+    same care the day's money takes (tasks._sync_pos_products).
+
+    `beside_sales`: only the days « Ventes » holds a sale of are written -
+    payments on a day with no sales are money the sales pages contradict
+    (« A day's payments only beside a day « Ventes » holds »). The import
+    job held that rule by its order, writing the lines first; a file of
+    payments alone holds it here. The days it paid something on and left
+    are `days_without_sales`; a day it paid nothing on (every ticket
+    comped) is nothing to write, and is not listed."""
     if not getattr(export, "payments_read", False):
         return RecordedPayments()
-    return replace_days(export.payments_by_day(), export.payment_days)
+    readings = export.payments_by_day()
+    if not beside_sales:
+        return replace_days(readings, export.payment_days)
+    sold = days_with_sales(export.payment_days)
+    result = replace_days(readings, sold)
+    result.days_without_sales = sorted(day for day in export.payment_days if day not in sold and readings.get(day))
+    return result
 
 
 def by_method(payments: dict[str, _Held]) -> list[tuple[str, _Held]]:

@@ -3,11 +3,26 @@
 Runs on a plain thread (same as invoices/tasks.py) because driving a browser
 through two date windows takes minutes, which is far too long to hold a
 request open. The page polls SalesImportJob for progress.
+
+`store_reading` is the ONE writer of a till reading, whoever read it - the
+job fetching L'Addition, `laddition_import`, a file uploaded on « Ventes »:
+the till products and their days (« Ventes », with the day's money), the
+recipes' sales under `sales.TILL_SOURCE`, then the payments - in that
+order, each said in the log.
+
+The job's log is drawn on the sales page of whichever espace ran it, so a
+failure says what `common.error_for_page` lets a page say (LB-3): the
+till's own French refusals as they are, anything else one fixed sentence.
+The exception and its traceback always go to the server's log; the
+traceback is added to the job's log in the server-accounts espace only
+(`accounts.tenancy.server_accounts_allowed`, the owner's - as before).
 """
 
 from __future__ import annotations
 
+import logging
 import traceback
+from dataclasses import dataclass, field
 from datetime import date
 
 from django.db import transaction
@@ -15,14 +30,34 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from accounts.paths import downloads_dir
-from common import format_money
+from accounts.tenancy import server_accounts_allowed
+from common import error_for_page, format_money
 
 from .integration import refusal, till_allowed
 from .models import PosDailyPayment, PosProduct, PosProductDailyQuantity, SalesImportJob
-from .payments import by_method, oddities, record_payments
-from .pos.laddition_download import DownloadCancelled, download_sales_lines
-from .pos.laddition_xlsx import parse_sales_exports
-from .sales import TILL_SOURCE, recipe_lookup, record_sales
+from .payments import RecordedPayments, by_method, oddities, record_payments
+from .pos.laddition_download import DownloadCancelled, LadditionDownloadError, download_sales_lines
+from .pos.laddition_session import LadditionAuthError
+from .pos.laddition_xlsx import LadditionExportError, parse_sales_exports
+from .pos.xlsx_reader import XlsxError
+from .sales import TILL_SOURCE, SalesImportResult, recipe_lookup, record_sales
+
+logger = logging.getLogger(__name__)
+
+
+class TillImportError(RuntimeError):
+    """A till import that cannot go on, said in French for the job's log."""
+
+
+#: The till's own refusals: French, naming no path - a job's log says them
+#: as they are (`common.error_for_page`). Anything else is one fixed sentence.
+TILL_REFUSALS: tuple[type[BaseException], ...] = (
+    TillImportError,
+    LadditionExportError,
+    LadditionAuthError,
+    LadditionDownloadError,
+    XlsxError,
+)
 
 
 class _Cancelled(Exception):
@@ -251,6 +286,68 @@ def _sync_pos_products(export) -> int:
     return len(export.products)
 
 
+@dataclass
+class StoredReading:
+    """What `store_reading` wrote."""
+
+    #: Till products the reading named (sync_pos_products).
+    seen: int = 0
+    sales: SalesImportResult = field(default_factory=SalesImportResult)
+    paid: RecordedPayments = field(default_factory=RecordedPayments)
+
+    @property
+    def unmatched(self) -> int:
+        return len(set(self.sales.unmatched))
+
+
+def store_reading(export, log, *, payments_beside_sales: bool = False) -> StoredReading:
+    """Write one till reading, in the one order every writer keeps: the till
+    products and their days (« Ventes », with the day's money), the
+    recipes' sales (`TILL_SOURCE`, never a sale typed by hand), then the
+    payments - each step said through `log` in French.
+
+    A reading of payments alone (`export.sales_read` False: a file of
+    « Encaissements ») writes no sales and says nothing of them.
+    `payments_beside_sales`: its days are written only where « Ventes » holds
+    a sale (recipes.payments.record_payments), the others said."""
+    stored = StoredReading()
+    if getattr(export, "sales_read", True):
+        stored.seen = sync_pos_products(export)
+        log(f"{stored.seen} produits de caisse vus.")
+        stored.sales = record_sales(export.entries, source=TILL_SOURCE)
+        log(
+            f"{stored.sales.recorded} totaux recette/jour enregistrés "
+            f"({stored.sales.created} nouveaux, {stored.sales.updated} mis à jour)."
+        )
+        if stored.unmatched:
+            log(f"{stored.unmatched} produits de caisse sans recette - à traiter dans « À lier ».")
+    # After the sales, and on its own: what the bank is paid from, per day
+    # and per means of payment (recipes/payments.py).
+    stored.paid = record_payments(export, beside_sales=payments_beside_sales)
+    if export.payments_read:
+        log(
+            f"Paiements enregistrés : {stored.paid.days_written} jour(s) de caisse remplacé(s), "
+            f"{stored.paid.days_unchanged} déjà à jour."
+        )
+        if stored.paid.days_without_sales:
+            log(
+                f"{len(stored.paid.days_without_sales)} jour(s) laissé(s) de côté : aucune vente enregistrée ces "
+                "jours-là. Importez d'abord les ventes de ces jours."
+            )
+    return stored
+
+
+def fail(job: SalesImportJob, exc: BaseException, what: str) -> None:
+    """The job's failure line: the till's own French refusal as it is, else
+    one fixed sentence - the exception always in the server's log, its
+    traceback in the job's log in the server-accounts espace only."""
+    logger.warning("%s : échec", what, exc_info=(type(exc), exc, exc.__traceback__))
+    job.status = SalesImportJob.Status.FAILED
+    job.append_log("Échec : " + error_for_page(exc, said=TILL_REFUSALS))
+    if server_accounts_allowed():
+        job.append_log("".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=3)))
+
+
 def import_laddition_sales_task(job_id: int, start: date, end: date, download_dir: str | None = None) -> None:
     """The thread's body, started as ``target=bound(import_laddition_sales_task)``
     (views.trigger_sales_import): it runs bound to the tenant that asked, so
@@ -284,7 +381,7 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
 
         paths = download_sales_lines(start, end, download_dir, log=job.append_log, should_cancel=still_wanted)
         if not paths:
-            raise RuntimeError("Aucun fichier téléchargé.")
+            raise TillImportError("Aucun fichier téléchargé.")
         _raise_if_cancelled(job)
 
         export = parse_sales_exports(paths)
@@ -295,36 +392,16 @@ def import_laddition_sales_task(job_id: int, start: date, end: date, download_di
         for message in payments_log(export):
             job.append_log(message)
 
-        seen = sync_pos_products(export)
-        job.append_log(f"{seen} produits de caisse vus.")
-
-        result = record_sales(export.entries, source=TILL_SOURCE)
-        job.recorded = result.recorded
-        job.unmatched = len(set(result.unmatched))
-        job.append_log(
-            f"{result.recorded} totaux recette/jour enregistrés "
-            f"({result.created} nouveaux, {result.updated} mis à jour)."
-        )
-        if job.unmatched:
-            job.append_log(f"{job.unmatched} produits de caisse sans recette - à traiter dans « Produits caisse ».")
-
-        # After the sales, and on its own: what the bank is paid from, per
-        # day and per means of payment (recipes/payments.py).
-        paid = record_payments(export)
-        if export.payments_read:
-            job.append_log(
-                f"Paiements enregistrés : {paid.days_written} jour(s) de caisse remplacé(s), "
-                f"{paid.days_unchanged} déjà à jour."
-            )
+        stored = store_reading(export, job.append_log)
+        job.recorded = stored.sales.recorded
+        job.unmatched = stored.unmatched
         job.status = SalesImportJob.Status.SUCCESS
 
     except (_Cancelled, DownloadCancelled):
         job.status = SalesImportJob.Status.CANCELLED
         job.append_log("Annulé.")
     except Exception as exc:  # noqa: BLE001 - the job record IS the error report
-        job.status = SalesImportJob.Status.FAILED
-        job.append_log(f"Échec : {exc}")
-        job.append_log(traceback.format_exc(limit=3))
+        fail(job, exc, "Import des ventes de L'Addition")
     finally:
         job.finished_at = timezone.now()
         job.save(update_fields=["status", "finished_at", "items_sold", "recorded", "unmatched"])
