@@ -64,7 +64,7 @@ from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
 from returnables.patterns import PatternError
 
-from . import income, invoice_files, matching, recognition, reconcile, spending, statements, treasury
+from . import income, invoice_files, matching, presets, recognition, reconcile, spending, statements, treasury
 from .forms import (
     FORMAT_NAME_TAKEN,
     NAME_TAKEN,
@@ -1644,6 +1644,17 @@ NO_TEST_FILE = "Choisissez un fichier pour voir ce que le format en lit."
 UNSUPPORTED_FILE = "seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés."
 KEEP_ONE_FORMAT = "Gardez au moins un format : modifiez-le plutôt."
 UNKNOWN_FORMAT = "Format de relevé inconnu."
+#: « Partir d'un modèle » (`bank.presets`): the action, the preset posted,
+#: and where the card is.
+PRESET = "modele"
+PRESET_PARAM = "modele"
+PRESETS_ANCHOR = "modeles"
+UNKNOWN_PRESET = "Modèle inconnu : rien n'a été ajouté."
+#: A name of the preset taken between the look-up and the write (two tabs,
+#: a double click): the install is rolled back whole.
+PRESET_RACED = "Ce modèle n'a pas pu être ajouté (un nom pris au même moment ?) : rien n'a été ajouté, réessayez."
+#: Past this many names kept, the message counts them.
+KEPT_NAMED = 3
 
 
 @dataclass(frozen=True)
@@ -1756,6 +1767,54 @@ def _format_url(pk) -> str:
 
 
 @dataclass
+class PresetRow:
+    """One preset, as « Partir d'un modèle » draws it."""
+
+    preset: presets.Preset
+    #: Its format and every one of its rules are here already.
+    added: bool
+
+
+def _preset_rows() -> list[PresetRow]:
+    """Every preset, and whether it is here already - two queries."""
+    formats = {recognition.name_key(name) for name in StatementFormat.objects.values_list("name", flat=True)}
+    rules = {recognition.name_key(name) for name in OperationRule.objects.values_list("name", flat=True)}
+    return [PresetRow(preset, presets.holds(preset, formats, rules)) for preset in presets.PRESETS]
+
+
+def _install_preset(request):
+    """« Ajouter » on a preset: what it brings that is not here, written in
+    one transaction, every name here kept as it is (`presets.install`) -
+    answered before the « Nouveau format » form is read, which this POST
+    does not carry. An unknown preset writes nothing."""
+    back = f"{reverse('bank:statement_formats')}#{PRESETS_ANCHOR}"
+    preset = presets.BY_KEY.get(request.POST.get(PRESET_PARAM, ""))
+    if preset is None:
+        messages.error(request, UNKNOWN_PRESET)
+        return redirect(back)
+    try:
+        done = presets.install(preset)
+    except (IntegrityError, ValidationError):
+        messages.error(request, PRESET_RACED)
+        return redirect(back)
+    parts = []
+    if done.format is not None:
+        parts.append(f"format « {done.format.name} » ajouté")
+    if done.rules:
+        parts.append(
+            f"{len(done.rules)} règle(s) de reconnaissance ajoutée(s), dernière(s) de leur partie : elles valent "
+            "pour les relevés importés ensuite"
+        )
+    said = f"Modèle « {preset.title} » : {', '.join(parts) if parts else 'rien à ajouter'}."
+    if len(done.kept) > KEPT_NAMED:
+        said += f" {len(done.kept)} noms déjà là (le format ou des règles), gardés tels quels."
+    elif done.kept:
+        said += f" {', '.join(f'« {name} »' for name in done.kept)} déjà là : gardé(s) tel(s) quel(s)."
+    (messages.success if done.wrote else messages.info)(request, said)
+    return redirect(_format_url(done.format.pk) if done.format is not None else back)
+
+
+@dataclass
 class FormatTest:
     """What « Tester » read in a file with the format as typed: its first
     rows in numbered columns - what a person picks the numbers from - and
@@ -1842,7 +1901,9 @@ def _test_format(request, form: StatementFormatForm) -> FormatTest | None:
 def statement_formats(request):
     """« Format du relevé »: the formats in their order, and a new one -
     « Tester » reads a file with it and saves nothing; « Enregistrer le
-    format » puts it last."""
+    format » puts it last; « Partir d'un modèle » adds a preset."""
+    if request.method == "POST" and request.POST.get(RULE_ACTION) == PRESET:
+        return _install_preset(request)
     form = StatementFormatForm(request.POST or None)
     test = None
     if request.method == "POST":
@@ -1865,6 +1926,7 @@ def statement_formats(request):
             "form": form,
             "test": test,
             "rows": _format_rows(),
+            "presets": _preset_rows(),
             "example": FORMAT_EXAMPLE,
             "statement_accept": statements.ACCEPT_ATTRIBUTE,
         },

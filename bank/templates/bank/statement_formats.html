@@ -75,9 +75,44 @@
         <p class="muted">Le premier sert à l'import ; avec plusieurs formats, l'import propose de choisir.</p>
     {% else %}
         <div class="empty-state">
-            <p>Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous.</p>
+            <p>Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous, ou <a href="#modeles">partez d'un modèle</a>.</p>
         </div>
     {% endif %}
+
+    <div class="card" id="modeles">
+        <h2>Partir d'un modèle</h2>
+        <p class="muted">Un modèle ajoute un format et ses règles de reconnaissance ; ce qui porte déjà le même nom est gardé tel quel.</p>
+        <div class="table-wrap">
+            <table data-table data-table-label="modèles">
+                <thead>
+                    <tr>
+                        <th>Modèle</th>
+                        <th>Ce qu'il ajoute</th>
+                        <th data-no-sort></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in presets %}
+                        <tr id="modele-{{ row.preset.key }}">
+                            <td>
+                                <strong>{{ row.preset.title }}</strong>
+                                {% if row.added %}<span class="status-pill status-IMPORTED">déjà ajouté</span>{% endif %}
+                            </td>
+                            <td>{{ row.preset.description }}</td>
+                            <td class="row-actions">
+                                <form method="post" action="{% url 'bank:statement_formats' %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="modele" value="{{ row.preset.key }}">
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="modele"
+                                            aria-label="Ajouter le modèle « {{ row.preset.title }} »">Ajouter</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     <div class="card" id="nouveau-format">
         <h2>Nouveau format</h2>

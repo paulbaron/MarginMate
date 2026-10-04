@@ -394,6 +394,7 @@
     {% else %}
         <div class="empty-state">
             <p>Aucun relevé importé : importez ci-dessus l'export du compte.</p>
+            <p class="muted">Un export que le format ne lit pas ? <a href="{% url 'bank:statement_formats' %}#modeles">Partir d'un modèle</a> (OFX, CAMT.053, BNP Paribas).</p>
         </div>
     {% endif %}
 {% endblock %}

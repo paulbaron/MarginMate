@@ -171,7 +171,8 @@ class Page(TestCase):
         return response
 
     def new_form(self, html=None):
-        return form_posting_to(html or self.html(), self.url)
+        # The presets' forms post to the same address, each its own action.
+        return form_posting_to(html or self.html(), self.url, holding=("action", "tester"))
 
     def add(self, *, press=("action", "enregistrer"), file=None, **values):
         """The « Nouveau format » card, filled in and pressed."""
@@ -263,7 +264,8 @@ class ListTests(Page):
         StatementFormat.objects.all().delete()
         response = self.get()
         self.assertIn(
-            "Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous.", text_of(response.content.decode())
+            "Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous, ou partez d'un modèle",
+            text_of(response.content.decode()),
         )
         self.assertEqual(response.context["rows"], [])
 
