@@ -124,6 +124,11 @@ class Number(str):
     plain str, as printed."""
 
 
+class Moment(str):
+    """A cell the workbook stores as a date (`t="d"`, `typed=True`): ISO
+    text, « 2026-07-03T23:41:00 », whatever format the sheet shows it in."""
+
+
 def _column_index(cell_ref: str) -> int | None:
     """ "C7" -> 2, or None when the reference names no column. Cells are
     addressed, not ordered, so an empty cell is simply absent from the row
@@ -334,6 +339,7 @@ def read_sheet(
     max_columns: int | None = None,
     typed: bool = False,
     untrusted: bool = False,
+    numbered: bool = False,
 ):
     """Yield each row of one sheet as a list of strings - the first sheet
     when no name is given.
@@ -341,9 +347,11 @@ def read_sheet(
     Rows are padded to the width of their own last populated cell; a caller
     reading by column index must cope with a short row (see parse_rows).
     `max_columns`: the cells past it are never read. `typed`: a cell the
-    workbook stores as a number comes back as a `Number`. `untrusted`: an
-    uploaded workbook - the zip's bounds checked first, the string table
-    capped.
+    workbook stores as a number comes back as a `Number`, one stored as a
+    date as a `Moment`. `untrusted`: an uploaded workbook - the zip's
+    bounds checked first, the string table capped. `numbered`: each row
+    comes as (its number as Excel shows it, its cells) - a refusal names
+    the row a person finds.
     """
     limit = MAX_COLUMNS if max_columns is None else min(max_columns, MAX_COLUMNS)
     with _zip(source) as archive:
@@ -366,9 +374,12 @@ def read_sheet(
         # which on a smaller machine is not slow but fatal.
         with _iterparse(archive, paths[sheet_name], events=("start", "end")) as context:
             _event, root = next(context)
+            number = 0
             for event, element in context:
                 if event != "end" or element.tag != f"{MAIN_NS}row":
                     continue
+                written = element.get("r") or ""
+                number = int(written) if written.isascii() and written.isdigit() and len(written) < 8 else number + 1
                 cells: dict[int, str] = {}
                 index = -1
                 for cell in element.findall(f"{MAIN_NS}c"):
@@ -388,7 +399,7 @@ def read_sheet(
                 # there instead and nothing has been saved.
                 element.clear()
                 root.clear()
-                yield row
+                yield (number, row) if numbered else row
 
 
 def _cell_text(cell, strings: list[str], typed: bool = False) -> str:
@@ -407,4 +418,6 @@ def _cell_text(cell, strings: list[str], typed: bool = False) -> str:
     text = value.text or ""
     if typed and kind in (None, "n"):
         return Number(text)
+    if typed and kind == "d":
+        return Moment(text)
     return text

@@ -213,6 +213,13 @@ class ParsedExport:
     #: alone (recipes/pos/till_file.py, « Encaissements »): its writer then
     #: writes no sales and says nothing of them (tasks.store_reading).
     sales_read: bool = True
+    #: A till's file (recipes/pos/till_file.py): the rows read as a sale or
+    #: a payment, the (product, day) whose quantities summed to a fraction
+    #: and were rounded half away from zero, and the payment spellings
+    #: nothing maps - each said rather than absorbed.
+    rows_read: int = 0
+    quantities_rounded: int = 0
+    unmapped_methods: list = field(default_factory=list)
 
     # -- the payments (the `SalesDocument` sheet) -------------------------------------
     #: {(day, method): DayPayment}, the method as PosDailyPayment.canonical
