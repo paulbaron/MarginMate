@@ -236,7 +236,8 @@ class NeverKeptByTheBrowserTests(TwoTenantsTestCase):
     """A bar's page is never kept by the browser: on a shared device, Back
     after a logout - or after another bar's login - showed it from the
     back/forward cache, the bar's rows and its name in the topbar
-    (test_back_button_browser.py). Unbound answers are left as they are."""
+    (test_back_button_browser.py). Unbound answers are left as they are,
+    but for the anonymous way to the login page."""
 
     def test_a_bar_s_page_is_marked_no_store(self):
         with bound_tenant(self.bar_a):
@@ -259,10 +260,20 @@ class NeverKeptByTheBrowserTests(TwoTenantsTestCase):
         for word in ("private", "no-store"):
             self.assertIn(word, response["Cache-Control"])
 
-    def test_an_anonymous_answer_is_left_as_it_is(self):
-        response = self.client.get(reverse("invoices:supplier_list"))
+    def test_the_anonymous_way_to_the_login_page_is_never_kept_either(self):
+        """Not bound, but no-store too (LoginRequiredMiddleware): a cache
+        keying on the address alone - Cloudflare's, for a .pdf or a .jpg -
+        kept a cookieless visitor's 302 for /fichiers/… and handed it to the
+        logged-in, whom the login page sends straight back: a redirect loop
+        until the copy expired."""
+        path = reverse("accounts:media", args=["consignes/bons/2026/10/bon-1.pdf"])
+        response = self.client.get(path)
         self.assertEqual(response.status_code, 302)
-        self.assertNotIn("Cache-Control", response)
+        self.assertTrue(response["Location"].startswith("/connexion/?next="), response["Location"])
+        self.assertIn("no-store", response["Cache-Control"])
+        response = self.client.get(path, HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("no-store", response["Cache-Control"])
 
 
 class MiddlewareDirectTests(TwoTenantsTestCase):
