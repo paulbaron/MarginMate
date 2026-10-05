@@ -17,7 +17,9 @@ What the page promises at that level, pinned on worked examples:
   the till's start;
 * a small history read from the database plans the expected list;
 * and one article's usual purchase at one store (`usual_purchase_at`, the
-  scan narrowed to them) is the page's own, in two queries at most.
+  scan narrowed to them) is the page's own, in two queries at most - and
+  every article's at one store (`usual_purchases_at`, the shopping list's
+  add menu) the same, in one.
 
 Invented data throughout: every store, article, product, recipe, price and
 quantity is made up for these tests, and the days are fixed invented days.
@@ -34,7 +36,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from inventory import shopping, shopping_data
-from inventory.models import MovementKind, ShoppingExclusion, ShoppingSetting, UnitChoices
+from inventory.models import MovementKind, Product, ShoppingExclusion, ShoppingSetting, StockType, UnitChoices
 from inventory.shopping import (
     CALENDAR_CLOCK,
     TILL_CLOCK,
@@ -92,6 +94,7 @@ D1, D2, D3 = date(2026, 3, 2), date(2026, 3, 9), date(2026, 3, 16)
 TILL_ON = Settings(use_till=True)
 TILL_OFF = Settings(use_till=False)
 ZERO = Decimal("0")
+D24 = Decimal("24")
 
 _SAME = object()
 
@@ -873,3 +876,98 @@ class UsualPurchaseAtTests(TestCase):
         bought(self.made.market, self.made.olives, tomorrow, "3", "35.00")
         self.assertIsNone(shopping_data.usual_purchase_at(timezone.localdate(), self.made.market.pk, self.made.olives))
         self.assertEqual(shopping_data.usual_purchase_at(tomorrow, self.made.market.pk, self.made.olives).qty, 3)
+
+
+class UsualPurchasesAtTests(TestCase):
+    """`usual_purchases_at(today, store, articles, names)`: every article's
+    usual purchase at one store, as `usual_purchase_at` gives them one at a
+    time, in ONE scan - the shopping list's add menu reads its articles so.
+    make_shopping_history's stores (invented data)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.made = make_shopping_history()
+
+    def setUp(self):
+        self.today = timezone.localdate()
+
+    @staticmethod
+    def names() -> dict[int, str]:
+        """What the caller reads: the names of the products articles claim."""
+        return dict(Product.objects.filter(stock_type__isnull=False).values_list("id", "raw_name"))
+
+    def every_article(self) -> list:
+        return list(StockType.objects.order_by("pk"))
+
+    def test_it_equals_one_article_at_a_time_for_every_article_of_every_store_in_one_query(self):
+        articles, names = self.every_article(), self.names()
+        found = {}
+        for store in (self.made.wholesaler, self.made.grocer, self.made.market):
+            with self.subTest(store=store.name):
+                with self.assertNumQueries(1):
+                    usuals = shopping_data.usual_purchases_at(self.today, store.pk, articles, names)
+                expected = {}
+                for what in articles:
+                    usual = shopping_data.usual_purchase_at(self.today, store.pk, what)
+                    if usual is not None:
+                        expected[what.pk] = usual
+                self.assertEqual(usuals, expected)
+                found[store.pk] = set(usuals)
+        made = self.made
+        # The beer, syrup, olives, crisps, rum, coffee and keg at the
+        # wholesaler's, the coffee and lemons at the grocer's, the
+        # strawberries at the market.
+        self.assertEqual(
+            found,
+            {
+                made.wholesaler.pk: {
+                    a.pk for a in (made.beer, made.syrup, made.olives, made.crisps, made.rum, made.coffee, made.keg)
+                },
+                made.grocer.pk: {made.coffee.pk, made.lemon.pk},
+                made.market.pk: {made.strawberries.pk},
+            },
+        )
+
+    def test_the_beer_in_its_store_s_product(self):
+        usual = shopping_data.usual_purchases_at(self.today, self.made.wholesaler.pk, [self.made.beer], self.names())[
+            self.made.beer.pk
+        ]
+        self.assertEqual((usual.qty, usual.product_name, usual.product_units), (D24, SHOPPING_BEER_PRODUCT, D24))
+        self.assertEqual(usual.packs, (1, D24))
+
+    def test_a_store_with_nothing_bought_is_empty_in_one_query(self):
+        store = make_supplier(name="Magasin neuf exemple")
+        articles = self.every_article()
+        with self.assertNumQueries(1):
+            self.assertEqual(shopping_data.usual_purchases_at(self.today, store.pk, articles, {}), {})
+
+    def test_only_the_articles_asked(self):
+        usuals = shopping_data.usual_purchases_at(
+            self.today, self.made.wholesaler.pk, [self.made.beer, self.made.lemon], self.names()
+        )
+        # The lemons were never bought there.
+        self.assertEqual(set(usuals), {self.made.beer.pk})
+
+    def test_another_store_s_purchases_never_enter(self):
+        made = self.made
+        # Four cases of beer at the grocer's, yesterday: the wholesaler's
+        # usual beer is still its own, and the grocer's is that one.
+        bought(made.grocer, made.beer, self.today - DAY, "96", "180.00", units=96, colisage=24)
+        names = self.names()
+        at_the_wholesaler = shopping_data.usual_purchases_at(self.today, made.wholesaler.pk, [made.beer], names)
+        self.assertEqual(at_the_wholesaler[made.beer.pk].qty, D24)
+        at_the_grocer = shopping_data.usual_purchases_at(
+            self.today, made.grocer.pk, [made.beer, made.strawberries], names
+        )
+        self.assertEqual(set(at_the_grocer), {made.beer.pk})
+        self.assertEqual(
+            (at_the_grocer[made.beer.pk].qty, at_the_grocer[made.beer.pk].packs), (Decimal("96"), (4, D24))
+        )
+
+    def test_without_its_name_a_product_counts_its_article_s_units(self):
+        # The names are the caller's: a product it did not name is counted
+        # as `usual_purchase_at` counts an unnamed one.
+        usual = shopping_data.usual_purchases_at(self.today, self.made.wholesaler.pk, [self.made.beer], {})[
+            self.made.beer.pk
+        ]
+        self.assertEqual((usual.qty, usual.product_units, usual.packs), (D24, None, None))

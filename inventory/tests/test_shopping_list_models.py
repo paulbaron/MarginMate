@@ -1,13 +1,15 @@
 """« Listes de courses », the two models on their own: `ShoppingList` and
-`ShoppingListItem` (inventory 0022).
+`ShoppingListItem` (inventory 0022, its sizes 0023).
 
 A list is OPEN while `finished_at` is empty, and a store has at most one open
 list - any number of finished ones beside it. An item names an article, once
 per list, or is a free text (no article: any number of them, the same label
 included). Its quantity is positive, its label never blank, its unit one the
 app knows or "" (it counts the product, or the free text), its pack a pack of
-several. The database holds all of it whatever writes the row - a create, an
-update, a bulk create.
+several. An item counted in bottles keeps how much one holds (`item_size`, in
+`size_unit`): both or neither, the size above 0, the unit one the app knows,
+and only beside a number counting items (`unit` ""). The database holds all
+of it whatever writes the row - a create, an update, a bulk create.
 
 A store deleted takes its lists and their items (CASCADE: its page, the
 « Données » clears); an article deleted leaves its items as free texts holding
@@ -27,7 +29,7 @@ from decimal import Decimal
 
 from django.contrib.messages import get_messages
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, migrations, transaction
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -41,6 +43,8 @@ from tests.factories import make_stock_type, make_supplier
 D = Decimal
 MIGRATION_MODULE = importlib.import_module("inventory.migrations.0022_shopping_lists")
 MIGRATION = MIGRATION_MODULE.Migration
+SIZES_MODULE = importlib.import_module("inventory.migrations.0023_shopping_list_item_sizes")
+SIZES = SIZES_MODULE.Migration
 
 ONE_OPEN_PER_STORE = "shopping_list_one_open_per_store"
 QUANTITY_POSITIVE = "shopping_list_item_quantity_positive"
@@ -48,6 +52,9 @@ HAS_A_LABEL = "shopping_list_item_has_a_label"
 UNIT_KNOWN = "shopping_list_item_unit_known"
 PACK_OF_SEVERAL = "shopping_list_item_pack_of_several"
 ARTICLE_ONCE = "shopping_list_item_article_once"
+SIZE_OF_AN_ITEM = "shopping_list_item_size_of_an_item"
+#: A 70 cl bottle, as `item_size` holds it (litres, four places).
+BOTTLE = D("0.7")
 #: SQLite names a partial unique index's columns, not the index, when it
 #: refuses a row: the supplier's column, which nothing else holds unique.
 SECOND_OPEN_LIST = r"UNIQUE constraint failed: inventory_shoppinglist\.supplier_id$"
@@ -76,10 +83,21 @@ def make_shopping_item(
     )
 
 
-def created_by_the_migration(model) -> list:
-    """The constraints the migration's CreateModel of `model` makes."""
-    (operation,) = [operation for operation in MIGRATION.operations if operation.name_lower == model._meta.model_name]
-    return list(operation.options["constraints"])
+def made_by_the_migrations(model) -> list:
+    """The constraints the migrations make on `model`: 0022's CreateModel,
+    then what 0023 adds to it - in that order, which is the model's."""
+    model_name = model._meta.model_name
+    (created,) = [
+        operation
+        for operation in MIGRATION.operations
+        if isinstance(operation, migrations.CreateModel) and operation.name_lower == model_name
+    ]
+    added = [
+        operation.constraint
+        for operation in SIZES.operations
+        if isinstance(operation, migrations.AddConstraint) and operation.model_name_lower == model_name
+    ]
+    return [*created.options["constraints"], *added]
 
 
 class MigrationTests(TestCase):
@@ -91,17 +109,59 @@ class MigrationTests(TestCase):
     def test_the_constraints_are_the_ones_the_migration_made(self):
         for model, names in (
             (ShoppingList, [ONE_OPEN_PER_STORE]),
-            (ShoppingListItem, [QUANTITY_POSITIVE, HAS_A_LABEL, UNIT_KNOWN, PACK_OF_SEVERAL, ARTICLE_ONCE]),
+            (
+                ShoppingListItem,
+                [QUANTITY_POSITIVE, HAS_A_LABEL, UNIT_KNOWN, PACK_OF_SEVERAL, ARTICLE_ONCE, SIZE_OF_AN_ITEM],
+            ),
         ):
             with self.subTest(model=model.__name__):
                 self.assertEqual([constraint.name for constraint in model._meta.constraints], names)
-                self.assertEqual(created_by_the_migration(model), list(model._meta.constraints))
+                self.assertEqual(made_by_the_migrations(model), list(model._meta.constraints))
 
     def test_the_models_and_their_migrations_agree(self):
         call_command("makemigrations", "inventory", check=True, dry_run=True, verbosity=0)
 
     def test_it_says_what_reversing_it_does(self):
         self.assertIn("Reversing drops both tables", MIGRATION_MODULE.__doc__)
+
+
+class ItemSizeMigrationTests(TestCase):
+    """0023: two columns and the constraint holding them, no data moved - an
+    item already on a list reads as it did."""
+
+    def test_it_follows_the_lists_migration(self):
+        self.assertEqual(SIZES.dependencies, [("inventory", "0022_shopping_lists")])
+
+    def test_two_columns_and_their_constraint_nothing_else(self):
+        self.assertEqual(
+            [(type(operation), operation.model_name_lower) for operation in SIZES.operations],
+            [
+                (migrations.AddField, "shoppinglistitem"),
+                (migrations.AddField, "shoppinglistitem"),
+                (migrations.AddConstraint, "shoppinglistitem"),
+            ],
+        )
+        item_size, size_unit, constraint = SIZES.operations
+        self.assertEqual((item_size.name, size_unit.name), ("item_size", "size_unit"))
+        self.assertEqual(constraint.constraint.name, SIZE_OF_AN_ITEM)
+        # The columns added are the model's.
+        for operation in (item_size, size_unit):
+            with self.subTest(field=operation.name):
+                self.assertEqual(
+                    operation.field.deconstruct()[1:],
+                    ShoppingListItem._meta.get_field(operation.name).deconstruct()[1:],
+                )
+
+    def test_an_item_already_on_a_list_reads_as_before(self):
+        # What AddField writes into the rows already there: no size, no unit
+        # of one - the constraint's « neither », and every page's bare number.
+        editor = connection.schema_editor()
+        self.assertIsNone(editor.effective_default(ShoppingListItem._meta.get_field("item_size")))
+        self.assertEqual(editor.effective_default(ShoppingListItem._meta.get_field("size_unit")), "")
+
+    def test_it_says_what_it_moves_and_what_reversing_it_does(self):
+        self.assertIn("No data moves", SIZES_MODULE.__doc__)
+        self.assertIn("Reversing drops the two columns", SIZES_MODULE.__doc__)
 
 
 class ModelTestCase(TestCase):
@@ -302,6 +362,155 @@ class ItemConstraintTests(ModelTestCase):
         self.assertEqual(item.added_at, then)
 
 
+class ItemSizeConstraintTests(ModelTestCase):
+    """`item_size` (how much of `size_unit` one counted item holds) and
+    `size_unit`: both or neither, the size above 0, its unit one the app
+    knows, and only beside a number counting items (`unit` "") - whatever
+    writes the row (`shopping_list_item_size_of_an_item`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.list = make_shopping_list(self.wholesaler)
+
+    refused = ItemConstraintTests.refused
+
+    #: Each a row the constraint refuses: what it says, its figures.
+    REFUSED = (
+        ("a size beside a number in litres", {"unit": UnitChoices.LITRE, "item_size": BOTTLE, "size_unit": "L"}),
+        ("a size beside a number in kilos", {"unit": UnitChoices.KILOGRAM, "item_size": D("1"), "size_unit": "KG"}),
+        ("a size beside a number of pieces", {"unit": UnitChoices.UNIT, "item_size": D("50"), "size_unit": "UNIT"}),
+        ("a size of 0", {"item_size": D("0"), "size_unit": "L"}),
+        ("a negative size", {"item_size": D("-0.7"), "size_unit": "L"}),
+        ("a size with no unit", {"item_size": BOTTLE, "size_unit": ""}),
+        # NULL > 0 is NULL, which a CHECK lets through: without its own
+        # « not null », the second branch accepted a unit with no size.
+        ("a unit with no size", {"size_unit": "L"}),
+        ("a unit with no size, in kilos", {"size_unit": "KG"}),
+        ("a unit with no size, in pieces", {"size_unit": "UNIT"}),
+        ("a unit with no size beside litres", {"unit": UnitChoices.LITRE, "size_unit": "L"}),
+        ("an unknown unit", {"item_size": BOTTLE, "size_unit": "X"}),
+        ("a unit spelt otherwise", {"item_size": BOTTLE, "size_unit": "l"}),
+        ("centilitres", {"item_size": D("70"), "size_unit": "cl"}),
+    )
+
+    def test_the_constraint_is_the_migration_s(self):
+        (added,) = [
+            operation.constraint for operation in SIZES.operations if isinstance(operation, migrations.AddConstraint)
+        ]
+        self.assertEqual(added.name, SIZE_OF_AN_ITEM)
+        self.assertEqual(added, ShoppingListItem._meta.constraints[-1])
+
+    def test_the_columns(self):
+        item_size = ShoppingListItem._meta.get_field("item_size")
+        size_unit = ShoppingListItem._meta.get_field("size_unit")
+        self.assertEqual((item_size.max_digits, item_size.decimal_places), (10, 4))
+        self.assertTrue(item_size.null and item_size.blank)
+        self.assertEqual((size_unit.max_length, size_unit.choices), (4, UnitChoices.choices))
+        self.assertTrue(size_unit.blank)
+        self.assertFalse(size_unit.null)
+
+    def test_what_it_refuses(self):
+        for said, fields in self.REFUSED:
+            with self.subTest(said):
+                self.refused(SIZE_OF_AN_ITEM, **fields)
+        self.assertFalse(ShoppingListItem.objects.exists())
+
+    def test_neither_is_every_item_written_before(self):
+        # Every writer before 0023 wrote neither: each unit reads as it did.
+        for unit in ("", *UnitChoices.values):
+            with self.subTest(unit=unit):
+                item = make_shopping_item(self.list, label=f"Article {unit} exemple", unit=unit)
+                item.refresh_from_db()
+                self.assertEqual((item.item_size, item.size_unit), (None, ""))
+
+    def test_a_size_beside_a_number_of_items_is_kept(self):
+        for size, size_unit, product_name in (
+            # A product's bottle, keg, bag, box of pieces.
+            ("0.7", "L", "GIN EXEMPLE 70CL X6"),
+            ("30", "L", "FUT EXEMPLE 30L"),
+            ("0.5", "KG", "OLIVES EXEMPLE 500G"),
+            ("50", "UNIT", "GOBELETS EXEMPLE X50"),
+            # The article's usual format: no product.
+            ("1.5", "L", ""),
+            # The column's edges: four places, ten digits.
+            ("0.0001", "L", ""),
+            ("0.3333", "L", ""),
+            ("999999.9999", "L", ""),
+        ):
+            with self.subTest(size=size, size_unit=size_unit):
+                item = make_shopping_item(
+                    self.list,
+                    label=f"Article {size} {size_unit} exemple",
+                    quantity="3",
+                    product_name=product_name,
+                    item_size=D(size),
+                    size_unit=size_unit,
+                )
+                item.refresh_from_db()
+                self.assertEqual(
+                    (item.unit, item.item_size, item.size_unit, item.product_name),
+                    ("", D(size), size_unit, product_name),
+                )
+        # Beside an article too.
+        item = make_shopping_item(self.list, self.syrup, quantity="2", item_size=D("1"), size_unit="L")
+        item.refresh_from_db()
+        self.assertEqual((item.stock_type, item.item_size, item.size_unit), (self.syrup, D("1"), "L"))
+
+    def test_an_update_cannot_get_round_it(self):
+        sized = make_shopping_item(self.list, label="Gin exemple", quantity="6", item_size=BOTTLE, size_unit="L")
+        plain = make_shopping_item(self.list, label="Jus exemple", quantity="2", unit=UnitChoices.LITRE)
+        for item, change in (
+            (sized, {"unit": UnitChoices.LITRE}),
+            (sized, {"item_size": D("0")}),
+            (sized, {"item_size": D("-1")}),
+            (sized, {"item_size": None}),
+            (sized, {"size_unit": ""}),
+            (sized, {"size_unit": "X"}),
+            (plain, {"item_size": BOTTLE}),
+            (plain, {"size_unit": "L"}),
+            (plain, {"item_size": BOTTLE, "size_unit": "L"}),
+            (plain, {"unit": "", "size_unit": "L"}),
+        ):
+            with self.subTest(item=item.label, change=change):
+                with self.assertRaisesRegex(IntegrityError, SIZE_OF_AN_ITEM), transaction.atomic():
+                    ShoppingListItem.objects.filter(pk=item.pk).update(**change)
+        self.assertEqual(
+            set(ShoppingListItem.objects.values_list("label", "quantity", "unit", "item_size", "size_unit")),
+            {("Gin exemple", D("6"), "", BOTTLE, "L"), ("Jus exemple", D("2"), UnitChoices.LITRE, None, "")},
+        )
+
+    def test_an_update_changing_both_together_passes(self):
+        # The card's two moves: bottles to litres clears the size with it,
+        # litres to bottles sets both.
+        item = make_shopping_item(self.list, label="Gin exemple", quantity="6", item_size=BOTTLE, size_unit="L")
+        ShoppingListItem.objects.filter(pk=item.pk).update(
+            quantity=D("4.2"), unit=UnitChoices.LITRE, item_size=None, size_unit=""
+        )
+        item.refresh_from_db()
+        self.assertEqual((item.quantity, item.unit, item.item_size, item.size_unit), (D("4.2"), "L", None, ""))
+        ShoppingListItem.objects.filter(pk=item.pk).update(quantity=D("6"), unit="", item_size=BOTTLE, size_unit="L")
+        item.refresh_from_db()
+        self.assertEqual((item.quantity, item.unit, item.item_size, item.size_unit), (D("6"), "", BOTTLE, "L"))
+
+    def test_nor_a_bulk_create(self):
+        for said, fields in self.REFUSED:
+            with self.subTest(said):
+                row = ShoppingListItem(shopping_list=self.list, label="Pain exemple", quantity=D("1"), **fields)
+                with self.assertRaisesRegex(IntegrityError, SIZE_OF_AN_ITEM), transaction.atomic():
+                    ShoppingListItem.objects.bulk_create([row])
+        # One row refused refuses the others with it.
+        with self.assertRaisesRegex(IntegrityError, SIZE_OF_AN_ITEM), transaction.atomic():
+            ShoppingListItem.objects.bulk_create(
+                [
+                    ShoppingListItem(
+                        shopping_list=self.list, label="Gin exemple", quantity=D("6"), item_size=BOTTLE, size_unit="L"
+                    ),
+                    ShoppingListItem(shopping_list=self.list, label="Vodka exemple", quantity=D("1"), size_unit="L"),
+                ]
+            )
+        self.assertFalse(ShoppingListItem.objects.exists())
+
+
 # ---------------------------------------------------------------------------
 # What goes with a store, a list, an article
 # ---------------------------------------------------------------------------
@@ -356,6 +565,24 @@ class ArticleDeletedTests(ModelTestCase):
             self.assertEqual((kept.stock_type_id, kept.name), (None, "Bière exemple"))
         self.assertEqual((item.quantity, item.note), (D("24"), "Note exemple"))
 
+    def test_a_free_text_keeps_its_size(self):
+        # The size is a snapshot: « 3 bouteilles de 70 cl » outlives the
+        # article it was counted for.
+        item = make_shopping_item(
+            make_shopping_list(self.wholesaler),
+            self.syrup,
+            quantity="3",
+            product_name="SIROP EXEMPLE 70CL",
+            item_size=BOTTLE,
+            size_unit="L",
+        )
+        self.syrup.delete()
+        item.refresh_from_db()
+        self.assertEqual(
+            (item.stock_type_id, item.name, item.quantity, item.unit, item.item_size, item.size_unit),
+            (None, "Sirop exemple", D("3"), "", BOTTLE, "L"),
+        )
+
     def test_even_beside_a_free_text_of_the_same_label(self):
         shopping_list = make_shopping_list(self.wholesaler)
         make_shopping_item(shopping_list, label="Bière exemple")
@@ -382,8 +609,9 @@ class MergedArticleTests(ModelTestCase):
     """`merge_stock_types(source, target)` carries the source's items, list by
     list, finished lists included (`shopping_lists.carry_on_merge`): no target
     item there - the item now names the target; a target item counting the
-    same thing - one item adding both; a target item counting something
-    else - the source's becomes a free text, both lines stay."""
+    same thing (unit, product, the size of one item and its unit) - one item
+    adding both; a target item counting something else - the source's
+    becomes a free text, both lines stay."""
 
     def setUp(self):
         super().setUp()
@@ -424,6 +652,83 @@ class MergedArticleTests(ModelTestCase):
         )
         self.assertEqual((item.checked_at, item.checked_by), (self.ticked_at, "employe.exemple@exemple.fr"))
         self.assertFalse(StockType.objects.filter(pk=self.source.pk).exists())
+
+    def test_a_moved_item_keeps_its_size(self):
+        item = make_shopping_item(
+            self.list, self.source, quantity="3", product_name="BIERE EXEMPLE 75CL", item_size=D("0.75"), size_unit="L"
+        )
+        merge_stock_types(self.source, self.target)
+        item.refresh_from_db()
+        self.assertEqual(
+            (item.stock_type, item.quantity, item.unit, item.item_size, item.size_unit),
+            (self.target, D("3"), "", D("0.75"), "L"),
+        )
+
+    def test_a_source_left_a_free_text_keeps_its_size(self):
+        # Beside the target counted in its own unit, the source's item is a
+        # free text: its bottles keep their size.
+        make_shopping_item(self.list, self.target, quantity="6", unit=UnitChoices.UNIT)
+        mine = make_shopping_item(
+            self.list, self.source, quantity="3", product_name="BIERE EXEMPLE 75CL", item_size=D("0.75"), size_unit="L"
+        )
+        merge_stock_types(self.source, self.target)
+        mine.refresh_from_db()
+        self.assertEqual(
+            (mine.stock_type_id, mine.label, mine.item_size, mine.size_unit),
+            (None, "Bière blonde exemple", D("0.75"), "L"),
+        )
+
+    def test_two_items_of_one_size_add_up_and_keep_it(self):
+        common = {"product_name": "BIERE EXEMPLE 75CL", "item_size": D("0.75"), "size_unit": "L"}
+        make_shopping_item(self.list, self.source, quantity="2", **common)
+        make_shopping_item(self.list, self.target, quantity="3", **common)
+        merge_stock_types(self.source, self.target)
+        (item,) = self.list.items.all()
+        self.assertEqual(
+            (item.stock_type, item.quantity, item.item_size, item.size_unit), (self.target, D("5"), D("0.75"), "L")
+        )
+
+    def test_seventy_centilitres_beside_one_litre_keeps_both_lines(self):
+        # One product, two sizes: added up they would count 70 cl bottles as
+        # litre ones. The source's becomes a free text; nothing is lost.
+        mine = make_shopping_item(
+            self.list, self.source, quantity="3", product_name="BIERE EXEMPLE", item_size=BOTTLE, size_unit="L"
+        )
+        theirs = make_shopping_item(
+            self.list, self.target, quantity="2", product_name="BIERE EXEMPLE", item_size=D("1"), size_unit="L"
+        )
+        merge_stock_types(self.source, self.target)
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual(
+            (mine.stock_type_id, mine.label, mine.quantity, mine.item_size, mine.size_unit),
+            (None, "Bière blonde exemple", D("3"), BOTTLE, "L"),
+        )
+        self.assertEqual(
+            (theirs.stock_type, theirs.quantity, theirs.item_size, theirs.size_unit), (self.target, D("2"), D("1"), "L")
+        )
+
+    def test_a_size_beside_none_is_something_else_too(self):
+        # Bottles of a known size beside the same product counted before
+        # sizes were kept: two lines, as for two sizes.
+        for source_size, target_size in ((BOTTLE, None), (None, BOTTLE)):
+            with self.subTest(source=source_size, target=target_size):
+                source = make_stock_type(name="Source exemple", unit=UnitChoices.UNIT)
+                shopping_list = make_shopping_list(make_supplier(name="Magasin exemple"))
+
+                def sized(size):
+                    return {"item_size": size, "size_unit": "L" if size is not None else ""}
+
+                mine = make_shopping_item(
+                    shopping_list, source, quantity="3", product_name="BIERE EXEMPLE", **sized(source_size)
+                )
+                make_shopping_item(
+                    shopping_list, self.target, quantity="2", product_name="BIERE EXEMPLE", **sized(target_size)
+                )
+                merge_stock_types(source, self.target)
+                mine.refresh_from_db()
+                self.assertEqual((mine.stock_type_id, mine.quantity, mine.item_size), (None, D("3"), source_size))
+                self.assertEqual(shopping_list.items.count(), 2)
 
     def test_a_twin_counting_the_same_thing_makes_one_item(self):
         make_shopping_item(self.list, self.source, quantity="12", unit=UnitChoices.UNIT, note="Fraîche exemple")

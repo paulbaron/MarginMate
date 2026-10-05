@@ -31,7 +31,7 @@ from django.test import SimpleTestCase, TestCase, tag
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory.models import ShoppingExclusion, StockType, UnitChoices
+from inventory.models import ShoppingExclusion, ShoppingListItem, StockType, UnitChoices
 from recipes.sales import record_sales
 from tests.factories import (
     make_ingredient,
@@ -45,6 +45,21 @@ from tests.factories import (
     make_supplier,
 )
 from tests.test_views_smoke import make_gaps_to_fill, make_shopping_history, make_shopping_lists
+
+
+def add_bottles_of_gin(shopping_list):
+    """Two 70 cl bottles of a gin on `shopping_list`, as « Ajouter » keeps
+    them: the number counts the bottles, the size of one beside it
+    (invented)."""
+    return ShoppingListItem.objects.create(
+        shopping_list=shopping_list,
+        label="Gin exemple",
+        quantity=Decimal("2"),
+        product_name="GIN EXEMPLE 70CL X6",
+        pack_size=6,
+        item_size=Decimal("0.7"),
+        size_unit=UnitChoices.LITRE,
+    )
 
 
 class BaseTemplateTests(TestCase):
@@ -314,13 +329,14 @@ class SearchableSortableTableTests(TestCase):
         « 2 L » read as text."""
         made = make_shopping_history()
         lists = make_shopping_lists(made)
+        add_bottles_of_gin(lists.open)
         html = self.assertEnhancedTable("inventory:shopping_lists").content.decode()
         for label in ("listes en cours", "listes terminées"):
             with self.subTest(table=label):
                 self.assertIn(f'<table data-table data-table-label="{label}" class="phone-cards">', html)
         started = timezone.localtime(lists.open.created_at)
         self.assertIn(f'<td data-label="Commencée le" data-sort="{started:%Y-%m-%d}">{started:%d/%m/%Y}</td>', html)
-        self.assertIn('<td data-label="Pris" data-sort="1">1 / 3</td>', html)
+        self.assertIn('<td data-label="Pris" data-sort="1">1 / 4</td>', html)
         self.assertRegex(
             html, r'<td data-label="Terminée le" data-sort="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}">\d{2}/\d{2}/\d{4}</td>'
         )
@@ -328,6 +344,8 @@ class SearchableSortableTableTests(TestCase):
         response = self.client.get(page, {"fournisseur": made.wholesaler.pk})
         self.assertContains(response, '<table data-table data-table-label="articles" class="phone-cards">')
         self.assertContains(response, '<td class="num" data-label="Quantité" data-sort="2">2 L</td>')
+        # Bottles of a size sort by their number, never by their words.
+        self.assertContains(response, '<td class="num" data-label="Quantité" data-sort="2">2 bouteilles de 70 cl</td>')
         response = self.client.get(page, {"liste": lists.finished.pk})
         self.assertContains(response, '<table data-table data-table-label="courses terminées" class="phone-cards">')
         self.assertContains(response, '<td class="num" data-label="Quantité" data-sort="1">1 kg</td>')
@@ -2215,16 +2233,23 @@ class PhoneCardsLabelTests(TestCase):
     def test_the_shopping_lists(self):
         """« Listes de courses »: the lists open and finished, a store's list
         - each figure under its header's words, « Modifier » and « Retirer »
-        last, across the card -, and a finished list. Invented data
+        last, across the card -, and a finished list. An item counted in
+        bottles says so under « Quantité ». Invented data
         (make_shopping_lists)."""
         made = make_shopping_history()
         lists = make_shopping_lists(made)
+        add_bottles_of_gin(lists.open)
         index = reverse("inventory:shopping_lists")
         page = reverse("inventory:shopping_list_page")
+        articles = self.cards(f"{page}?fournisseur={made.wholesaler.pk}", "data-table-label", "articles")
+        (gin,) = [row for row in articles["rows"] if row[0]["text"].strip() == "Gin exemple"]
+        self.assertEqual(
+            [" ".join(cell["text"].split()) for cell in gin if cell["label"] == "Quantité"], ["2 bouteilles de 70 cl"]
+        )
         for url, label, rows, action in (
             (index, "listes en cours", 1, ["Faire", "les", "courses"]),
             (index, "listes terminées", 1, None),
-            (f"{page}?fournisseur={made.wholesaler.pk}", "articles", 3, ["Modifier", "Retirer"]),
+            (f"{page}?fournisseur={made.wholesaler.pk}", "articles", 4, ["Modifier", "Retirer"]),
             (f"{page}?liste={lists.finished.pk}", "courses terminées", 2, None),
         ):
             with self.subTest(table=label):
@@ -2455,6 +2480,44 @@ class ShoppingListStylesheetTests(StylesheetTestCase):
         rules = [rule for rule in self.rules if any("shopping-" in selector for selector in rule.selectors)]
         self.assertGreater(len(rules), 10)
         self.assertEqual([rule.selectors for rule in rules if "all" in rule.declarations], [])
+
+
+class EntryUnitsScriptTests(SimpleTestCase):
+    """static/js/entry_units.js fills a unit select from the names a page
+    ships - products read off suppliers' documents among them -, on the
+    stock take's rows and on the shopping list's add form: nodes and text
+    only, nothing kept in the browser, and both pages load it (its logic:
+    inventory/tests/test_entries.py)."""
+
+    SCRIPT = "static/js/entry_units.js"
+
+    def test_it_writes_no_markup(self):
+        source = _source(self.SCRIPT)
+        for pattern in MARKUP_WRITERS:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, source))
+
+    def test_it_keeps_nothing_in_the_browser(self):
+        self.assertIsNone(
+            re.search(r"\b(?:localStorage|sessionStorage|indexedDB|document\.cookie)\b", _source(self.SCRIPT))
+        )
+
+    def test_both_pages_load_it(self):
+        for template in (
+            "inventory/templates/inventory/stock_take_form.html",
+            "inventory/templates/inventory/shopping_list_page.html",
+        ):
+            with self.subTest(template=template):
+                self.assertIn(
+                    "<script src=\"{% asset 'js/entry_units.js' %}\" defer></script>",
+                    template_markup_with_tags(template),
+                )
+
+
+def template_markup_with_tags(relative: str) -> str:
+    """A template's source, its comments taken out (what a comment says
+    about a script is not that script)."""
+    return re.sub(r"\{% comment %\}.*?\{% endcomment %\}", "", _source(relative), flags=re.DOTALL)
 
 
 class GapExclusionListStylesheetTests(StylesheetTestCase):

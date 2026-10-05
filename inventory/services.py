@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from copy import copy
 from datetime import date
 from decimal import Decimal
@@ -63,14 +64,24 @@ def product_counting_ratios(product_ids) -> dict:
     return ratios
 
 
+def is_discrete_count(ratios: Mapping[int, set], product_id: int) -> bool:
+    """Whether this product is counted in discrete items (bottles, packs)
+    rather than weighed or measured: at most one distinct ratio in
+    `product_counting_ratios`' answer, none included. THE rule - the stock
+    take's default unit, `product_is_discrete_count`,
+    `bulk_product_counting_units`, an item's size on the shopping lists
+    (`entries.item_size`) and `variance.typical_item_sizes(discrete_only=True)`
+    all ask it here."""
+    return len(ratios.get(product_id, ())) <= 1
+
+
 def product_is_discrete_count(product: Product) -> bool:
     """Whether a human should count this product in discrete items
     (bottles/packs) rather than the stock type's own measured unit - see
     product_counting_ratios for the reasoning. Single-product convenience
     around bulk_product_counting_units/product_counting_ratios, for
     valuing one stock-take line at a time."""
-    ratios = product_counting_ratios([product.id]).get(product.id, set())
-    return len(ratios) <= 1
+    return is_discrete_count(product_counting_ratios([product.id]), product.id)
 
 
 def product_counting_ratio(product: Product) -> Decimal | None:
@@ -103,7 +114,7 @@ def bulk_product_counting_units(products) -> dict:
     return {
         product.id: (
             "Unité"
-            if len(ratios.get(product.id, set())) <= 1
+            if is_discrete_count(ratios, product.id)
             else (product.stock_type.get_unit_display() if product.stock_type_id else "Unité")
         )
         for product in products

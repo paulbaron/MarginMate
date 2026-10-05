@@ -184,6 +184,70 @@ def make_shopping_history() -> SimpleNamespace:
     return made
 
 
+#: What make_shopping_bottles' stores sell, by the name their invoices print.
+SHOPPING_GIN_PRODUCT = "GIN EXEMPLE 70CL X6"
+SHOPPING_VODKA_PRODUCT = "VODKA EXEMPLE 70CL"
+SHOPPING_JUICE_PRODUCT = "JUS EXEMPLE VRAC"
+SHOPPING_KEG_PRODUCT = "BIERE PRESSION EXEMPLE FUT 30L"
+SHOPPING_CUPS_PRODUCT = "GOBELETS EXEMPLE X50"
+SHOPPING_CHEESE_PRODUCT = "FROMAGE EXEMPLE A LA COUPE"
+
+
+def make_shopping_bottles(made) -> SimpleNamespace:
+    """Bottles, kegs and packets on top of make_shopping_history(), for the
+    shopping lists' units (« bouteilles » or litres). At the wholesaler, on
+    the beer's days: a gin in litres bought every week as
+    SHOPPING_GIN_PRODUCT (six 70 cl bottles, 4.2 L, a carton of six); a juice
+    in litres bought by measure every other week (2.5 L, its volumes never
+    alike twice: no format to count it in); a draught beer in litres as one
+    30 L keg every other week; paper cups counted in units, two packets of
+    50 at a time; a cheese in kilos weighed at the counter (its weights
+    never alike twice). At the grocer's only: a vodka in litres, by the
+    70 cl bottle. Invented data, prices above 30 €. Returns the articles and
+    their products."""
+    today = timezone.localdate()
+    litre, kilogram, unit = UnitChoices.LITRE, UnitChoices.KILOGRAM, UnitChoices.UNIT
+    bottles = SimpleNamespace(
+        gin=make_stock_type(name="Gin exemple", unit=litre),
+        vodka=make_stock_type(name="Vodka exemple", unit=litre),
+        juice=make_stock_type(name="Jus exemple", unit=litre),
+        draught=make_stock_type(name="Bière pression exemple", unit=litre),
+        cups=make_stock_type(name="Gobelets exemple", unit=unit),
+        cheese=make_stock_type(name="Fromage exemple", unit=kilogram),
+    )
+    wholesaler, grocer = made.wholesaler, made.grocer
+    bottles.gin_product = make_product(wholesaler, SHOPPING_GIN_PRODUCT, bottles.gin, unit=litre)
+    bottles.vodka_product = make_product(grocer, SHOPPING_VODKA_PRODUCT, bottles.vodka, unit=litre)
+    bottles.juice_product = make_product(wholesaler, SHOPPING_JUICE_PRODUCT, bottles.juice, unit=litre)
+    bottles.keg_product = make_product(wholesaler, SHOPPING_KEG_PRODUCT, bottles.draught, stock_equivalent="30")
+    bottles.cups_product = make_product(wholesaler, SHOPPING_CUPS_PRODUCT, bottles.cups, stock_equivalent="50")
+    bottles.cheese_product = make_product(wholesaler, SHOPPING_CHEESE_PRODUCT, bottles.cheese, unit=kilogram)
+
+    def buy(product, days_ago, units, quantity, total_ht, volume="0", colisage=1):
+        invoice = make_invoice(supplier=product.supplier, invoice_date=today - timedelta(days=days_ago))
+        line = make_invoice_line(
+            invoice=invoice,
+            product=product,
+            quantity=Decimal(units),
+            total_ht=total_ht,
+            total_volume=volume,
+            colisage=colisage,
+        )
+        make_movement(stock_type=product.stock_type, quantity=quantity, unit_cost_ht="40", invoice_line=line)
+
+    for week in range(1, 27):
+        buy(bottles.gin_product, 7 * week, "6", "4.2", "84.00", volume="4.2", colisage=6)
+    for week in range(1, 27, 2):
+        buy(bottles.juice_product, 7 * week, "2.5", "2.5", "35.00", volume="2.5" if week % 4 == 1 else "2.6")
+        buy(bottles.keg_product, 7 * week, "1", "30", "95.00")
+    for week, weighed in ((2, "1.2"), (6, "0.9"), (10, "1.1")):
+        buy(bottles.cups_product, 7 * week, "2", "100", "32.00")
+        buy(bottles.cheese_product, 7 * week, "1", weighed, "38.00", volume=weighed)
+    for days_ago in (28, 21, 14):
+        buy(bottles.vodka_product, days_ago, "6", "4.2", "90.00", volume="4.2")
+    return bottles
+
+
 #: Who finished make_shopping_lists' list at the grocer's: a login nobody
 #: made (gone, or never there) - the lists say « un ancien membre », never
 #: this address.
@@ -2865,7 +2929,18 @@ class ShoppingListParameterSmokeTests(TestCase):
         return [
             *ShoppingList.objects.order_by("pk").values_list("pk", "finished_at", "finished_by"),
             *ShoppingListItem.objects.order_by("pk").values_list(
-                "pk", "shopping_list", "label", "quantity", "unit", "note", "checked_at", "checked_by"
+                "pk",
+                "shopping_list",
+                "label",
+                "quantity",
+                "unit",
+                "product_name",
+                "pack_size",
+                "item_size",
+                "size_unit",
+                "note",
+                "checked_at",
+                "checked_by",
             ),
         ]
 
@@ -2894,12 +2969,16 @@ class ShoppingListParameterSmokeTests(TestCase):
                     self.assertEqual(self.snapshot(), before)
 
     def test_the_add_form(self):
-        """From the list page (a name) and from the forecast (a line): each
-        written item is the one its message says was added."""
+        """From the list page (a name - a free text, and an article counted
+        in its bottles, `unite`) and from the forecast (a line): each written
+        item is the one its message says was added."""
         olives = str(self.made.olives.products.get().pk)
+        # The fixture's syrup is on the list, ticked: put back, never added.
+        ShoppingListItem.objects.filter(pk=self.lists.syrup.pk).delete()
         written = refused = 0
         for baseline in (
-            {"fournisseur": self.store, "nom": "Pain neuf exemple", "quantite": "2", "note": ""},
+            {"fournisseur": self.store, "nom": "Pain neuf exemple", "quantite": "2", "unite": "", "note": ""},
+            {"fournisseur": self.store, "nom": "Sirop exemple (article)", "quantite": "2", "unite": "UNIT", "note": ""},
             {
                 "fournisseur": self.store,
                 "article": str(self.made.olives.pk),
@@ -2926,15 +3005,30 @@ class ShoppingListParameterSmokeTests(TestCase):
         self.assertGreater(refused, 20)
 
     def test_the_edit_and_delete_forms(self):
+        """The card of a free text, and of the syrup in litres with its unit
+        (`unite`): what is written is what « Modifié » says was."""
         bread = str(self.lists.bread.pk)
-        baseline = {"fournisseur": self.store, "ligne": bread, "quantite": "3", "note": ""}
-        for field in baseline:
-            for value in self.VALUES:
-                with self.subTest(edit=field, value=value[:20]):
-                    ShoppingListItem.objects.filter(pk=self.lists.bread.pk).update(quantity=Decimal("2"), note="")
-                    before = self.snapshot()
-                    content = self.act("inventory:shopping_list_item_edit", {**baseline, field: value})
-                    self.assertEqual(self.snapshot() != before, "Modifié : " in content)
+        syrup = str(self.lists.syrup.pk)
+        for baseline in (
+            {"fournisseur": self.store, "ligne": bread, "quantite": "3", "note": ""},
+            {"fournisseur": self.store, "ligne": syrup, "quantite": "3", "unite": "L", "note": ""},
+        ):
+            for field in baseline:
+                for value in self.VALUES:
+                    with self.subTest(edit=field, item=baseline["ligne"], value=value[:20]):
+                        ShoppingListItem.objects.filter(pk=self.lists.bread.pk).update(quantity=Decimal("2"), note="")
+                        ShoppingListItem.objects.filter(pk=self.lists.syrup.pk).update(
+                            quantity=Decimal("2"),
+                            unit=UnitChoices.LITRE,
+                            product_name="",
+                            pack_size=None,
+                            item_size=None,
+                            size_unit="",
+                            note="",
+                        )
+                        before = self.snapshot()
+                        content = self.act("inventory:shopping_list_item_edit", {**baseline, field: value})
+                        self.assertEqual(self.snapshot() != before, "Modifié : " in content)
         for field in ("fournisseur", "ligne"):
             for value in self.VALUES:
                 with self.subTest(delete=field, value=value[:20]):
