@@ -9,9 +9,10 @@ the tenant bound as `default` - none of them names a database, so a
 
 The seed migrations wire the OWNER's integrations into every database: an
 active mailbox source (UBA) and Metro marked to fetch. A new tenant that is
-not the owner's has both switched off right after creation - and the
-integrations gate (accounts.tenancy.integrations_allowed) refuses them
-anyway.
+not the owner's has both switched off right after creation (its
+HOSTED_ESPACE_STEPS): its mailbox signs in with its own « Identifiants »
+and searches what it sets up itself, and Metro stays the platform owner's
+whatever its row says (accounts.tenancy.server_accounts_allowed).
 
 The files come FIRST and the row last (`prepare_tenant`, then
 `create_tenant` or the signup's own transaction): copying and migrating take
@@ -128,6 +129,25 @@ def switch_off_server_integrations() -> None:
     Supplier.objects.filter(code="METRO").update(is_scrapable=False)
 
 
+#: What a new espace that is not the owner's runs once its database is
+#: migrated, bound to it, in this order: dotted paths, resolved at the call
+#: (a test patches a step where it lives). The seed migrations wrote the
+#: owner's bar into the template; each step takes back what is his alone.
+HOSTED_ESPACE_STEPS: tuple[str, ...] = (
+    "accounts.provisioning.switch_off_server_integrations",
+    "bank.presets.set_up_new_espace",
+    "invoices.seeds.forget_original_bar_suppliers",
+)
+
+
+def set_up_hosted_espace() -> None:
+    """Every `HOSTED_ESPACE_STEPS`, in the bound tenant."""
+    from django.utils.module_loading import import_string
+
+    for step in HOSTED_ESPACE_STEPS:
+        import_string(step)()
+
+
 def remove_tenant_files(tenant) -> None:
     shutil.rmtree(paths.tenant_dir(tenant), ignore_errors=True)
 
@@ -163,7 +183,7 @@ def prepare_tenant(name: str, *, uses_server_integrations: bool = False, dir_nam
         with bound_tenant(tenant):
             _migrate_bound()
             if not uses_server_integrations:
-                switch_off_server_integrations()
+                set_up_hosted_espace()
     except BaseException:
         # Only a folder made here: an existing one (a dir_name passed in
         # that was taken) is somebody's tenant.

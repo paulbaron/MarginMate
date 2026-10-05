@@ -6,10 +6,8 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from accounts.tenancy import integrations_allowed
 from common import MEGABYTE, BlankRowTolerantForm, file_too_big, group_thousands, is_id, selection_too_big
 
-from . import integrations
 from .einvoice import MAX_AMOUNT, MAX_UNIT, UNIT
 from .models import (
     AUTO_GATHER_END_BEFORE_START,
@@ -20,7 +18,7 @@ from .models import (
     Supplier,
     WebsiteInvoiceSource,
 )
-from .parsers import LLM_PARSER_KEY, PARSER_REGISTRY
+from .parsers import reader_choices
 from .rendering import PLAIN_INPUTS
 
 
@@ -635,11 +633,10 @@ class InvoiceTypeForm(forms.ModelForm):
         self.fields["source_kind"].choices = [(kind.value, CHANNELS[kind]) for kind in InvoiceType.SourceKind]
         # No dedicated parser no longer means typing it in: the one reader
         # reads any document's table, totals and VAT (parsers/generic_receipt).
-        choices = [("", "— Lecteur générique —")] + [
-            (key, key) for key in sorted(PARSER_REGISTRY) if key != LLM_PARSER_KEY
-        ]
+        # The layout readers by name, never a till's settings; a key saved
+        # before stays valid (parsers.reader_choices).
         self.fields["parser_key"] = forms.ChoiceField(
-            choices=choices,
+            choices=reader_choices(self.instance.parser_key or ""),
             required=False,
             label="Lecteur",
             help_text=(
@@ -911,9 +908,7 @@ class ReceiptShopForm(forms.Form):
         value = self.cleaned_data["supplier"].strip()
         if value == NEW_SHOP:
             return NEW_SHOP
-        supplier = (
-            Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).filter(pk=value).first() if is_id(value) else None
-        )
+        supplier = Supplier.objects.filter(pk=value).first() if is_id(value) else None
         if supplier is None:
             raise forms.ValidationError("Enseigne inconnue.")
         return supplier
@@ -1000,8 +995,7 @@ class SupplierCreateForm(forms.Form):
 
 class InvoiceUploadForm(ReceiptShopForm):
     """A supplier's PDF invoice, and whose it is: a supplier with a reader of
-    its own, any other one (its invoice is read like a ticket), a new one -
-    or the AI pseudo-supplier, which only this import offers."""
+    its own, any other one (its invoice is read like a ticket) or a new one."""
 
     source_file = forms.FileField(label="Fichier PDF ou XML")
     unnamed_error = "Donnez un nom au nouveau fournisseur."
@@ -1012,17 +1006,6 @@ class InvoiceUploadForm(ReceiptShopForm):
         self.fields["supplier"].error_messages["required"] = "Choisissez le fournisseur de la facture."
         self.fields["new_name"].label = "Nom du nouveau fournisseur"
         self.fields["new_header"].label = "Texte en tête de ses factures"
-
-    def clean_supplier(self):
-        value = self.cleaned_data["supplier"].strip()
-        if is_id(value) and Supplier.objects.filter(pk=value, parser_key=LLM_PARSER_KEY).exists():
-            # The AI reading runs on the owner's key: not offered in a
-            # tenant that may not use the server's accounts, and refused
-            # here when posted all the same (invoices/integrations.py).
-            if not integrations_allowed():
-                raise forms.ValidationError(integrations.AI_READING)
-            return Supplier.objects.get(pk=value)
-        return super().clean_supplier()
 
     def clean_source_file(self):
         """A PDF, or the XML of an electronic invoice - which arrives on its
@@ -1360,9 +1343,8 @@ class AutoGatherForm(forms.Form):
             raise forms.ValidationError(
                 [f"« {source['label']} » : {source.get('reason') or 'à la main seulement'}." for source in refused]
             )
-        if not codes:
-            raise forms.ValidationError(AUTO_NO_SOURCE)
-        # In the order the page offers them.
+        # In the order the page offers them. None at all is refused for an
+        # active rule only (`clean`).
         return [source["code"] for source in self.offered if source["code"] in codes]
 
     def clean_weekdays(self):
@@ -1382,6 +1364,11 @@ class AutoGatherForm(forms.Form):
         start, end = cleaned.get("start_time"), cleaned.get("end_time")
         if start is not None and end is not None and end < start:
             self.add_error("end_time", AUTO_END_BEFORE_START)
+        # A rule switched off may keep no source: another bar whose mailbox
+        # left its « Identifiants » is offered none, and could otherwise
+        # only delete its rules, never stop them.
+        if cleaned.get("sources") == [] and cleaned.get("is_active"):
+            self.add_error("sources", AUTO_NO_SOURCE)
         codes, every = cleaned.get("sources"), cleaned.get("every_minutes")
         if codes and every is not None:
             kinds = {source["kind"] for source in self.offered if source["code"] in codes}

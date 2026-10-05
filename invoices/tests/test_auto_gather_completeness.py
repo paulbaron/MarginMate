@@ -360,11 +360,11 @@ class FailedImportTests(CoverageCase):
 
     def test_pdfium_busy_on_a_document_read_like_any(self):
         """[merge review] PDFium busy was taken for a refusal of the document
-        (« Failed to import »): the coverage moved past it for good."""
+        (« Échec de l'import »): the coverage moved past it for good."""
         with self.pdfium_held(), mock.patch("invoices.receipts.import_document", side_effect=self.drawn):
             job, _email, _slips, emit = self.gather({self.email_code}, email=self.fetched)
         self.assert_fetched_again(job, emit)
-        self.assertIn("Not imported now, fetched again next time", job.log)
+        self.assertIn("Non importé pour l'instant, repris à la prochaine récupération", job.log)
 
     def test_pdfium_busy_on_a_document_of_a_reader_of_its_own(self):
         InvoiceType.objects.filter(pk=self.cave.pk).update(parser_key="cave_exemple")

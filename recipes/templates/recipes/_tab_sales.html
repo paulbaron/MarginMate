@@ -4,7 +4,7 @@ What was sold: fetched from the till, typed by hand, or invoiced - the other
 half of the stock variance.
 
 Two pairs of dates live on this tab and they do entirely different things.
-The card just below FETCHES a period from the till. The « Du … au … » of
+L'Addition's card just below FETCHES a period from the till. The « Du … au … » of
 « Dernières ventes » only chooses what is displayed - and narrows the three
 cards that say what was sold (sales, sale documents, totals by origin), each
 of which says the period it is showing, because all-time totals above a
@@ -15,22 +15,25 @@ querystring tag) and its view comes back to it (menu.sales_list_url): posted
 to the bare address, one « Supprimer » put all 8 099 sales back on screen with
 nothing saying the period had been dropped.
 {% endcomment %}
+{% comment %}
+The till's two doors (recipes/pos/connectors.py). L'Addition's card only
+where its account is ready - this espace may use it and its login and
+password have a value (« Identifiants », else the owner's .env): nowhere else
+does a bar see a form that could only fail. Where it may not, the sentence
+(recipes/integration.py), never the server's variables; where it may and the
+account is not typed, one line for the owner pointing at « Identifiants ».
+{% endcomment %}
+{% if laddition_ready %}
 <div class="card">
     <div class="section-head">
         <div>
-            <h3>Importer les ventes de L'Addition</h3>
+            <h3>Récupérer les ventes de L'Addition</h3>
             <p class="muted">
                 Les nouveaux produits de la caisse arrivent dans « À lier ».
                 {% if last_sale %}Dernière vente enregistrée : {{ last_sale.sold_on|date:"d/m/Y" }}.{% endif %}
             </p>
         </div>
     </div>
-    {% comment %}
-    The server's L'Addition account is the owner's (recipes/integration.py):
-    another tenant gets the sentence and no form - and never the names of the
-    server's variables, which the owner's paragraph gives.
-    {% endcomment %}
-    {% if till_allowed %}
     <form method="post" action="{% url 'recipes:trigger_sales_import' %}{% querystring %}" class="inline-form">
         {% csrf_token %}
         <label class="inline-label">Du <input type="date" name="start_date" value="{{ default_start }}" required></label>
@@ -38,22 +41,77 @@ nothing saying the period had been dropped.
         <button class="btn" type="submit" data-job-control="sales-import-status"{% if job.is_active %} disabled{% endif %}>Récupérer les ventes</button>
     </form>
     <p class="muted small">
-        Nécessite <code>LADDITION_EMAIL</code> et <code>LADDITION_PASSWORD</code> dans le fichier <code>.env</code>.
-        Comptez quelques minutes par tranche de deux ans.
+        Le compte L'Addition se règle sur la page Identifiants. Comptez quelques minutes par tranche de deux ans.
     </p>
     {% if can.owner %}<p class="muted small"><a href="{% url 'recipes:auto_sales' %}">Import automatique : réglages</a></p>{% endif %}
-    {% else %}
-    <p class="muted">{{ till_to_configure|capfirst }}.</p>
-    {% endif %}
-    {% if job %}
-        {% include "recipes/_sales_import_status.html" %}
-    {% endif %}
 </div>
+{% elif not till_allowed %}
+<div class="card">
+    <p class="muted">{{ till_to_configure|capfirst }}.</p>
+</div>
+{% elif owner %}
+<p class="muted small">
+    Votre caisse est L'Addition ? Renseignez son compte sur la page <a href="{{ credentials_url }}">Identifiants</a>
+    pour récupérer les ventes d'ici.
+</p>
+{% endif %}
+
+{% if owner %}
+<div class="card" id="fichier-caisse">
+    <div class="section-head">
+        <div>
+            <h3>Importer un fichier de la caisse</h3>
+            <p class="muted">
+                L'export de votre caisse, en CSV ou en Excel (.xlsx) : les ventes par produit et par jour, ou les
+                encaissements par moyen de paiement. Un fichier importé de nouveau remplace ce qu'il contient : chaque
+                produit de chaque jour, ou tous les encaissements de chaque jour. Les ventes saisies à la main ne sont
+                jamais touchées.
+            </p>
+        </div>
+        <a class="btn btn-secondary btn-small" href="{{ formats_url }}">Formats des fichiers de caisse</a>
+    </div>
+    {% if not has_formats %}
+        <p class="muted small">
+            Décrivez d'abord les colonnes de votre fichier (<a href="{{ formats_url }}">Formats des fichiers de caisse</a>).
+            L'export « Lignes de ventes » de L'Addition se lit sans format.
+        </p>
+    {% endif %}
+    <form method="post" action="{{ upload_url }}{% querystring %}" enctype="multipart/form-data" class="inline-form">
+        {% csrf_token %}
+        <label class="stacked-label">
+            <span class="muted">Fichier</span>
+            <input type="file" name="fichier" accept=".csv,.txt,.xlsx" required>
+        </label>
+        <label class="stacked-label">
+            <span class="muted">Format</span>
+            <select name="format">
+                {% for choice in upload_choices %}
+                    <option value="{{ choice.value }}">{{ choice.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="stacked-label">
+            <span class="muted">Jour des ventes</span>
+            <input type="date" name="jour">
+        </label>
+        <button class="btn" type="submit" data-job-control="sales-import-status"{% if job.is_active %} disabled{% endif %}>Importer</button>
+    </form>
+    <p class="muted small">« Jour des ventes » : seulement pour un format sans colonne du jour (le rapport d'un jour).</p>
+</div>
+{% endif %}
+
+{% comment %}
+The import's status, apart from both doors: a job started by either - a
+fetch or a file - is followed here, whichever card is drawn.
+{% endcomment %}
+{% if job %}
+    {% include "recipes/_sales_import_status.html" %}
+{% endif %}
 
 <div class="card">
     <h3>Ajouter une vente à la main</h3>
     <p class="muted">
-        Pour les ventes que la caisse n'a pas enregistrées (origine « {{ manual_source }} ») : un import ne les
+        Pour les ventes que la caisse n'a pas enregistrées (origine « {{ manual_label }} ») : un import ne les
         écrase jamais. Ressaisir une recette le même jour met à jour sa quantité.
     </p>
     <form method="post" action="{% url 'recipes:sales_list' %}{% querystring %}" class="inline-form manual-sale">
@@ -95,7 +153,7 @@ nothing saying the period had been dropped.
         <tbody>
             {% for row in totals %}
             <tr>
-                <td>{{ row.source }}</td>
+                <td>{{ row.label }}</td>
                 <td class="num">{{ row.rows }}</td>
                 <td class="num">{{ row.units|default:0 }}</td>
             </tr>
@@ -225,7 +283,7 @@ nothing saying the period had been dropped.
                 <td data-sort="{{ sale.sold_on|date:'Y-m-d' }}">{{ sale.sold_on|date:"d/m/Y" }}</td>
                 <td><a href="{{ sale.recipe_url }}">{{ sale.recipe.name }}</a></td>
                 <td class="num">{{ sale.quantity }}</td>
-                <td class="muted">{{ sale.source }}</td>
+                <td class="muted">{{ sale.source_label }}</td>
                 <td class="num">
                     {% if sale.source == manual_source %}
                     <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}{% querystring %}"

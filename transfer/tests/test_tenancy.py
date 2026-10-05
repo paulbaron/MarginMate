@@ -33,9 +33,9 @@ from accounts.models import Membership
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
 from invoices import integrations
-from invoices.integrations import TO_CONFIGURE
+from invoices.integrations import TO_CONFIGURE, TO_CONFIGURE_PLURAL
 from invoices.models import Invoice, InvoiceType, Supplier
-from recipes.integration import TILL_TO_CONFIGURE
+from recipes.integration import TILL_REIMPORT
 from recipes.models import PosDailyPayment
 from tests.factories import make_invoice
 from tests.runner import confirm_password
@@ -440,8 +440,9 @@ class ThroughThePagesTests(TenantTestCase):
 class HostedBarWordingTests(TenantTestCase):
     """Bar Alpha is the owner's tenant, Bar Beta a hosted bar: Beta can
     neither edit the server's .env nor run a command on it, so « Données »
-    never tells it to - it says « à configurer » as every other page does
-    (invoices/integrations.py, recipes/integration.py)."""
+    never tells it to - its portals are « à configurer » as every other page
+    says (invoices/integrations.py), and its till's money comes back by
+    fetching or importing its sales again (recipes.integration.TILL_REIMPORT)."""
 
     owner_a = True
 
@@ -456,8 +457,13 @@ class HostedBarWordingTests(TenantTestCase):
                 self.assertNotIn(".env", hosted)
                 self.assertNotIn("manage.py", hosted)
                 self.assertNotIn("laddition_backfill", hosted)
-                self.assertIn(f"portails clients : {TO_CONFIGURE}", hosted)
-                self.assertIn(TILL_TO_CONFIGURE, hosted)
+                self.assertIn(f"Portails clients : {TO_CONFIGURE_PLURAL}", hosted)
+                self.assertIn("restent sur la page Identifiants", hosted)
+                # The mailbox is open: « à configurer » is said of the
+                # portals alone, never of the mailbox's searches.
+                self.assertNotIn("boîte mail : à configurer", hosted)
+                self.assertNotIn("Identifiants : à ressaisir dans un autre espace) et portails", hosted)
+                self.assertIn(TILL_REIMPORT, hosted)
                 owner = self.text(self.user_a, url)
                 self.assertIn("dans le fichier .env (à recopier à la main sur un autre ordinateur)", owner)
                 self.assertIn("(manage.py laddition_backfill_revenue, puis laddition_backfill_payments)", owner)
@@ -474,8 +480,8 @@ class HostedBarWordingTests(TenantTestCase):
         self.till_payment(self.bar_b)
         with bound_tenant(self.bar_b):
             notes = run_clear({"ventes"}, preview=True).section("ventes").notes
-        self.assertEqual(notes, [sales_section.PAYMENTS_NOTE_TO_CONFIGURE])
-        self.assertIn(TILL_TO_CONFIGURE, notes[0])
+        self.assertEqual(notes, [sales_section.PAYMENTS_NOTE_HOSTED])
+        self.assertIn(TILL_REIMPORT, notes[0])
         self.assertNotIn("manage.py", notes[0])
         with bound_tenant(self.bar_a):
             notes = run_clear({"ventes"}, preview=True).section("ventes").notes

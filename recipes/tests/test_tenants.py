@@ -1,12 +1,14 @@
 """The till in multi mode: one tenant's sales never land in another's, and
-the server's L'Addition account works for the owner's tenant only.
+each fetches them with its own L'Addition account.
 
 `TwoTenantsTestCase` (accounts/tests/support.py) gives two real tenants in
-temporary files: bar A is the owner's (`owner_a`), bar B another bar. The
-rule is the spec's: the .env integrations are the owner's own accounts, so
-everywhere else the import is « à configurer », refused by the page, the
-thread, the session and the commands alike - each is reachable on its own
-(a stale page's POST, a thread's target called directly, laddition_open).
+temporary files: bar A is the platform owner's (`owner_a`), bar B another
+bar. Every espace fetches its sales with the account typed on its own
+« Identifiants » page; the server's .env values stand in for the owner's
+espace alone - B, with nothing typed, never signs in with them. Unbound,
+the page, the thread, the session and the commands refuse alike - each is
+reachable on its own. `laddition_open`, which shows a till in a browser of
+the server, is the owner's.
 
 Nothing is downloaded and nothing contacts L'Addition: the download and the
 browser are patched, and the exports are hand-written workbooks
@@ -15,9 +17,11 @@ browser are patched, and the exports are hand-written workbooks
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import threading
-from datetime import date
+from contextlib import ExitStack
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -27,14 +31,22 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils.html import escape
 
-from accounts import paths
+from accounts import paths, vault
 from accounts.tenancy import bound, bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
-from recipes.models import PosProduct, PosProductDailyQuantity, SalesImportJob
+from common import SERVER_ERROR
+from invoices.scrapers import chrome
+from notifications import automation
+from recipes import auto_sales
+from recipes.integration import TILL_LOGIN_MISSING
+from recipes.management.commands.laddition_open import OWNER_ONLY
+from recipes.models import AutoSalesImport, PosProduct, PosProductDailyQuantity, SalesImportJob
 from recipes.pos import laddition_session as session_module
 from recipes.tasks import import_laddition_sales_task
 from recipes.tests.test_pos_revenue import HEADER, line, write_workbook
+from recipes.tests.till_support import LADDITION_ACCOUNT
 
 JUNE = {"start_date": "2026-06-01", "end_date": "2026-06-30"}
 
@@ -60,20 +72,38 @@ class SalesTabTests(TwoTenantsTestCase):
         self.client.force_login(user)
         return self.client.get(reverse("recipes:sales_list")).content.decode()
 
-    def test_another_bar_is_told_the_import_is_to_configure(self):
+    def beta_s_account(self) -> None:
+        """Beta's L'Addition account, typed on its own « Identifiants »."""
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+
+    def test_another_bar_is_offered_the_import(self):
+        # Its own account (its « Identifiants »): the form is drawn there too.
+        self.beta_s_account()
         page = self.tab(self.user_b)
-        self.assertIn("à configurer — disponible prochainement dans les réglages de votre espace", page)
-        # No form to post, and nothing about the server's own settings.
-        self.assertNotIn(reverse("recipes:trigger_sales_import"), page)
+        self.assertIn(reverse("recipes:trigger_sales_import"), page)
+        self.assertNotIn("à configurer", page)
+
+    @LADDITION_ACCOUNT
+    def test_another_bar_s_tab_names_no_server_variable(self):
+        # The owner's .env values in the settings, Beta's own account typed:
+        # the card is drawn, and says nothing of the server's.
+        self.beta_s_account()
+        page = self.tab(self.user_b)
+        self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("LADDITION_EMAIL", page)
         self.assertNotIn(".env", page)
 
+    @LADDITION_ACCOUNT
     def test_the_owner_s_tenant_keeps_the_form(self):
         page = self.tab(self.user_a)
         self.assertIn(reverse("recipes:trigger_sales_import"), page)
         self.assertNotIn("à configurer", page)
 
 
+@LADDITION_ACCOUNT
 class TriggerTests(TwoTenantsTestCase):
     """The POST that starts the import."""
 
@@ -85,11 +115,19 @@ class TriggerTests(TwoTenantsTestCase):
             response = self.client.post(reverse("recipes:trigger_sales_import"), JUNE, follow=True)
         return response, thread
 
-    def test_another_bar_s_post_is_refused_and_starts_nothing(self):
-        response, thread = self.post(self.user_b)
-        thread.assert_not_called()
-        self.assertContains(response, "à configurer")
+    def test_another_bar_s_thread_works_for_another_bar(self):
+        # Its own account: the owner's .env values (LADDITION_ACCOUNT) are
+        # never another bar's (vault.server_setting).
+        from accounts import vault
+
         with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+        _response, thread = self.post(self.user_b)
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs["target"].tenant.pk, self.bar_b.pk)
+        with bound_tenant(self.bar_b):
+            self.assertTrue(SalesImportJob.objects.exists())
+        with bound_tenant(self.bar_a):
             self.assertFalse(SalesImportJob.objects.exists())
 
     def test_the_owner_s_thread_works_for_the_owner_s_tenant(self):
@@ -120,17 +158,32 @@ class TaskTests(TwoTenantsTestCase):
 
     owner_a = True
 
-    def test_the_task_refuses_in_another_bar_before_anything_is_downloaded(self):
-        with bound_tenant(self.bar_b):
-            job = SalesImportJob.objects.create()
-            with mock.patch("recipes.tasks.download_sales_lines") as download:
-                import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
-            job.refresh_from_db()
+    def test_the_task_refuses_unbound_before_anything_is_downloaded(self):
+        job = SalesImportJob.objects.create()
+        with mock.patch("recipes.tasks.download_sales_lines") as download:
+            import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
+        job.refresh_from_db()
         download.assert_not_called()
         self.assertEqual(job.status, SalesImportJob.Status.FAILED)
         self.assertIn("à configurer", job.log)
         self.assertNotIn("Traceback", job.log)
         self.assertIsNotNone(job.finished_at)
+
+    def test_another_bar_s_task_downloads_into_its_own_folder(self):
+        seen = {}
+
+        def download(start, end, download_dir, **kwargs):
+            seen["folder"] = Path(download_dir)
+            return [an_export(download_dir)]
+
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create()
+            own_folder = paths.downloads_dir()
+            with mock.patch("recipes.tasks.download_sales_lines", side_effect=download):
+                import_laddition_sales_task(job.pk, date(2026, 6, 1), date(2026, 6, 30))
+            job.refresh_from_db()
+            self.assertEqual(job.status, SalesImportJob.Status.SUCCESS, job.log)
+        self.assertEqual(seen["folder"], own_folder)
 
     def test_a_real_thread_imports_into_its_tenant_from_its_tenant_s_folder(self):
         seen = {}
@@ -171,30 +224,80 @@ class SessionTests(TwoTenantsTestCase):
 
     owner_a = True
 
-    def test_no_browser_starts_for_another_bar(self):
-        with bound_tenant(self.bar_b):
-            with (
-                mock.patch.object(session_module, "build_driver") as build,
-                mock.patch.object(session_module, "open_report") as open_report,
-                self.assertRaises(session_module.LadditionNotAllowed) as caught,
-            ):
-                with session_module.laddition_session(tempfile.mkdtemp()):
-                    pass
+    def test_no_browser_starts_unbound(self):
+        with (
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch.object(session_module, "open_report") as open_report,
+            self.assertRaises(session_module.LadditionNotAllowed) as caught,
+        ):
+            with session_module.laddition_session(tempfile.mkdtemp()):
+                pass
         build.assert_not_called()
         open_report.assert_not_called()
         self.assertIn("à configurer", str(caught.exception))
         self.assertNotIn("LADDITION", str(caught.exception))
 
-    def test_no_password_is_typed_for_another_bar(self):
+    def test_the_server_s_account_is_never_typed_for_another_bar(self):
+        """B typed nothing on its « Identifiants »: the .env's values - in
+        the settings of the one process every espace runs in - are the owner's
+        alone (accounts.vault.server_setting)."""
         driver = mock.Mock()
         with (
             bound_tenant(self.bar_b),
             override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
-            self.assertRaises(session_module.LadditionNotAllowed),
+            self.assertRaises(session_module.LadditionAuthError) as caught,
         ):
             session_module.log_in(driver, log=lambda *args: None)
         driver.get.assert_not_called()
         driver.find_element.assert_not_called()
+        self.assertIn("page Identifiants", str(caught.exception))
+        self.assertNotIn("LADDITION", str(caught.exception))
+
+    def test_another_bar_s_own_account_is_typed(self):
+        from accounts import vault
+
+        driver = mock.Mock()
+        typed = []
+        driver.find_element.return_value.send_keys.side_effect = typed.append
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+            with (
+                mock.patch.object(session_module, "navigate"),
+                mock.patch.object(session_module, "WebDriverWait"),
+                override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
+            ):
+                session_module.log_in(driver, log=lambda *args: None)
+        self.assertEqual(typed, ["caisse-beta@example.invalid", "secret-beta"])
+
+    def test_another_bar_opens_one_with_its_own_account(self):
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+            with (
+                mock.patch.object(session_module, "build_driver") as build,
+                mock.patch.object(session_module, "open_report"),
+            ):
+                with session_module.laddition_session(tempfile.mkdtemp()) as driver:
+                    self.assertIs(driver, build.return_value)
+
+    def test_no_browser_starts_for_another_bar_with_no_account(self):
+        """Its « Identifiants » holds no L'Addition login: said before one of
+        the server's browsers is started for nothing - the .env's values in
+        the settings change nothing."""
+        with (
+            bound_tenant(self.bar_b),
+            override_settings(LADDITION_EMAIL="caisse@example.invalid", LADDITION_PASSWORD="mot-de-passe-essai"),
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch.object(session_module, "open_report") as open_report,
+            self.assertRaises(session_module.LadditionAuthError) as caught,
+        ):
+            with session_module.laddition_session(tempfile.mkdtemp()):
+                pass
+        build.assert_not_called()
+        open_report.assert_not_called()
+        self.assertIn("page Identifiants", str(caught.exception))
+        self.assertNotIn("LADDITION", str(caught.exception))
 
     def test_the_owner_s_tenant_opens_one(self):
         with bound_tenant(self.bar_a):
@@ -256,13 +359,18 @@ class CommandsTests(TwoTenantsTestCase):
                 call_command(name, *arguments, stdout=StringIO())
             self.assertIn(f"manage.py tenant <dossier> {name}", str(caught.exception))
 
-    def test_the_import_downloads_nothing_for_another_bar(self):
-        with (
-            mock.patch("recipes.management.commands.laddition_import.download_sales_lines") as download,
-            self.assertRaisesMessage(CommandError, "à configurer"),
-        ):
+    def test_the_import_downloads_into_another_bar_s_own_folder(self):
+        seen = {}
+
+        def download(start, end, download_dir, **kwargs):
+            seen["folder"] = Path(download_dir)
+            return [an_export(download_dir)]
+
+        with mock.patch("recipes.management.commands.laddition_import.download_sales_lines", side_effect=download):
             self.run_for(self.bar_b, "laddition_import", "--from", "2026-06-01", "--to", "2026-06-30")
-        download.assert_not_called()
+        self.assertEqual(seen["folder"], self.downloads_of(self.bar_b))
+        with bound_tenant(self.bar_a):
+            self.assertFalse(PosProduct.objects.exists())
 
     def test_the_owner_s_import_downloads_into_the_owner_s_folder(self):
         seen = {}
@@ -279,6 +387,26 @@ class CommandsTests(TwoTenantsTestCase):
         with bound_tenant(self.bar_b):
             self.assertFalse(PosProduct.objects.exists())
 
+    def test_the_import_s_job_names_the_command_on_the_owner_s_tab_only(self):
+        """The job's first line is drawn on the espace's Ventes tab: another
+        bar's names no server command (CLAUDE.md, « Every espace's
+        connectors »)."""
+        from recipes.management.commands.laddition_import import COMMAND_NOTE, SERVER_NOTE
+
+        def download(start, end, download_dir, **kwargs):
+            return [an_export(download_dir)]
+
+        with mock.patch("recipes.management.commands.laddition_import.download_sales_lines", side_effect=download):
+            for tenant in (self.bar_a, self.bar_b):
+                self.run_for(tenant, "laddition_import", "--from", "2026-06-01", "--to", "2026-06-30")
+        with bound_tenant(self.bar_a):
+            self.assertIn(COMMAND_NOTE, SalesImportJob.objects.get().log)
+        with bound_tenant(self.bar_b):
+            log = SalesImportJob.objects.get().log
+        self.assertIn(SERVER_NOTE, log)
+        self.assertNotIn("laddition_import", log)
+        self.assertNotIn("commande", log)
+
     def test_a_file_named_by_hand_is_read_in_any_tenant(self):
         """--file uses no account: it reads what the operator names."""
         path = an_export(tempfile.mkdtemp())
@@ -289,10 +417,14 @@ class CommandsTests(TwoTenantsTestCase):
     def test_laddition_open_signs_in_for_nobody_but_the_owner(self):
         with (
             mock.patch("recipes.management.commands.laddition_open.laddition_session") as session,
-            self.assertRaisesMessage(CommandError, "à configurer"),
+            self.assertRaisesMessage(CommandError, OWNER_ONLY),
         ):
             self.run_for(self.bar_b, "laddition_open")
         session.assert_not_called()
+        with mock.patch("recipes.management.commands.laddition_open.laddition_session") as session:
+            session.return_value.__enter__.return_value.find_element.return_value.text = "Caisse"
+            self.run_for(self.bar_a, "laddition_open")
+        session.assert_called_once()
 
 
 class ImportCommandBusyTests(TestCase):
@@ -344,3 +476,287 @@ class ImportCommandBusyTests(TestCase):
         ):
             self.run_import("--from", "2026-06-01", "--to", "2026-06-30")
             self.assertEqual(Path(seen["folder"]), paths.downloads_dir())
+
+
+#: What the platform owner's .env holds on the server, in the settings of the
+#: process every espace runs in. Invented.
+SERVER_TILL = {"LADDITION_EMAIL": "caisse@example.invalid", "LADDITION_PASSWORD": "mot-de-passe-essai"}
+
+
+class AutomaticSalesImportGateTests(TwoTenantsTestCase):
+    """GitHub's main's automatic sales imports (recipes/auto_sales.py) in
+    every espace since the connectors opened to every bar: Bar Alpha is the
+    platform owner's espace, Bar Beta another bar. Beta's rules run only once
+    ITS L'Addition account is on its « Identifiants » - the .env values in
+    the settings are the owner's alone -, sign in with it in a headless
+    browser, and leave a log and an alert another bar may read: the till's
+    own refusal or one fixed sentence, no traceback, no server path."""
+
+    owner_a = True
+    #: Wednesday 18/11/2026, 07:00 in Paris (06:00 UTC).
+    SEVEN = datetime(2026, 11, 18, 6, 0, tzinfo=UTC)
+
+    def setUp(self):
+        super().setUp()
+        # No deploy mark of this checkout's: a slot would say « mise à jour ».
+        self.enterContext(override_settings(BASE_DIR=Path(tempfile.mkdtemp())))
+        # The whole line goes to the server's log (common.job_line, tasks.fail).
+        for name in ("marginmate.jobs", "recipes.tasks"):
+            logger = logging.getLogger(name)
+            self.enterContext(mock.patch.object(logger, "propagate", False))
+            handler = logging.NullHandler()
+            logger.addHandler(handler)
+            self.addCleanup(logger.removeHandler, handler)
+
+    def rule_in(self, tenant) -> AutoSalesImport:
+        with bound_tenant(tenant):
+            return AutoSalesImport.objects.create(
+                name="Ventes de la veille",
+                source="laddition",
+                weekdays="0,1,2,3,4,5,6",
+                times="07:00",
+                created_at=self.SEVEN - timedelta(days=7),
+            )
+
+    def type_beta_s_account(self):
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save({"LADDITION_EMAIL": "caisse-beta@example.invalid", "LADDITION_PASSWORD": "secret-beta"})
+
+    def tick(self, tenant, now=None):
+        with (
+            bound_tenant(tenant),
+            mock.patch("notifications.webpush.sending_enabled", return_value=True),
+            mock.patch("recipes.importing.threading.Thread") as thread,
+        ):
+            auto_sales.run_due(now or self.SEVEN)
+        return thread
+
+    def hold_the_browsers(self) -> ExitStack:
+        """Every browser the server gives the other bars, taken by two of
+        them - held after their binding ends: one thread binds one espace at
+        a time, the server's sessions are many (invoices/scrapers/chrome.py)."""
+        held = ExitStack()
+        self.addCleanup(held.close)
+        for name in ("Bar Gamma", "Bar Delta"):
+            with bound_tenant(self.make_tenant(name)):
+                held.enter_context(chrome.browser_slot())
+        return held
+
+    def beta_s_rule(self) -> AutoSalesImport:
+        with bound_tenant(self.bar_b):
+            return AutoSalesImport.objects.get()
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_for_its_own_account_never_the_server_s(self):
+        rule = self.rule_in(self.bar_b)
+        thread = self.tick(self.bar_b)
+        thread.assert_not_called()
+        with bound_tenant(self.bar_b):
+            rule.refresh_from_db()
+            self.assertEqual(rule.last_result, auto_sales.SOURCE_UNAVAILABLE)
+            self.assertFalse(SalesImportJob.objects.exists())
+        # Its page says where the account is typed - never a variable, nor
+        # the .env -, and draws no form.
+        self.client.force_login(self.user_b)
+        page = self.client.get(reverse("recipes:auto_sales")).content.decode()
+        self.assertIn(escape(TILL_LOGIN_MISSING), page)
+        for server_word in ("LADDITION_", ".env", "manage.py", SERVER_TILL["LADDITION_EMAIL"]):
+            self.assertNotIn(server_word, page)
+        self.assertNotIn('name="nouveau-name"', page)
+        # The owner's espace: his .env stands, as on GitHub's main.
+        self.rule_in(self.bar_a)
+        thread = self.tick(self.bar_a)
+        thread.assert_called_once()
+        self.assertEqual(thread.call_args.kwargs["target"].tenant.pk, self.bar_a.pk)
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_imports_in_a_thread_bound_to_it_once_its_account_is_typed(self):
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        thread = self.tick(self.bar_b)
+        thread.assert_called_once()
+        target = thread.call_args.kwargs["target"]
+        self.assertIs(target.__wrapped__, import_laddition_sales_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.get()
+            self.assertEqual((job.trigger, job.source), (SalesImportJob.Trigger.AUTOMATIC, "laddition"))
+        with bound_tenant(self.bar_a):
+            self.assertFalse(SalesImportJob.objects.exists())
+
+    @override_settings(**SERVER_TILL, SCRAPER_HEADLESS=False)
+    def test_another_bar_s_automatic_import_signs_in_headless_with_its_own_account_and_fails_cleanly(self):
+        rule = self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        typed, options = [], []
+
+        def chrome_started(*args, **kwargs):
+            options.append(kwargs["options"].arguments)
+            driver = mock.Mock()
+            driver.find_element.return_value.send_keys.side_effect = typed.append
+            return driver
+
+        def report(driver, path, log=print):
+            with mock.patch.object(session_module, "navigate"), mock.patch.object(session_module, "WebDriverWait"):
+                session_module.log_in(driver, log=log)
+            # The till's page then breaks, as a library says it: English, a
+            # path of the server's.
+            raise RuntimeError(r"chrome not reachable C:\MarginMate\app\chromedriver.exe")
+
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create(
+                trigger=SalesImportJob.Trigger.AUTOMATIC,
+                auto_rule_id=rule.pk,
+                range_start=date(2026, 11, 14),
+                range_end=date(2026, 11, 17),
+            )
+            with (
+                mock.patch.object(session_module.webdriver, "Chrome", side_effect=chrome_started),
+                mock.patch.object(session_module, "ChromeDriverManager"),
+                mock.patch.object(session_module, "Service"),
+                mock.patch.object(session_module, "open_report", side_effect=report),
+                mock.patch("notifications.events.emit") as alert,
+            ):
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            job.refresh_from_db()
+        # Its own account, never the .env's; a window never opens on the
+        # server's desktop (invoices/scrapers/chrome.py).
+        self.assertEqual(typed, ["caisse-beta@example.invalid", "secret-beta"])
+        self.assertIn("--headless=new", options[0])
+        # Its log: the fixed sentence, no traceback, no path, no English.
+        self.assertEqual(job.status, SalesImportJob.Status.FAILED)
+        self.assertIn(f"Échec : {SERVER_ERROR}", job.log)
+        for word in ("Traceback", "MarginMate", "chrome not reachable"):
+            self.assertNotIn(word, job.log)
+        # Its alert says the same sentence (auto_sales._notify), never the
+        # library's words.
+        alert.assert_called_once()
+        self.assertEqual(alert.call_args.args[1], "failed")
+        self.assertEqual(alert.call_args.kwargs["body"], f"Échec : {SERVER_ERROR}")
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_for_a_free_browser_rather_than_fail(self):
+        """Every bar's rule is offered at 07:00, and the server has two
+        browsers for all of them: a slot finding none gives itself back and
+        tries again the next minute - never an import refused at once, an
+        alert every morning."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        held = self.hold_the_browsers()
+        self.tick(self.bar_b).assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_slot_at), (automation.BROWSERS_BUSY, None))
+        with bound_tenant(self.bar_b):
+            self.assertFalse(SalesImportJob.objects.exists())
+        # Past the catch-up limit, it says what it waited for.
+        self.tick(self.bar_b, self.SEVEN + auto_sales.CATCH_UP_LIMIT).assert_not_called()
+        self.assertEqual(self.beta_s_rule().last_result, "manquée : navigateurs du serveur occupés à 07:00")
+        # The owner's espace never waits for the other bars' browsers.
+        self.rule_in(self.bar_a)
+        self.tick(self.bar_a).assert_called_once()
+        # A browser free: the next slot starts.
+        held.close()
+        self.tick(self.bar_b, self.SEVEN + timedelta(days=1)).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_an_import_refused_a_browser_gives_its_slot_back_without_an_alert(self):
+        """Started in the same tick as two other bars', which took the
+        browsers first: nothing ran, and nothing failed - the job is gone,
+        the slot is due again, no alert, no « Dernier échec »."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        self.tick(self.bar_b).assert_called_once()
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.get()
+            # Started by that tick (a test's clock is not the tick's).
+            SalesImportJob.objects.filter(pk=job.pk).update(started_at=self.SEVEN + timedelta(seconds=1))
+        self.assertEqual(self.beta_s_rule().last_slot_at, self.SEVEN)
+        held = self.hold_the_browsers()
+        with (
+            bound_tenant(self.bar_b),
+            mock.patch.object(session_module, "build_driver") as build,
+            mock.patch("notifications.events.emit") as alert,
+        ):
+            import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            self.assertFalse(SalesImportJob.objects.exists())
+        build.assert_not_called()
+        alert.assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_failed), (automation.BROWSERS_BUSY, None))
+        self.assertLess(rule.last_slot_at, self.SEVEN)
+        held.close()
+        self.tick(self.bar_b, self.SEVEN + timedelta(minutes=1)).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_an_import_by_hand_refused_a_browser_says_so(self):
+        self.type_beta_s_account()
+        self.hold_the_browsers()
+        with bound_tenant(self.bar_b):
+            job = SalesImportJob.objects.create(range_start=date(2026, 11, 14), range_end=date(2026, 11, 17))
+            with mock.patch.object(session_module, "build_driver") as build:
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+            job.refresh_from_db()
+        build.assert_not_called()
+        self.assertEqual(job.status, SalesImportJob.Status.FAILED)
+        self.assertIn(f"Échec : {chrome.BROWSERS_BUSY}", job.log)
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rule_waits_while_its_identifiants_cannot_be_read(self):
+        """A store held for a moment (accounts.vault.BUSY) is no account
+        missing: the slot is given back, never skipped as « indisponible »."""
+        self.rule_in(self.bar_b)
+        self.type_beta_s_account()
+        with mock.patch("accounts.vault.load", return_value=vault.VaultState(problem=vault.BUSY)):
+            self.tick(self.bar_b).assert_not_called()
+        rule = self.beta_s_rule()
+        self.assertEqual((rule.last_result, rule.last_slot_at), (automation.CREDENTIALS_BUSY, None))
+        self.tick(self.bar_b).assert_called_once()
+
+    @override_settings(**SERVER_TILL)
+    def test_another_bar_s_rules_stay_listed_and_can_be_stopped_once_its_account_is_gone(self):
+        """No L'Addition account on its « Identifiants » any more: no new
+        rule, but the ones there are listed, switched off and deleted - they
+        would otherwise tick « sautée : source indisponible » for good."""
+        rule = self.rule_in(self.bar_b)
+        self.client.force_login(self.user_b)
+        page = self.client.get(reverse("recipes:auto_sales")).content.decode()
+        self.assertIn(escape(TILL_LOGIN_MISSING), page)
+        self.assertIn(f'name="import-{rule.pk}-name"', page)
+        self.assertNotIn('name="nouveau-name"', page)
+        for server_word in ("LADDITION_", ".env", "manage.py", SERVER_TILL["LADDITION_EMAIL"]):
+            self.assertNotIn(server_word, page)
+        prefix = f"import-{rule.pk}"
+        switched_off = {
+            f"{prefix}-name": rule.name,
+            f"{prefix}-source": "laddition",
+            f"{prefix}-weekdays": ["0", "1", "2", "3", "4", "5", "6"],
+            f"{prefix}-times": "07:00",
+        }
+        response = self.client.post(reverse("recipes:auto_sales_edit", args=[rule.pk]), switched_off)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.beta_s_rule().is_active)
+        new = {"nouveau-name": "Autre", "nouveau-source": "laddition", "nouveau-weekdays": ["0"]}
+        new |= {"nouveau-times": "07:00", "nouveau-is_active": "on"}
+        self.assertEqual(self.client.post(reverse("recipes:auto_sales"), new).status_code, 403)
+        response = self.client.post(reverse("recipes:auto_sales_delete", args=[rule.pk]))
+        self.assertEqual(response.status_code, 302)
+        with bound_tenant(self.bar_b):
+            self.assertFalse(AutoSalesImport.objects.exists())
+
+    def test_the_owner_s_automatic_import_still_says_its_exception(self):
+        """GitHub's main's alert, in the platform owner's espace: the
+        exception's own first line, any address masked."""
+        rule = self.rule_in(self.bar_a)
+        with bound_tenant(self.bar_a):
+            job = SalesImportJob.objects.create(trigger=SalesImportJob.Trigger.AUTOMATIC, auto_rule_id=rule.pk)
+            with (
+                mock.patch(
+                    "recipes.tasks.download_sales_lines",
+                    side_effect=RuntimeError("export refusé par https://app.laddition.invalid/x"),
+                ),
+                mock.patch("notifications.events.emit") as alert,
+            ):
+                import_laddition_sales_task(job.pk, date(2026, 11, 14), date(2026, 11, 17))
+        self.assertEqual(alert.call_args.kwargs["body"], "Échec : export refusé par (adresse masquée)")

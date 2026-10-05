@@ -105,14 +105,6 @@ class ImportAsChosenShopTests(TestCase):
         self.assertTrue(invoice.source_file)
         self.assertIn(invoice, pending_receipts())
 
-    def test_the_ai_pseudo_supplier_files_it_empty_to_type_in(self):
-        invoice = self._import(supplier=Supplier.objects.get(code="OTHER"))
-        self.assertEqual(invoice.lines.count(), 0)
-        self.assertEqual(invoice.status, Invoice.Status.NEEDS_REVIEW)
-        failed = self._failed(invoice)
-        self.assertEqual(sorted(failed), ["Date du ticket", "Lecture automatique"])
-        self.assertIn("saisissez les lignes", failed["Lecture automatique"])
-
     def test_a_reader_that_fails_still_files_the_ticket_to_type_in(self):
         with mock.patch(
             "invoices.parsers.generic_receipt.GenericReceiptParser.parse_pages",
@@ -197,11 +189,6 @@ class ChooseShopInBatchTests(TestCase):
         metro = Supplier.objects.get(code="METRO")
         self.assertContains(response, f'<option value="{metro.pk}">Metro</option>', html=True)
         self.assertContains(response, '<option value="new">+ Nouvelle enseigne…</option>', html=True)
-        # The AI pseudo-supplier reads no ticket: not a shop to choose (the
-        # page's PDF import offers it, for invoices).
-        html = response.content.decode()
-        start = html.index(f'action="{self.url}"')
-        self.assertNotIn("analyse IA", html[start : html.index("</form>", start)])
         self.assertContains(response, "dont l'enseigne n'a pas été reconnue")
 
     def test_choosing_the_shop_imports_the_file_and_opens_it_for_review(self):
@@ -357,7 +344,7 @@ class ChooseShopInBatchTests(TestCase):
                 self.assertRedirects(response, self.page)
 
     def test_an_unknown_supplier_is_refused(self):
-        for supplier in (987654, "", Supplier.objects.get(code="OTHER").pk):
+        for supplier in (987654, ""):
             with self.subTest(supplier=supplier):
                 response, importer = self.choose(supplier=supplier)
                 importer.assert_not_called()

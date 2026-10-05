@@ -8,7 +8,7 @@ from django.db.models import Q, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from common import JobLogMixin, group_thousands
+from common import JobLogMixin, group_thousands, job_line
 
 #: Which attachment of an e-mail is the invoice, by default. Since the
 #: electronic invoicing reform an invoice arrives as a Factur-X PDF **or as
@@ -59,7 +59,7 @@ class Supplier(models.Model):
         default=False,
         help_text="Abonnement, loyer, eau… : une ligne par taux de TVA, aucun produit à classer.",
     )
-    # A site that protects itself (Metro's firewall): when AdminMate last
+    # A site that protects itself (Metro's firewall): when MarginMate last
     # signed in there - noted before the password is sent, so a run that
     # dies still counts - and until when it leaves the site alone after a
     # refusal (scrapers/metro.metro_pause). Kept here, not read from the
@@ -165,6 +165,14 @@ class InvoiceType(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def reader_name(self) -> str:
+        """Its « Lecteur » on screen: the generic reader, or a reader by its
+        name (parsers.reader_label), as the source form lists them."""
+        from .parsers import reader_label
+
+        return reader_label(self.parser_key) if self.parser_key else "Lecteur générique"
+
 
 #: A mailbox source's search settings: what it looks for in the mailbox.
 #: Saved changed, its gather coverage starts again (invoices/views.py
@@ -174,8 +182,8 @@ EMAIL_SEARCH_FIELDS = frozenset({"sender_pattern", "subject_pattern", "body_patt
 
 
 class EmailInvoiceSource(models.Model):
-    """How to recognize an InvoiceType's emails in the shared invoice
-    mailbox (see settings.INVOICE_EMAIL_ADDRESS) and which attachment to
+    """How to recognize an InvoiceType's emails in the espace's invoice
+    mailbox (its « Identifiants », accounts/vault.py) and which attachment to
     treat as the invoice. All patterns are real regexes (not IMAP's own
     crude substring search - see invoices/scrapers/generic_email.py for
     why), tested against the From header, the Subject, the decoded text
@@ -202,19 +210,53 @@ class EmailInvoiceSource(models.Model):
     def __str__(self):
         return f"Source email de {self.invoice_type}"
 
+    #: Each pattern's name in a refusal of the guard.
+    PATTERN_LABELS = {
+        "sender_pattern": "Motif d'expéditeur",
+        "subject_pattern": "Motif d'objet",
+        "body_pattern": "Motif de contenu",
+        "attachment_pattern": "Motif de pièce jointe",
+    }
+    #: What the guard tells a pattern that finds something in an empty text
+    #: - it would keep every e-mail, or every attachment -, field by field:
+    #: the slips' sentence about lines means nothing here.
+    EMPTY_MATCH_REASONS = {
+        "sender_pattern": "le motif retient un expéditeur vide, donc tous les e-mails : pour tous les expéditeurs, "
+        "écrivez @",
+        "subject_pattern": "le motif retient un objet vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "body_pattern": "le motif retient un contenu vide, donc tous les e-mails : laissez le champ vide pour ne pas "
+        "filtrer",
+        "attachment_pattern": "le motif retient un nom vide, donc toutes les pièces jointes : pour toutes, écrivez "
+        "un point (.)",
+    }
+
     def clean(self):
-        # The motif guard, as the gather will compile them (security audit
-        # 04/10/2026): a bare re.compile accepted a pattern whose matching
-        # hangs on one email anybody can send.
+        """Each pattern through the motif guard, as the gather compiles them
+        (returnables.patterns.check_invoice_mail_pattern, `re`'s meaning:
+        case-sensitive unless it says (?i)), each refusal in French on its
+        field: a bare re.compile accepted a pattern whose matching hangs on
+        one e-mail anybody can send (security audit 04/10/2026), in the one
+        process every bar runs in. Outside the platform owner's espace a
+        refusal names its field (PATTERN_LABELS) and a pattern finding
+        something in an empty text is refused too (EMPTY_MATCH_REASONS); the
+        owner's say « Expression régulière invalide » and take « .* ». The
+        form and « Données »'s import both run this."""
+        from accounts.tenancy import server_accounts_allowed
         from returnables.patterns import PatternError, check_invoice_mail_pattern
 
+        hosted = not server_accounts_allowed()
         errors = {}
         for field_name in ("sender_pattern", "subject_pattern", "body_pattern", "attachment_pattern"):
             value = getattr(self, field_name)
             if not value:
                 continue
             try:
-                check_invoice_mail_pattern(value, field_label="Expression régulière invalide")
+                check_invoice_mail_pattern(
+                    value,
+                    field_label=self.PATTERN_LABELS[field_name] if hosted else "Expression régulière invalide",
+                    empty_reason=self.EMPTY_MATCH_REASONS[field_name] if hosted else None,
+                )
             except PatternError as exc:
                 errors[field_name] = exc.message
         if errors:
@@ -225,7 +267,7 @@ ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 #: The .env variables the application reads for itself (config/settings.py,
 #: invoices/apps.py), by family so that one added to a family later is
-#: covered: Metro's sign-in, the mailbox, the till, the AI, Django's own. A
+#: covered: Metro's sign-in, the mailbox, the till, Django's own. A
 #: gather types what a portal's variables hold into the portal's page, so a
 #: portal naming one of these would hand Metro's password to any site - and
 #: sign in to Metro outside its firewall's pause. One list, for the source
@@ -238,7 +280,6 @@ APP_ENV_PREFIXES = (
     "INVOICE_EMAIL_",
     "INVOICE_IMAP_",
     "LADDITION_",
-    "ANTHROPIC_",
     "SCRAPER_",
     "PRODUCT_FUZZY_",
     "RUN_MAIN",
@@ -247,10 +288,15 @@ APP_ENV_PREFIXES = (
     "MARGINMATE_",
     "EMAIL_",
     "DEFAULT_FROM_EMAIL",
+    # The AI reading's key: the reading went on 04/10/2026 and nothing reads
+    # it any more, but an older .env - or « Identifiants », until its
+    # « Effacer » - may still hold it, and a portal naming it would have it
+    # typed into its page.
+    "ANTHROPIC_",
 )
 APP_ENV_REFUSED = (
-    "« {name} » est une variable de l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : "
-    "jamais celle d'un portail"
+    "« {name} » est une variable de l'application elle-même (la boîte mail, la caisse, le module d'un "
+    "fournisseur) : jamais celle d'un portail"
 )
 
 
@@ -1041,6 +1087,13 @@ class ScrapeJob(JobLogMixin):
         ordering = ["-started_at"]
 
     def append_log(self, message: str):
+        # As the espace reading it may read it (common.job_line): another
+        # bar's page never shows the server's paths or tracebacks. A line
+        # that was only a traceback there is not written at all.
+        cleaned = job_line(message)
+        if message and not cleaned:
+            return
+        message = cleaned
         # Timestamped so a slow run can actually be diagnosed after the fact
         # (which specific step took how long) instead of just knowing the
         # whole thing felt slow.
@@ -1051,6 +1104,9 @@ class ScrapeJob(JobLogMixin):
         self.save(update_fields=["log", "last_heartbeat"])
 
     def update_progress(self, supplier_code: str, label: str = "", **counts):
+        # A source's error or note is drawn on the gather's card: cleaned
+        # for the espace reading it, as the log is (common.job_line).
+        counts = {key: job_line(value) if isinstance(value, str) else value for key, value in counts.items()}
         entry = self.progress.setdefault(supplier_code, {"label": label, "found": 0, "imported": 0})
         if label:
             entry["label"] = label

@@ -2,8 +2,8 @@
 
 Three jobs beyond speed. First, it makes it *impossible* for a test to reach a
 real service by accident: every credential is blanked, so the IMAP fetcher,
-the Metro scraper and the LLM parser all refuse to start rather than dialling
-out with the developer's real .env values. Second, it pins anything a test's
+the Metro scraper and the till's download all refuse to start rather than
+dialling out with the developer's real .env values. Second, it pins anything a test's
 outcome could otherwise inherit from the local .env (notably the fuzzy-match
 threshold), so a passing suite means the same thing on every machine. Third,
 the suite runs the application the way production does - there is no other
@@ -91,7 +91,6 @@ METRO_PASSWORD = ""
 # http (invoices/tests/test_website_scraper_browser.py): only there may a
 # portal's password go to an http page (invoices.models.portal_host).
 PORTAL_PLAIN_HTTP_HOSTS = frozenset({"127.0.0.1", "localhost"})
-ANTHROPIC_API_KEY = ""
 
 # Pinned so a test's result never depends on the developer's own .env.
 PRODUCT_FUZZY_MATCH_THRESHOLD = 94

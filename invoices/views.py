@@ -21,9 +21,9 @@ from django.views.decorators.http import require_safe
 from django.views.generic import DetailView
 
 import common
-from accounts import sudo
+from accounts import sudo, vault
 from accounts.access import access_of, refused
-from accounts.tenancy import bound, integrations_allowed, is_owner
+from accounts.tenancy import bound, integrations_allowed, is_owner, server_accounts_allowed
 from accounts.views import file_response, open_stored
 from common import error_for_page, group_thousands, is_id, local_return, safe_next
 
@@ -78,11 +78,10 @@ from .importing import (
     RoutedToReturnablesError,
     corrected_line,
     import_parsed_invoice,
-    parse_and_import,
     replace_invoice_lines,
 )
 from .models import EMAIL_SEARCH_FIELDS, AutoGather, Invoice, InvoiceType, ReceiptBatch, ScrapeJob, Supplier
-from .parsers import LLM_PARSER_KEY, get_parser
+from .parsers import get_parser
 from .parsers.base import ParsedInvoice, ParsedLine
 from .receipt_batches import READING_REFUSALS
 
@@ -168,8 +167,7 @@ def upload_invoice(request):
     shown first in the list, highlighted and opened on its lines. Any other
     supplier's - a new one's included - is read like a ticket and opens on
     the correction page, beside its PDF."""
-    from .ocr import check_page_count
-    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document, route_to_returnables
+    from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if request.method != "POST":
         return render_purchases(request, "documents", import_tab="pdf")
@@ -190,36 +188,25 @@ def upload_invoice(request):
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
                 tmp.write(chunk)
-        if supplier.parser_key == LLM_PARSER_KEY:
-            # Achats' guard first, as import_document runs it: a driver's slip
-            # read by the AI (« every purchased product line ») filed the
-            # empties taken back as purchases. RoutedToReturnablesError is a
-            # DuplicateInvoiceError: said below, no Invoice. The page count
-            # first, as there too: nothing reads a page of a PDF past
-            # ocr.MAX_PAGES (DocumentTooBig, a READING_REFUSAL).
-            check_page_count(tmp_path)
-            route_to_returnables(tmp_path, uploaded.name)
-            invoice = parse_and_import(tmp_path, supplier, display_filename=uploaded.name)
-        else:
-            # A scan is OCR, seconds of CPU: one document at a time. The file
-            # decides the reader here too - a supplier's own when it has one
-            # and the document is digital, the ticket reader otherwise.
-            if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
-                raise _OcrBusy(OCR_BUSY)
-            try:
-                with (
-                    supplier_changes.cause(f"import de {uploaded.name}, {supplier.name} choisi", by_person=True),
-                    supplier_changes.collect() as changes,
-                ):
-                    invoice = import_document(
-                        tmp_path,
-                        display_filename=uploaded.name,
-                        supplier=supplier,
-                        chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
-                    )
-                _say_supplier_changes(request, changes)
-            finally:
-                OCR_LOCK.release()
+        # A scan is OCR, seconds of CPU: one document at a time. The file
+        # decides the reader here too - a supplier's own when it has one and
+        # the document is digital, the ticket reader otherwise.
+        if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+            raise _OcrBusy(OCR_BUSY)
+        try:
+            with (
+                supplier_changes.cause(f"import de {uploaded.name}, {supplier.name} choisi", by_person=True),
+                supplier_changes.collect() as changes,
+            ):
+                invoice = import_document(
+                    tmp_path,
+                    display_filename=uploaded.name,
+                    supplier=supplier,
+                    chosen_because=f"Fournisseur choisi à l'import de la facture ({supplier.name}).",
+                )
+            _say_supplier_changes(request, changes)
+        finally:
+            OCR_LOCK.release()
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
         is_slip = isinstance(exc, RoutedToReturnablesError)
@@ -428,15 +415,16 @@ def trigger_gather(request):
     # Achats' card otherwise. Every rule below is this view's, whoever asks.
     back = local_return(request) or f"{reverse('invoices:invoice_list')}?ajouter=recuperer"
     if not integrations_allowed():
-        # Every source is one of the server's own accounts (integrations.py):
-        # no job, no thread - and « metro_now » is refused with the rest.
+        # Unbound (integrations.py): no job, no thread - and « metro_now » is
+        # refused with the rest.
         messages.error(request, integrations.GATHER)
         return redirect(back)
 
     source_codes = set(request.POST.getlist("sources"))
     # One sign-in to a paused Metro, asked for on purpose (its own box is
-    # disabled while paused, so this names it).
-    metro_now = request.POST.get("metro_now") == "on"
+    # disabled while paused, so this names it) - the platform owner's only:
+    # Metro is no other espace's (integrations.py).
+    metro_now = request.POST.get("metro_now") == "on" and server_accounts_allowed()
     if metro_now:
         source_codes.add("METRO")
     # Which sources this login may gather (accounts/access.py): one given
@@ -524,7 +512,7 @@ def invoice_type_list(request):
 
 
 def invoice_type_form(request, pk=None):
-    """A kind of invoice to gather: from the shared mailbox (patterns on
+    """A kind of invoice to gather: from the espace's mailbox (patterns on
     the emails) or from the supplier's customer portal (a login page and
     the two names its credentials are kept under). Only the
     chosen kind's settings are validated and saved; "Tester" runs either
@@ -551,12 +539,22 @@ def invoice_type_form(request, pk=None):
     test_job = None
     return_to = _local_return(request)
     sources_refused = None if integrations_allowed() else integrations.SOURCES
+    # A customer portal is the platform owner's espace's alone
+    # (integrations.py): elsewhere its channel says « à configurer », and a
+    # portal is neither saved nor tested - its mailbox sources are.
+    portals_refused = None if server_accounts_allowed() else integrations.PORTALS
     status = 200
 
     if request.method == "POST" and sources_refused:
-        # Both channels are the server's own accounts (integrations.py): no
-        # « Tester », no source saved - the page says « à configurer ».
+        # Unbound: no « Tester », no source saved.
         messages.error(request, sources_refused)
+        return redirect(request.get_full_path())
+    if (
+        request.method == "POST"
+        and portals_refused
+        and request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE
+    ):
+        messages.error(request, portals_refused)
         return redirect(request.get_full_path())
     if request.method == "POST" and request.POST.get("source_kind") == InvoiceType.SourceKind.WEBSITE:
         if not is_owner(request):
@@ -596,7 +594,12 @@ def invoice_type_form(request, pk=None):
         elif request.POST.get("action") == "test":
             # Only the patterns need to be valid to try them - name/supplier
             # can still be blank/invalid while iterating on a regex.
-            if source_form.is_valid():
+            if source_form.is_valid() and _a_test_runs_here():
+                # Another bar's « Tester » is one mailbox search at a time:
+                # each click was a thread signing in to a server it names,
+                # over the dates it chose (the owner's tests run as always).
+                messages.error(request, TEST_RUNNING)
+            elif source_form.is_valid():
                 start = source_form.cleaned_data["test_start_date"] or (timezone.localdate() - timedelta(days=30))
                 end = source_form.cleaned_data["test_end_date"] or timezone.localdate()
                 # Here, not in the form's clean(): the test dates are drawn by
@@ -666,6 +669,7 @@ def invoice_type_form(request, pk=None):
             # moved the type back unrefused.
             "supplier_was": _supplier_was(request, type_form, invoice_type),
             "sources_refused": sources_refused,
+            "portals_refused": portals_refused,
         },
         status=status,
     )
@@ -735,6 +739,21 @@ def _save_invoice_type(request, type_form, invoice_type, source_form, kind, retu
             "depuis leur page.",
         )
     return redirect(return_to or "invoices:invoice_type_list")
+
+
+TEST_RUNNING = "Un test de source est déjà en cours : attendez qu'il se termine."
+
+
+def _a_test_runs_here() -> bool:
+    """Whether a source's « Tester » of this espace is running, outside the
+    platform owner's espace - a test whose thread died is reaped first, so
+    it never holds the button for good (common.JobLogMixin)."""
+    if server_accounts_allowed():
+        return False
+    ScrapeJob.reap_stale()
+    return ScrapeJob.objects.filter(
+        kind=ScrapeJob.Kind.TEST, status__in=[ScrapeJob.Status.PENDING, ScrapeJob.Status.RUNNING]
+    ).exists()
 
 
 def _search_changed(type_form, source_form, *, new: bool) -> bool:
@@ -1308,9 +1327,7 @@ def _correction_page(request, invoice):
         )
 
         shop = getattr(parser_for(invoice.supplier), "shop", None)
-        can_set_header = (
-            ticket_parser_for(invoice.supplier.code) is None and invoice.supplier.parser_key != LLM_PARSER_KEY
-        )
+        can_set_header = ticket_parser_for(invoice.supplier.code) is None
         shop_context |= {
             "suggested_header": header_guess(invoice.ocr_text),
             # Only what the save would take: the customer's own street is
@@ -1321,8 +1338,8 @@ def _correction_page(request, invoice):
             if can_set_header
             else [],
             "names_shop": names_shop(invoice.supplier),
-            # A till configured here is known by its own layout, and nothing
-            # is ever filed under the AI pseudo-supplier: no header to give.
+            # A till configured here is known by its own layout: no header
+            # to give.
             "can_set_header": can_set_header,
             # The shop's price list matters where its till prints no names, or
             # where one has been started: elsewhere it is folded away.
@@ -1613,8 +1630,6 @@ def _checks_context(invoice) -> dict:
 
 def _can_reread(invoice) -> bool:
     """Whether the page offers to read the document's file again."""
-    from .receipts import parser_for
-
     if not invoice.source_file:
         return False
     if invoice.is_einvoice:
@@ -1622,9 +1637,9 @@ def _can_reread(invoice) -> bool:
         # be missing, and no photograph to be read differently.
         return True
     if invoice.is_receipt:
-        return parser_for(invoice.supplier) is not None
-    parser = get_parser(invoice.supplier.parser_key)
-    return parser is not None and invoice.supplier.parser_key != "LLM"
+        # Every supplier's tickets have a reader (receipts.parser_for).
+        return True
+    return get_parser(invoice.supplier.parser_key) is not None
 
 
 def _reread_from_page(request, invoice) -> None:
@@ -2090,7 +2105,14 @@ def _auto_gather_page(request, bound=None, new_form=None, status=200):
     if context["refused"]:
         return render(request, "invoices/auto_gathers.html", context, status=status)
 
-    offered, _ = gather_sources(for_auto=True)
+    # Another bar's rules search its own mailbox, once on its « Identifiants »
+    # (auto_gather._start), and Metro and the portals are the owner's: said
+    # here, never a server variable - its store read once for the page.
+    server = server_accounts_allowed()
+    state = None if server else vault.load()
+    context["gather_to_fill"] = "" if integrations.mailbox_offered(state) else integrations.MAILBOX_TO_FILL
+    context["not_here"] = [] if server else [integrations.METRO, integrations.PORTALS]
+    offered, _ = gather_sources(for_auto=True, state=state)
     labels = {source["code"]: source["label"] for source in offered}
     now = timezone.now()
     rules = list(AutoGather.objects.order_by("pk"))

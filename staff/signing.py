@@ -117,7 +117,7 @@ from pyhanko.stamp.base import BaseStamp, BaseStampStyle
 from pyhanko_certvalidator import ValidationContext
 from pyhanko_certvalidator.registry import SimpleCertificateStore
 
-from accounts.tenancy import integrations_allowed
+from accounts.tenancy import server_accounts_allowed
 
 from . import pdf, private_files
 
@@ -355,7 +355,7 @@ def server_settings_may_be_named() -> bool:
     mail server): in the owner's tenant only
     (`Tenant.uses_server_integrations`, the platform owner's own bar).
     Another bar can change none of them, and is never shown their names."""
-    return integrations_allowed()
+    return server_accounts_allowed()
 
 
 def key_warning() -> str:

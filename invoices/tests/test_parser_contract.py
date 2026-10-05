@@ -14,12 +14,7 @@ from django.test import SimpleTestCase
 
 from invoices.parsers import PARSER_REGISTRY
 from invoices.parsers.base import InvoiceParser, PdfPage
-from invoices.parsers.llm_fallback import LLMFallbackParser
 from invoices.parsers.receipt_base import ReceiptParser
-
-# The LLM fallback works from whole-document text rather than a layout, and
-# has no deterministic output to assert on - it's exempt by design.
-LAYOUT_PARSERS = {key: parser for key, parser in PARSER_REGISTRY.items() if not isinstance(parser, LLMFallbackParser)}
 
 # The two ways raw material is allowed to reach a parser. `InvoiceParser.parse`
 # reads a digital PDF with pdfplumber; `ReceiptParser.parse` recognises a
@@ -32,7 +27,7 @@ SHARED_PDF_READERS = (InvoiceParser.parse, ReceiptParser.parse)
 
 class ParserContractTests(SimpleTestCase):
     def test_every_layout_parser_implements_parse_pages(self):
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):
                 self.assertIsNot(
                     type(parser).parse_pages,
@@ -47,7 +42,7 @@ class ParserContractTests(SimpleTestCase):
         Only the two shared readers are allowed, and a parser reaches them by
         inheriting - never by writing its own.
         """
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):
                 self.assertIn(
                     type(parser).parse,
@@ -60,7 +55,7 @@ class ParserContractTests(SimpleTestCase):
         (see receipts.detect_parser). A receipt parser with no header
         patterns is unreachable: its shop's photos would all be reported as
         an unknown shop, and it would look like OCR had failed."""
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             if not isinstance(parser, ReceiptParser):
                 continue
             with self.subTest(parser=key):
@@ -73,7 +68,7 @@ class ParserContractTests(SimpleTestCase):
         """A PDF that extracts to nothing (a scan, a failed extraction) must
         come back as an empty invoice, not an exception - the import flow
         records the result rather than crashing the whole gather run."""
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):
                 invoice = parser.parse_pages([PdfPage(text="", tables=[])], source_name="empty.pdf")
                 self.assertEqual(invoice.lines, [])
@@ -86,9 +81,22 @@ class ParserContractTests(SimpleTestCase):
             text="Lorem ipsum 1234 5,67 dolor sit amet\n" * 20,
             tables=[[["a", "b"], ["1", "2"]]],
         )
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):
                 parser.parse_pages([junk], source_name="junk.pdf")
+
+    def test_every_reader_a_source_can_choose_has_a_name(self):
+        """The source form's « Lecteur » lists them by `label`, a name a
+        person recognises - never the registry key."""
+        from invoices.parsers import layout_readers, reader_label
+
+        self.assertTrue(layout_readers())
+        for key, parser in layout_readers().items():
+            with self.subTest(parser=key):
+                self.assertNotIsInstance(parser, ReceiptParser)
+                self.assertTrue(parser.label)
+                self.assertEqual(reader_label(key), parser.label)
+        self.assertEqual(reader_label("INCONNU"), "INCONNU")
 
     def test_registry_keys_match_supplier_codes(self):
         for key, parser in PARSER_REGISTRY.items():
@@ -99,7 +107,7 @@ class ParserContractTests(SimpleTestCase):
         """A float anywhere in this pipeline is a rounding bug waiting to
         happen - every downstream cost calculation reads these straight."""
         junk = PdfPage(text="", tables=[])
-        for key, parser in LAYOUT_PARSERS.items():
+        for key, parser in PARSER_REGISTRY.items():
             with self.subTest(parser=key):
                 invoice = parser.parse_pages([junk], source_name="x.pdf")
                 self.assertIsInstance(invoice.reconciliation_adjustment, Decimal)

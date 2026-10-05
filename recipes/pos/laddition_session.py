@@ -4,9 +4,11 @@ Credentials come from the espace's « Identifiants » page (accounts/vault.py),
 else the environment (LADDITION_EMAIL / LADDITION_PASSWORD in .env), and are
 typed by the browser at run time - the same arrangement the Metro invoice
 scraper uses. They are never stored in the database, never logged, and
-never committed. They are the owner's own till, so in multi mode
-only the owner's tenant may open a session (recipes/integration.py): the
-refusal comes before a browser starts or a password is read.
+never committed. Each espace signs in to its own till with what it typed on
+its « Identifiants » page; the .env's values stand in for the platform
+owner's espace only (accounts.vault.settings_of). Unbound, the session is
+refused before a browser starts or a password is read
+(recipes/integration.py).
 
 This module deliberately stops at "you are logged in and looking at the page
 you asked for". What to click once you're there belongs in whatever module
@@ -30,7 +32,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-from recipes.integration import refusal, till_allowed
+from invoices.scrapers import chrome
+from recipes.integration import TILL_LOGIN_MISSING, refusal, till_allowed, till_login_missing
 
 REPORTING_ROOT = "https://reporting.laddition.com"
 AUTH_URL = "https://auth.laddition.com/"
@@ -58,9 +61,15 @@ class LadditionAuthError(RuntimeError):
 
 
 class LadditionNotAllowed(LadditionAuthError):
-    """This tenant may not use the server's L'Addition account
-    (recipes/integration.py). Carries a French sentence and no variable
-    name."""
+    """No tenant bound: no L'Addition account to use (recipes/integration.py).
+    Carries a French sentence and no variable name."""
+
+
+class LadditionBrowsersBusy(LadditionAuthError, chrome.BrowsersBusy):
+    """Another bar found no browser of the server free (chrome.BROWSERS_BUSY),
+    before anything signed in: a till refusal said as it is, which an
+    automatic import tells apart (`chrome.BrowsersBusy`) to give its slot
+    back instead of failing (recipes/tasks.py)."""
 
 
 def _refuse_unless_allowed() -> None:
@@ -108,14 +117,16 @@ def navigate(driver, url: str, log=print, attempts: int = NAVIGATION_ATTEMPTS, s
             if not _is_transient(exc) or attempt == attempts:
                 raise
             delay = 2 ** (attempt - 1)
-            log(f"Network hiccup reaching {url} (attempt {attempt}/{attempts}), retrying in {delay}s.")
+            log(f"Réseau instable pour joindre L'Addition (essai {attempt}/{attempts}), nouvel essai dans {delay} s.")
             sleep(delay)
 
 
 def build_driver(download_dir: str) -> webdriver.Chrome:
     os.makedirs(download_dir, exist_ok=True)
     options = webdriver.ChromeOptions()
-    if settings.SCRAPER_HEADLESS:
+    # Headless whatever the settings outside the platform owner's espace: a
+    # visible window would open on the server's desktop (scrapers/chrome.py).
+    if chrome.headless(settings.SCRAPER_HEADLESS):
         options.add_argument("--headless=new")
     options.add_experimental_option(
         "prefs",
@@ -162,9 +173,9 @@ def log_in(driver, log=print) -> None:
         # Already signed in: auth bounces straight through to the app rather
         # than rendering a form. Not an error.
         if "auth.laddition.com" not in driver.current_url:
-            log("Already signed in to L'Addition.")
+            log("Déjà connecté à L'Addition.")
             return
-        raise LadditionAuthError(f"The L'Addition login form never appeared (still at {driver.current_url}).") from None
+        raise LadditionAuthError("Le formulaire de connexion de L'Addition n'est pas apparu.") from None
 
     driver.find_element(*IDENTIFIER_FIELD).send_keys(email)
     driver.find_element(*PASSWORD_FIELD).send_keys(password)
@@ -175,7 +186,7 @@ def log_in(driver, log=print) -> None:
         wait.until(lambda d: d.find_element(*SUBMIT_BUTTON).is_enabled())
     except TimeoutException:
         raise LadditionAuthError(
-            "The L'Addition sign-in button never became clickable - the login form may have changed."
+            "Le bouton de connexion de L'Addition n'est jamais devenu cliquable : le formulaire a peut-être changé."
         ) from None
     driver.find_element(*SUBMIT_BUTTON).click()
 
@@ -187,7 +198,7 @@ def log_in(driver, log=print) -> None:
         raise LadditionAuthError(
             "L'Addition a refusé la connexion : vérifiez l'identifiant et le mot de passe sur la page Identifiants."
         ) from None
-    log("Signed in to L'Addition.")
+    log("Connecté à L'Addition.")
 
 
 def normalise_path(path: str) -> str:
@@ -237,7 +248,7 @@ def open_report(driver, path: str, log=print) -> None:
     WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
         lambda d: len((d.find_element(By.TAG_NAME, "body").text or "").strip()) > 40
     )
-    log(f"Opened {url}")
+    log("Page de L'Addition ouverte.")
 
 
 REPORT_FRAME = (By.TAG_NAME, "iframe")
@@ -272,15 +283,20 @@ def laddition_session(download_dir: str, path: str = "/v2/shift-details", log=pr
         with laddition_session(dir) as driver:
             ...  # driver is on /v2/shift-details, signed in
 
-    Refused (LadditionNotAllowed) in a tenant that may not use the
-    server's account, before the browser starts.
+    Refused (LadditionNotAllowed) unbound, before the browser starts.
     """
     _refuse_unless_allowed()
-    driver = build_driver(download_dir)
-    try:
-        open_report(driver, path, log=log)
-        yield driver
-    finally:
-        # Never let a teardown failure mask the real error.
-        with contextlib.suppress(Exception):
-            driver.quit()
+    # Another bar with no L'Addition account on its « Identifiants »: said
+    # before one of the server's browsers is started for nothing.
+    if till_login_missing():
+        raise LadditionAuthError(TILL_LOGIN_MISSING)
+    # One of the server's browsers, or a refusal at once (scrapers/chrome.py).
+    with chrome.browser_slot(refused=LadditionBrowsersBusy):
+        driver = build_driver(download_dir)
+        try:
+            open_report(driver, path, log=log)
+            yield driver
+        finally:
+            # Never let a teardown failure mask the real error.
+            with contextlib.suppress(Exception):
+                driver.quit()

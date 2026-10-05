@@ -25,7 +25,7 @@ from accounts.tenancy import integrations_allowed
 
 from . import integrations, supplier_changes
 from .models import Invoice, InvoiceType, Supplier, SupplierChange
-from .parsers import LLM_PARSER_KEY, ticket_parser_for
+from .parsers import ticket_parser_for
 
 #: Achats' « Enseignes et fournisseurs » tab, where every supplier is listed.
 SUPPLIERS = "invoices:supplier_list"
@@ -44,16 +44,6 @@ def _local_return(request) -> str:
     return ""
 
 
-def _supplier(request, pk):
-    """The supplier, or where to go instead: the AI pseudo-supplier has no
-    page - nothing names it."""
-    supplier = get_object_or_404(Supplier, pk=pk)
-    if supplier.parser_key == LLM_PARSER_KEY:
-        messages.info(request, "Ce fournisseur n'a pas de fiche.")
-        return None, redirect(SUPPLIERS)
-    return supplier, None
-
-
 def supplier_list(request):
     """ "Achats", on the « Enseignes et fournisseurs » tab: who each document
     is filed under. It was the foot of the Sources tab, under the sources of
@@ -68,9 +58,7 @@ def supplier_detail(request, pk):
     from .receipts import filing_rules, has_own_reader, identifier_report, supplier_notices
     from .workspace import own_module_suppliers
 
-    supplier, away = _supplier(request, pk)
-    if away is not None:
-        return away
+    supplier = get_object_or_404(Supplier, pk=pk)
     documents = Invoice.objects.filter(supplier=supplier)
     count = documents.count()
     span = documents.aggregate(first=Min("invoice_date"), last=Max("invoice_date"))
@@ -100,9 +88,9 @@ def supplier_detail(request, pk):
             # Metro: fetched by the gather's own module, with no source - only
             # where the server's Metro account may be used (integrations.py).
             "own_module": own_module_suppliers().filter(pk=supplier.pk).exists(),
-            # Both channels of a source are the server's own accounts: where
-            # they are not this tenant's, said here as on the Sources tab,
-            # and no « + Nouvelle source » leading to a form that only says so.
+            # Unbound, both channels of a source are refused (integrations.py):
+            # said here as on the Sources tab, and no « + Nouvelle source »
+            # leading to a form that only says so.
             "sources_refused": None if integrations_allowed() else integrations.SOURCES,
             "delete_refused": delete_refused(supplier),
             "changes": changes,
@@ -377,9 +365,7 @@ def supplier_edit(request, pk):
     in one step - there is nothing for a change to move."""
     from .receipts import header_choices, offerable_headers, rename_supplier, set_shop_header
 
-    supplier, away = _supplier(request, pk)
-    if away is not None:
-        return away
+    supplier = get_object_or_404(Supplier, pk=pk)
     supplier_page = supplier_page_url(supplier)
     header_editable = ticket_parser_for(supplier.code) is None and not _own_reader(supplier)
     documents = Invoice.objects.filter(supplier=supplier)
@@ -464,9 +450,7 @@ def supplier_delete(request, pk):
 
     from .models import ShopItemPrice
 
-    supplier, away = _supplier(request, pk)
-    if away is not None:
-        return away
+    supplier = get_object_or_404(Supplier, pk=pk)
     supplier_page = supplier_page_url(supplier)
     refused = delete_refused(supplier)
     if request.method == "POST" and request.POST.get("confirme") == "1":
@@ -595,9 +579,7 @@ def supplier_identifiers(request, pk):
     from .identifiers import describe
     from .receipts import _stored_texts, _without_header, identifier_report, identifiers_naming, set_identifiers
 
-    supplier, away = _supplier(request, pk)
-    if away is not None:
-        return away
+    supplier = get_object_or_404(Supplier, pk=pk)
     supplier_page = supplier_page_url(supplier)
     if request.method != "POST":
         return redirect(supplier_page)

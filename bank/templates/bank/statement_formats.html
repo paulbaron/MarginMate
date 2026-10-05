@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}Format du relevé - Banque - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
             <p class="breadcrumb"><a href="{% url 'bank:bank_home' %}">← Banque</a></p>
             <h1>Format du relevé</h1>
-            <p class="page-subtitle">Comment se lit l'export CSV de la banque : colonnes, dates, montants, numéro de compte.</p>
+            <p class="page-subtitle">Comment se lit l'export de la banque : le type de fichier et, pour un CSV, ses colonnes, ses dates, ses montants et le numéro de compte.</p>
             <p class="muted">Ce qu'est chaque opération se règle sur <a href="{% url 'bank:recognition' %}">Reconnaissance des opérations</a>.</p>
         </div>
     </div>
@@ -17,6 +18,7 @@
                     <tr>
                         <th class="num">Ordre</th>
                         <th>Nom</th>
+                        <th>Fichier</th>
                         <th>Colonnes</th>
                         <th>Séparateur</th>
                         <th>Dates</th>
@@ -45,10 +47,17 @@
                                     <p class="field-error">{{ row.problem }}</p>
                                 {% endif %}
                             </td>
+                            <td>{{ row.fmt.get_file_type_display }}</td>
                             <td>{{ row.columns }}</td>
-                            <td>{{ row.fmt.get_delimiter_display }}</td>
-                            <td>{{ row.fmt.get_date_format_display }}</td>
-                            <td>{{ row.fmt.get_decimal_mark_display }}</td>
+                            {% if row.reads_columns %}
+                                <td>{{ row.fmt.get_delimiter_display }}</td>
+                                <td>{{ row.fmt.get_date_format_display }}</td>
+                                <td>{{ row.fmt.get_decimal_mark_display }}</td>
+                            {% else %}
+                                <td>—</td>
+                                <td>—</td>
+                                <td>—</td>
+                            {% endif %}
                             <td class="row-actions">
                                 <a href="{% url 'bank:statement_format' row.fmt.pk %}" aria-label="Modifier « {{ row.fmt.name }} »">Modifier</a>
                                 <form method="post" action="{% url 'bank:statement_format' row.fmt.pk %}"
@@ -66,15 +75,50 @@
         <p class="muted">Le premier sert à l'import ; avec plusieurs formats, l'import propose de choisir.</p>
     {% else %}
         <div class="empty-state">
-            <p>Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous.</p>
+            <p>Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous, ou <a href="#modeles">partez d'un modèle</a>.</p>
         </div>
     {% endif %}
+
+    <div class="card" id="modeles">
+        <h2>Partir d'un modèle</h2>
+        <p class="muted">Un modèle ajoute un format et ses règles de reconnaissance ; ce qui porte déjà le même nom est gardé tel quel.</p>
+        <div class="table-wrap">
+            <table data-table data-table-label="modèles">
+                <thead>
+                    <tr>
+                        <th>Modèle</th>
+                        <th>Ce qu'il ajoute</th>
+                        <th data-no-sort></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in presets %}
+                        <tr id="modele-{{ row.preset.key }}">
+                            <td>
+                                <strong>{{ row.preset.title }}</strong>
+                                {% if row.added %}<span class="status-pill status-IMPORTED">déjà ajouté</span>{% endif %}
+                            </td>
+                            <td>{{ row.preset.description }}</td>
+                            <td class="row-actions">
+                                <form method="post" action="{% url 'bank:statement_formats' %}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="modele" value="{{ row.preset.key }}">
+                                    <button class="btn btn-small btn-secondary" type="submit" name="action" value="modele"
+                                            aria-label="Ajouter le modèle « {{ row.preset.title }} »">Ajouter</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     <div class="card" id="nouveau-format">
         <h2>Nouveau format</h2>
         <form method="post" action="{% url 'bank:statement_formats' %}#nouveau-format" enctype="multipart/form-data">
             {% csrf_token %}
-            {% include "_form_fields.html" with form=form %}
+            {% include "bank/_statement_format_fields.html" %}
             {% include "bank/_statement_format_file.html" %}
             {% comment %}
             « Tester » first: Enter in a field presses the form's first submit
@@ -89,4 +133,7 @@
     </div>
 
     {% include "bank/_statement_format_help.html" %}
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/statement_format.js' %}" defer></script>
 {% endblock %}

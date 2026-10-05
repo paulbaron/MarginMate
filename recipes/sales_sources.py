@@ -2,14 +2,21 @@
 from (recipes/auto_sales.py), in the order its form offers them.
 
 Today one entry, « laddition » (« L'Addition (caisse) »): available where
-the server's L'Addition account may be used (`integration.till_allowed`, the
-owner's espace), it runs the EXISTING `tasks.import_laddition_sales_task`
-through a SalesImportJob - the same import the Ventes tab starts.
+the espace may fetch from L'Addition with its OWN account - any bound espace
+(`integration.till_allowed`), and, outside the platform owner's (whose .env
+or « Identifiants » stand, as before), once its « Identifiants » hold the
+login and password (`integration.till_login_missing`): a rule whose every
+slot could only fail never starts. It runs the EXISTING
+`tasks.import_laddition_sales_task` through a SalesImportJob - the same
+import the Ventes tab starts, signing in with the espace's account, in the
+server's Chrome as the espace may use it (invoices/scrapers/chrome.py), its
+log as the espace may read it (common.job_line).
 
 **Adding another site** is an entry here and nothing else in the
 scheduling: a key (slug-safe, stored in `AutoSalesImport.source` - never
 renamed), its label, `available` (whether this espace may use it) and the
-sentence said where it may not, its job's label, and `task`, the dotted path
+sentence said where it may not, its job's label, `uses_browser` (whether it
+needs one of the server's browsers), and `task`, the dotted path
 of its own import task - a function `(job_id, start, end)` run in a bound
 thread, which downloads that site's sales of [start, end] and records the
 same day-level sales the till's do (`recipes.sales.record_sales`,
@@ -43,18 +50,31 @@ class SalesSource:
     job_label: str
     #: The dotted path of its import task, `(job_id, start, end)`.
     task: str
+    #: Its task signs in through the server's Chrome (invoices/scrapers/
+    #: chrome.py): another bar's slot waits for a free browser rather than
+    #: start an import refused at once (auto_sales._start).
+    uses_browser: bool = True
 
 
-def _till_allowed() -> bool:
-    from .integration import till_allowed
+def _laddition_ready() -> bool:
+    """The till may be used here and its account has a value to sign in
+    with (the module's docstring). In the platform owner's espace it is
+    `till_allowed()` alone, as on GitHub's main - unlike
+    `pos.connectors.LADDITION.ready()`, which draws the Ventes tab's fetch
+    card and also wants his account (« Identifiants » or the .env): an owner
+    with neither is offered rules whose import fails, and says so in its
+    alert, as before."""
+    from .integration import till_allowed, till_login_missing
 
-    return till_allowed()
+    return till_allowed() and not till_login_missing()
 
 
-def _till_refusal() -> str:
-    from .integration import refusal
+def _laddition_refusal() -> str:
+    """Why not: « à configurer » unbound, else the account to type on
+    « Identifiants » - never a server variable's name."""
+    from .integration import TILL_LOGIN_MISSING, refusal, till_allowed
 
-    return refusal()
+    return refusal() if not till_allowed() else TILL_LOGIN_MISSING
 
 
 LADDITION = "laddition"
@@ -63,8 +83,8 @@ SOURCES: dict[str, SalesSource] = {
     LADDITION: SalesSource(
         key=LADDITION,
         label="L'Addition (caisse)",
-        available=_till_allowed,
-        unavailable_reason=_till_refusal,
+        available=_laddition_ready,
+        unavailable_reason=_laddition_refusal,
         job_label="import des ventes de la caisse",
         task="recipes.tasks.import_laddition_sales_task",
     ),
@@ -96,4 +116,5 @@ def start(entry: SalesSource, start_day=None, end_day=None, *, trigger: str, aut
         task=import_string(entry.task),
         notes=notes,
         plan=plan,
+        source=entry.key,
     )

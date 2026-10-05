@@ -35,6 +35,7 @@ import calendar
 import codecs
 import csv
 import hashlib
+import importlib
 import io
 import random
 import re
@@ -409,6 +410,12 @@ class OracleTests(SimpleTestCase):
             with self.subTest(file=index, content=content[:160]):
                 self.assertEqual(new_outcome(content), as_the_seeded_format_says(old_outcome(content)))
 
+    def test_no_file_of_the_corpus_is_taken_for_another_kind(self):
+        """`statements.sniff` reads a CSV as nothing (it has no mark of its
+        own): the seeded format's path is untouched by the check that refuses
+        a file of another kind."""
+        self.assertEqual({statements.sniff(content) for content in self.corpus}, {None})
+
     def test_the_corpus_holds_every_shape_it_is_meant_to(self):
         """A corpus of files the two readers agree on because they read
         nothing would prove nothing."""
@@ -714,16 +721,22 @@ class SeedTests(TestCase):
 
 class TenantTests(TwoTenantsTestCase):
     """Real espaces (accounts.provisioning): each is copied from the
-    migrated _template, so each can import from its first day."""
+    migrated _template, so each can import from its first day - a hosted one
+    reading the standard files first (bank.presets.set_up_new_espace), the
+    owner's bank's format kept, as seeded, after them."""
 
-    def test_every_new_espace_is_given_the_owners_bank_format(self):
+    def test_every_new_espace_is_given_the_owners_bank_format_after_the_standard_ones(self):
         for bar in (self.bar_a, self.bar_b):
             with self.subTest(bar=bar.name), bound_tenant(bar):
                 self.assertEqual(
-                    list(StatementFormat.objects.values_list(*FIELDS)),
-                    [(SEEDED_NAME, 1, "auto", ";", "dd/mm/yyyy", ",", 1, "4", 6, None, None, 5, 2, r"\*{2,}[0-9]+")],
+                    list(StatementFormat.objects.values_list("name", "position", "file_type")),
+                    [("Relevé OFX", 1, "ofx"), ("Relevé CAMT.053", 2, "camt053"), (SEEDED_NAME, 3, "csv")],
                 )
-                self.assertEqual(reconcile.default_format().name, SEEDED_NAME)
+                self.assertEqual(
+                    list(StatementFormat.objects.filter(name=SEEDED_NAME).values_list(*FIELDS)),
+                    [(SEEDED_NAME, 3, "auto", ";", "dd/mm/yyyy", ",", 1, "4", 6, None, None, 5, 2, r"\*{2,}[0-9]+")],
+                )
+                self.assertEqual(reconcile.default_format().name, "Relevé OFX")
 
 
 # -- The check ------------------------------------------------------------------------------------------------------
@@ -1960,3 +1973,106 @@ class StoredFormatRefusedTests(TestCase):
             f"Import annulé : le format « {SEEDED_NAME} » est à corriger sur « Format du relevé » - "
             "La colonne 4 sert deux fois : pour la date et pour le libellé.",
         )
+
+
+# -- The kind of file (migration 0009) ------------------------------------------------------------------------------
+
+FILE_TYPE_MIGRATION = importlib.import_module("bank.migrations.0009_statement_format_file_type")
+
+
+class FileTypeMigrationTests(SimpleTestCase):
+    """Schema only: the operations are what proves no stored row is touched -
+    a new column whose default every existing format takes (`csv`, how it
+    reads today) and three fields relaxed, never a RunPython."""
+
+    def test_one_column_added_three_fields_relaxed_and_nothing_run(self):
+        migration = FILE_TYPE_MIGRATION.Migration
+        self.assertEqual(migration.dependencies, [("bank", "0008_treasury")])
+        operations = migration.operations
+        self.assertEqual(
+            [(type(one), one.name) for one in operations],
+            [
+                (migrations.AddField, "file_type"),
+                (migrations.AlterField, "date_column"),
+                (migrations.AlterField, "encoding"),
+                (migrations.AlterField, "label_columns"),
+            ],
+        )
+        self.assertFalse(any(isinstance(one, migrations.RunPython) for one in operations))
+        self.assertEqual({one.model_name for one in operations}, {"statementformat"})
+        added = operations[0].field
+        self.assertEqual((added.default, added.null, added.blank), ("csv", False, False))
+        self.assertEqual([value for value, _label in added.choices], ["csv", "ofx", "camt053"])
+        # Relaxed, never tightened: a row stored before reads as before.
+        self.assertTrue(operations[1].field.null and operations[1].field.blank)
+        self.assertTrue(operations[3].field.blank)
+        self.assertEqual(operations[2].field.default, "auto")
+        self.assertIn("Going back fails", FILE_TYPE_MIGRATION.__doc__)
+
+
+class StoredFileTypeTests(TestCase):
+    def test_the_seeded_format_is_a_csv(self):
+        stored = StatementFormat.objects.get(name=SEEDED_NAME)
+        self.assertEqual(stored.file_type, "csv")
+        self.assertEqual(check_format(stored).file_type, "csv")
+
+    def test_a_file_that_says_where_each_datum_is_needs_no_column(self):
+        made = make_format(
+            "Relevé structuré",
+            file_type="ofx",
+            date_column=None,
+            label_columns="",
+            account_pattern="",
+        )
+        made.full_clean()
+        self.assertEqual(check_format(made).file_type, "ofx")
+
+
+class FileTypeCheckTests(SimpleTestCase):
+    def test_a_format_saying_no_kind_is_a_csv(self):
+        self.assertEqual(statements.file_type_of(plain()), "csv")
+        self.assertEqual(statements.file_type_of(plain(file_type="")), "csv")
+        self.assertEqual(check_format(plain()).file_type, "csv")
+
+    def test_ofx_and_camt_compile_with_no_column_nor_account_pattern(self):
+        for file_type in ("ofx", "camt053"):
+            with self.subTest(file_type=file_type):
+                layout = check_format(
+                    plain(
+                        file_type=file_type,
+                        date_column=None,
+                        label_columns="",
+                        amount_column=None,
+                        account_pattern="",
+                    )
+                )
+                self.assertEqual(layout.file_type, file_type)
+                self.assertEqual(
+                    (layout.date, layout.labels, layout.amount, layout.account, layout.width), (None, (), None, None, 0)
+                )
+
+    def test_what_such_a_format_holds_in_its_columns_is_not_read(self):
+        """Never compiled either: the account pattern of an OFX format is
+        none of the file's business."""
+        never = NeverCompile()
+        with mock.patch.object(regex, "compile", never):
+            layout = check_format(plain(file_type="ofx", label_columns="1", account_pattern="(?x)x{6 5}"))
+        self.assertEqual((layout.date, layout.labels, layout.account), (None, (), None))
+        self.assertEqual(never.calls, [])
+
+    def test_a_kind_of_file_the_model_does_not_offer_is_refused_on_its_field(self):
+        for value in ("pdf", "qif", "CSV", "mt940"):
+            with self.subTest(value=value):
+                with self.assertRaises(FormatError) as refused:
+                    check_format(plain(file_type=value))
+                self.assertEqual(
+                    (refused.exception.field, refused.exception.message), ("file_type", "Type de fichier inconnu.")
+                )
+
+    def test_a_csv_still_needs_its_date_column_and_its_label(self):
+        with self.assertRaises(FormatError) as refused:
+            check_format(plain(file_type="csv", date_column=None))
+        self.assertEqual((refused.exception.field, refused.exception.message), ("date_column", "Indiquez une colonne."))
+        with self.assertRaises(FormatError) as refused:
+            check_format(plain(file_type="csv", label_columns=""))
+        self.assertEqual(refused.exception.field, "label_columns")

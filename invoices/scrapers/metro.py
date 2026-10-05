@@ -72,7 +72,7 @@ RESTART_PAUSE_SECONDS = 120
 DATE_FROM_SELECTOR = "input[data-testid='DateInputFieldInputDe']"
 # Metro's firewall judges each sign-in: it refused one after two quiet days,
 # and 31/08 had seen some twenty-five (development testing, mostly). So
-# AdminMate signs in rarely, and leaves Metro alone after a refusal - how
+# MarginMate signs in rarely, and leaves Metro alone after a refusal - how
 # long a block lasts is not known (the 02/09 one was over by 16/09).
 BLOCK_PAUSE = timedelta(days=7)
 REPEAT_BLOCK_WITHIN = timedelta(days=30)  # refused again this soon: twice as long
@@ -877,14 +877,16 @@ def scrape_metro_invoices(
     while Metro is to be left alone (metro_pause), unless a person asked for
     one sign-in all the same (`ignore_pause`).
 
-    The account is the owner's: from a tenant that may not use the
-    server's accounts, refused first - before the settings, the pause or a
-    browser (invoices/integrations.py). The pause lives on the METRO row of
-    the tenant that signs in, which is therefore the owner's only."""
-    from accounts.tenancy import integrations_allowed
+    Metro is the platform owner's espace's alone (accounts.tenancy.
+    server_accounts_allowed): every bar's sign-in would leave from the
+    server's one IP, which Metro's firewall judges for everybody. Anywhere
+    else refused first - before the settings, the pause or a browser
+    (invoices/integrations.py). The pause lives on the METRO row of the
+    tenant that signs in, which is therefore the owner's only."""
+    from accounts.tenancy import server_accounts_allowed
     from invoices import integrations
 
-    if not integrations_allowed():
+    if not server_accounts_allowed():
         raise MetroError(integrations.METRO)
     credentials = metro_credentials()
     if not all(credentials):

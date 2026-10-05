@@ -400,9 +400,6 @@ INVOICE_IMAP_HOST = os.environ.get("INVOICE_IMAP_HOST", "") or "imap.gmail.com"
 LADDITION_EMAIL = os.environ.get("LADDITION_EMAIL", "")
 LADDITION_PASSWORD = os.environ.get("LADDITION_PASSWORD", "")
 
-# Used only for the last-resort LLM invoice parsing fallback.
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-
 # Confidence threshold (0-100) above which a fuzzy product-name match is treated
 # as "the same product" instead of being sent to the review queue.
 #

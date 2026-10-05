@@ -19,6 +19,7 @@ from accounts.tenancy import (
     current_tenant,
     integrations_allowed,
     require_tenant,
+    server_accounts_allowed,
     tenant_key,
 )
 from accounts.tests.support import TenancyTestCase
@@ -173,13 +174,16 @@ class BindingTests(TenancyTestCase):
         self.assertEqual(alpha, str(self.alpha.pk))
         self.assertNotEqual(alpha, beta)
 
-    def test_integrations_only_in_the_owner_s_tenant(self):
+    def test_the_connectors_in_every_bound_tenant_the_server_s_accounts_in_the_owner_s(self):
         owner = self.make_tenant("Bar du Propriétaire", owner=True)
         self.assertFalse(integrations_allowed())
+        self.assertFalse(server_accounts_allowed())
         with bound_tenant(self.alpha):
-            self.assertFalse(integrations_allowed())
+            self.assertTrue(integrations_allowed())
+            self.assertFalse(server_accounts_allowed())
         with bound_tenant(owner):
             self.assertTrue(integrations_allowed())
+            self.assertTrue(server_accounts_allowed())
 
 
 class BoundThreadTests(TenancyTestCase):

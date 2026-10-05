@@ -49,6 +49,11 @@ LENGTH_UNIT_TOKENS = "MM|CM|M"  # physical size only - never a count, never a st
 WEIGHT_TOKEN_RE = re.compile(r"(?<![A-Z])(KG|GRS?|MG|G)\b")
 VOLUME_TOKEN_RE = re.compile(r"(?<![A-Z])(CL|ML|L)\b")
 
+# Metro's own house brands, printed in front of its product names (« MPRO »,
+# Metro Pro; « RIOBA », its juices and syrups...): set aside for the name a
+# product is filed under and for the neighbour match. Inert for any other
+# supplier's names, unless one begins with one of these words (« MC CAIN »
+# loses its « MC » in the raw-name suggestion).
 HOUSE_BRAND_PREFIX = re.compile(r"^(?:MPRO|ARO|MC|ROCH|RIOBA)\b\s*")
 
 # Pure W x H (x D) dimension - digits joined by X with no volume/weight unit

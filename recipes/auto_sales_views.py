@@ -3,9 +3,16 @@ recipes/auto_sales.py, one card and one form per rule, each posting to its
 own address with its card's fragment (the automatic gathers' page, the
 precedent).
 
-The espace owner's alone, and only where a sales source may be used
-(sales_sources: L'Addition's `available()`, the owner's espace) - anywhere
-else the page says why and draws no form, and every POST gets the 403 page.
+Changed by the espace's owner alone, in any bound espace (`till_allowed`).
+A NEW rule only where a sales source may be used (sales_sources:
+L'Addition's `available()` - any bound espace whose own account is ready,
+its « Identifiants » or, in the platform owner's alone, the .env): anywhere
+else the page says why (« à renseigner sur la page Identifiants », never a
+server variable), draws no new rule's form and refuses its POST (403) - but
+lists the rules already there, each still switched off, changed or deleted
+by the owner: a bar that cleared its account keeps rules ticking « sautée :
+source indisponible » it could otherwise never stop. Unbound, nothing is
+listed and every POST gets the 403 page.
 A member reads the rules without a form. A GET on a POST-only route goes
 back to the page and writes nothing; saving never runs an import at once
 (creating, re-activating or a new schedule sets `last_slot_at = now`
@@ -25,6 +32,7 @@ from notifications import schedule, webpush
 
 from . import auto_sales, sales_sources
 from .forms import AutoSalesImportForm
+from .integration import till_allowed
 from .models import AutoSalesImport, SalesImportJob
 
 #: Said to a member, who sees the rules and not their forms.
@@ -55,10 +63,13 @@ def _refusal() -> str:
     return entry.unavailable_reason() if entry is not None else ""
 
 
-def _may_change(request) -> None:
-    """A POST changing the rules: the espace's owner, where a source may be
-    used - anybody else gets the 403 page."""
-    if not _available() or not is_owner(request):
+def _may_change(request, *, creating: bool = False) -> None:
+    """A POST changing the rules: the espace's owner, in a bound espace -
+    and, `creating` one, where a source may be used. Anybody else gets the
+    403 page."""
+    if not till_allowed() or not is_owner(request):
+        raise PermissionDenied
+    if creating and not _available():
         raise PermissionDenied
 
 
@@ -124,8 +135,11 @@ def _page(request, bound=None, new_form=None, status=200):
     """The page; `bound` is (pk, form) - a rule's refused form, drawn back in
     its own card - and `new_form` the new rule's."""
     owner = is_owner(request)
+    available = _available()
     context = {
-        "refused": "" if _available() else _refusal(),
+        "refused": "" if available else _refusal(),
+        # Unbound: the sentence alone, nothing listed.
+        "blocked": not till_allowed(),
         "owner": owner,
         "owner_only": "" if owner else OWNER_ONLY_SETTINGS,
         "cards": [],
@@ -138,7 +152,7 @@ def _page(request, bound=None, new_form=None, status=200):
         "catch_up_hours": int(auto_sales.CATCH_UP_LIMIT.total_seconds() // 3600),
         "coverage": [],
     }
-    if context["refused"]:
+    if context["blocked"]:
         return render(request, "recipes/auto_sales.html", context, status=status)
 
     now = timezone.now()
@@ -156,7 +170,7 @@ def _page(request, bound=None, new_form=None, status=200):
             .order_by("-started_at", "-pk")[:AUTO_SALES_RUNS_SHOWN]
         )
         context["cards"].append(_card(rule, form, runs, now))
-    if owner:
+    if owner and available:
         context["new_form"] = new_form or AutoSalesImportForm(prefix=NEW_AUTO_SALES, initial=_new_initial())
     return render(request, "recipes/auto_sales.html", context, status=status)
 
@@ -166,7 +180,7 @@ def auto_sales_page(request):
     here."""
     if request.method != "POST":
         return _page(request)
-    _may_change(request)
+    _may_change(request, creating=True)
     form = AutoSalesImportForm(request.POST, prefix=NEW_AUTO_SALES)
     if form.is_valid() and AutoSalesImport.objects.count() >= AutoSalesImport.MAX_PER_TENANT:
         form.add_error("name", AUTO_SALES_CAP)

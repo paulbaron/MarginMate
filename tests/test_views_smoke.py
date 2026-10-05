@@ -1048,6 +1048,25 @@ class PageSmokeTests(TestCase):
         product = PosProduct.objects.create(name="Pinte Blonde", total_quantity=5)
         self.assertRedirectsOnGet("recipes:pos_product_assign", pk=product.pk)
 
+    def test_upload_sales_file_is_post_only(self):
+        self.assertRedirectsOnGet("recipes:upload_sales_file")
+
+    def test_till_formats(self):
+        from django.utils.html import escape
+
+        from recipes.models import TillFormat
+        from recipes.till_views import NO_MONEY
+
+        empty = self.assertPageOK("recipes:till_formats")
+        self.assertContains(empty, "Formats des fichiers de caisse")
+        fmt = TillFormat.objects.create(
+            name="Caisse Exemple", day_column="Date", product_column="Article", quantity_column="Qté"
+        )
+        listed = self.assertPageOK("recipes:till_formats")
+        self.assertContains(listed, "Caisse Exemple")
+        self.assertContains(listed, escape(NO_MONEY))
+        self.assertContains(self.assertPageOK("recipes:till_format", pk=fmt.pk), "Format « Caisse Exemple »")
+
     # --- margins ---------------------------------------------------------
     def test_margins(self):
         """Over the dates the fixture sells on, so both branches of the

@@ -71,6 +71,7 @@ from transfer.tests.test_invoices_section import (
 )
 from transfer.tests.test_sales_section import build_sales
 from transfer.tests.test_sources_section import as_restored, email_source, portal_source
+from transfer.tests.test_till_formats_section import make_till_format
 from transfer.tests.test_views import shown_preview
 
 MERGE, REPLACE = Strategy.MERGE, Strategy.REPLACE
@@ -185,6 +186,9 @@ def build_everything() -> dict:
     make_checkpoint(date(2026, 8, 1), "1840.00")
     make_checkpoint(date(2026, 9, 1), "-65.20")
     make_adjustment(date(2026, 8, 20), "-14.90", "Frais (essai)")
+
+    # The till: a format a person typed for another till's export.
+    make_till_format("Caisse d'essai (tabulations)")
 
     # Returnables: the seeded types and UBA format, a pickup with two photos,
     # and the slip its driver sent - its lines and its PDF - each made at a
@@ -404,8 +408,9 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         url = reverse("transfer:data_clear")
         cleared = registry.closure({"fournisseurs"}, "clear")
         # Neither bank section requires the suppliers: « Règles de la banque »
-        # holds no supplier at all, « Banque » names them by key only.
-        self.assertEqual(cleared, ALL - {"banque", "regles_banque"})
+        # holds no supplier at all, « Banque » names them by key only. Nor
+        # does a till's file format, which names no row.
+        self.assertEqual(cleared, ALL - {"banque", "regles_banque", "formats_caisse"})
         posted = {"sections": sorted(cleared)}
         self.client.post(url, {**posted, "action": "previsualiser"})
         # The confirm names the preview its page shows (views.SHOWN_PREVIEW).
@@ -439,7 +444,7 @@ class ClearFromThePageTests(MediaMixin, TransactionTestCase):
         self.assertEqual(sorted(backup.kind for backup in backups), ["sqlite", "zip"])
         archive = next(backup for backup in backups if backup.kind == "zip")
         with ArchiveReader(archive.path) as reader:
-            self.assertEqual(reader.sections, ALL - {"regles_banque"})
+            self.assertEqual(reader.sections, ALL - {"regles_banque", "formats_caisse"})
             import_archive(reader, REPLACE)
         after = snapshots()
         for key in self.before:

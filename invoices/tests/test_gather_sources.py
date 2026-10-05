@@ -134,6 +134,20 @@ class MetroInTheGatherTests(TestCase):
         find_slips.assert_called_once()
         self.assertEqual(find_slips.call_args.kwargs["sender_pattern"], seeded.sender_pattern)
 
+    def test_metro_switched_off_is_said_only_when_metro_was_asked_for(self):
+        """« Metro supplier is not configured as scrapable, skipping. » was
+        written on every gather that did not even ask for Metro."""
+        from invoices.models import Supplier
+
+        Supplier.objects.filter(code="METRO").update(is_scrapable=False)
+        said = "Metro : la récupération automatique est désactivée pour ce fournisseur, rien n'est cherché."
+        job, scrape_metro, *_ = self.gather(lambda *a, **k: [], codes={f"type-{self.mail_type.id}"})
+        scrape_metro.assert_not_called()
+        self.assertNotIn(said, job.log)
+        job, scrape_metro, *_ = self.gather(lambda *a, **k: [])
+        scrape_metro.assert_not_called()
+        self.assertIn(said, job.log)
+
     def test_one_sign_in_asked_for_passes_the_pause(self):
         _job, scrape_metro, *_ = self.gather(lambda *a, **k: [], metro_now=True)
         self.assertTrue(scrape_metro.call_args.kwargs["ignore_pause"])
@@ -295,7 +309,7 @@ class EmailImportTests(TestCase):
             gather_invoices_task(job.id, date(2026, 1, 1), date(2026, 9, 18), {f"type-{invoice_type.id}"})
         job.refresh_from_db()
         self.assertEqual((job.status, job.invoices_created), (ScrapeJob.Status.SUCCESS, 0))
-        self.assertIn("already imported", job.log)
+        self.assertIn("déjà importé", job.log)
 
     def test_the_emails_date_reaches_a_suppliers_own_reader(self):
         """A reader reading no date falls back on the email's: dropped on
@@ -379,7 +393,7 @@ class OwnReaderSourceTests(TestCase):
         parse_and_import.assert_not_called()
         self.assertEqual(Invoice.objects.filter(supplier=self.wholesaler).count(), 1)
         self.assertEqual(Invoice.objects.get(supplier=self.wholesaler).source_sha256, file_sha256(path))
-        self.assertIn("already imported", job.log)
+        self.assertIn("(déjà importé)", job.log)
 
     def test_metro_s_files_keep_their_digest(self):
         metro = Supplier.objects.filter(code="METRO").first() or make_supplier(code="METRO", name="Metro")

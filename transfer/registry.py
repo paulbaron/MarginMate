@@ -19,9 +19,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-from accounts.tenancy import integrations_allowed
-from invoices.integrations import TO_CONFIGURE
-from recipes.integration import TILL_TO_CONFIGURE
+from accounts.tenancy import server_accounts_allowed
+from invoices.integrations import TO_CONFIGURE_PLURAL
+from recipes.integration import TILL_REIMPORT
 from transfer.sections.base import Group, Section
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,18 @@ INFO: dict[str, SectionInfo] = {
             reasons={"ventes": "Ventes"},
             clear_note="les recettes perdent leurs ventes venues de la caisse ; les ventes par jour de la caisse restent",
         ),
+        # How a bar's own till export is read (sections/till_formats.py): a
+        # format names no row, so it requires nothing, and « Ventes » never
+        # required it - it stores none of what it read.
+        _info(
+            "formats_caisse",
+            "Formats des fichiers de caisse",
+            Group.CONFIG,
+            52,
+            description=(
+                "Comment lire les fichiers exportés de la caisse (CSV ou Excel) : colonnes, dates, moyens de paiement."
+            ),
+        ),
         # What reads one bank's statements, apart from the lines it read
         # (sections/bank_rules.py): another bar on the same bank takes it
         # alone. It requires nothing - none of the three has a foreign key -
@@ -131,8 +143,8 @@ INFO: dict[str, SectionInfo] = {
             Group.CONFIG,
             55,
             description=(
-                "Formats de relevé (CSV), règles de reconnaissance des opérations et règles « sans facture » : de "
-                "quoi lire les relevés d'une même banque."
+                "Formats de relevé, règles de reconnaissance des opérations et règles « sans facture » : de quoi "
+                "lire les relevés d'une même banque."
             ),
             # The format seeded by bank/0007 and the rules seeded by
             # bank/0006 go too (sections/bank_rules.py, FORMAT_CLEAR_NOTE,
@@ -250,26 +262,30 @@ INFO: dict[str, SectionInfo] = {
     )
 }
 
-#: What the page says instead where the server's own accounts are not this
-#: tenant's (accounts.tenancy.integrations_allowed - a hosted bar): it can
-#: neither edit the server's .env nor run a command on it, so it is told
-#: « à configurer », in the words every other page uses.
-DESCRIPTIONS_TO_CONFIGURE = {
+#: What the page says instead in an espace that is not the platform owner's
+#: (accounts.tenancy.server_accounts_allowed): it can neither edit the
+#: server's .env nor run a command on it. Its mailbox signs in with its own
+#: « Identifiants » - which no archive carries -, its portals are « à
+#: configurer » (invoices/integrations.py), and its till's money comes back
+#: by fetching or importing its sales again.
+DESCRIPTIONS_HOSTED = {
     "sources": (
-        f"Recherches dans la boîte mail et portails clients : {TO_CONFIGURE}. Un portail importé arrive inactif."
+        "Recherches dans la boîte mail (son adresse et son mot de passe restent sur la page Identifiants : à "
+        f"ressaisir dans un autre espace). Portails clients : {TO_CONFIGURE_PLURAL} ; un portail importé arrive "
+        "inactif."
     ),
     "ventes": (
         "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de vente. Les "
         "ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, moyens de paiement) ne "
-        f"voyagent pas, et {TILL_TO_CONFIGURE}."
+        f"voyagent pas : {TILL_REIMPORT}."
     ),
 }
 
 
 def description(key: str) -> str:
-    """The section's description as this tenant's page shows it."""
-    if not integrations_allowed():
-        return DESCRIPTIONS_TO_CONFIGURE.get(key, INFO[key].description)
+    """The section's description as this espace's page shows it."""
+    if not server_accounts_allowed():
+        return DESCRIPTIONS_HOSTED.get(key, INFO[key].description)
     return INFO[key].description
 
 
@@ -291,6 +307,7 @@ SECTION_MODULES = (
     "bank_rules",
     "returnables",
     "returnable_types",
+    "till_formats",
 )
 
 _SECTIONS: dict[str, type[Section]] = {}

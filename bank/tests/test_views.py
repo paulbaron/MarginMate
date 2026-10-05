@@ -10,8 +10,9 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from bank import recognition, reconcile
+from bank import recognition, reconcile, statements
 from bank.models import BankTransaction, InvoicePayment, OperationRule, StatementFormat
+from bank.tests import ofx_files
 from bank.tests.support import FORMAT_SEED, make_format
 from bank.tests.test_recognition_views import text_of
 from bank.tests.test_reconcile import FIVE_FIVE, Fixtures, card_row, debit_row, statement
@@ -151,9 +152,9 @@ class UploadTests(TestCase):
         self.assertContains(response, "ne ressemble pas")
         self.assertFalse(BankTransaction.objects.exists())
 
-    def test_only_csv_is_accepted(self):
+    def test_only_statement_files_are_accepted(self):
         response = self.upload("releve.pdf", b"%PDF-1.4")
-        self.assertContains(response, "CSV")
+        self.assertContains(response, "releve.pdf : seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés.")
         self.assertFalse(BankTransaction.objects.exists())
 
     def test_nothing_chosen(self):
@@ -240,6 +241,48 @@ class ImportFormatTests(TestCase):
                 ("000123456789", "VIR CLIENT EXEMPLE ref 0002", Decimal("1250.00")),
             ],
         )
+
+    def test_the_card_offers_every_kind_of_statement_file(self):
+        (control,) = [control for control in self.card().controls if control.name == "files"]
+        self.assertEqual(control.attrs["accept"], statements.ACCEPT_ATTRIBUTE)
+        self.assertEqual(statements.ACCEPT_ATTRIBUTE, ".csv,.ofx,.qfx,.xml,text/csv")
+        self.assertIn("L'export du compte - CSV, OFX ou CAMT.053 -", self.card_text(self.html()))
+
+    def test_an_ofx_statement_is_imported_with_an_ofx_format(self):
+        ofx_format = make_format("Relevé OFX", file_type="ofx", date_column=None, label_columns="", account_pattern="")
+        for name, content in (("releve.ofx", ofx_files.sgml()), ("releve.qfx", ofx_files.xml())):
+            with self.subTest(name=name):
+                response = self.upload((name, content), format=str(ofx_format.pk))
+                self.assertEqual(BankTransaction.objects.count(), len(ofx_files.OPERATIONS))
+                self.assertNotIn("Aucune", " ".join(self.messages_of(response)))
+
+    def test_a_file_of_another_kind_than_its_format_is_refused_never_read_otherwise(self):
+        """An OFX statement named « .csv », chosen with the CSV format: said
+        with both kinds, nothing written - never read with the OFX format in
+        silence, nor half read as a CSV."""
+        response = self.upload(("releve.csv", ofx_files.sgml()))
+        self.assertEqual(
+            self.messages_of(response),
+            [
+                (
+                    "releve.csv : Ce fichier est un relevé OFX / QFX (Money), et le format « BNP Paribas (CSV) » lit "
+                    "les fichiers CSV (colonnes) : choisissez un format OFX / QFX (Money) à l'import, ou ajoutez-en "
+                    "un sur « Format du relevé »."
+                )
+            ],
+        )
+        invoice = b'<?xml version="1.0"?><Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"/>'
+        response = self.upload(("facture.xml", invoice))
+        self.assertEqual(
+            self.messages_of(response),
+            [
+                (
+                    "facture.xml : Ce fichier XML n'est pas un relevé de compte : le format « BNP Paribas (CSV) » "
+                    "lit les fichiers CSV (colonnes)."
+                )
+            ],
+        )
+        self.assertFalse(BankTransaction.objects.exists())
 
     def test_a_format_that_is_not_there_imports_nothing(self):
         other = make_format("Banque Exemple (CSV)", **OTHER_FIELDS)

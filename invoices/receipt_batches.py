@@ -69,7 +69,6 @@ from .einvoice import EInvoiceError
 from .importing import DuplicateInvoiceError, LineTooWideError, RoutedToReturnablesError
 from .models import ReceiptBatch
 from .ocr import DocumentTooBig
-from .parsers.llm_fallback import AIReadingRefused
 from .receipts import (
     OCR_LOCK,
     OCR_WAIT_SECONDS,
@@ -91,10 +90,10 @@ REQUEUE_BATCHES = 20
 MISSING_FILE = "Fichier temporaire introuvable : réimportez ce ticket."
 #: The refusals a file's line says in their own words: the app's, written in
 #: French for the person (an electronic invoice it cannot take, a document
-#: too long or too large to read, a line with a figure no column holds, an
-#: AI reading cut off). Anything else is said by kind
-#: (common.error_for_page), its detail in the server's log.
-READING_REFUSALS = (EInvoiceError, DocumentTooBig, LineTooWideError, AIReadingRefused)
+#: too long or too large to read, a line with a figure no column holds).
+#: Anything else is said by kind (common.error_for_page), its detail in the
+#: server's log.
+READING_REFUSALS = (EInvoiceError, DocumentTooBig, LineTooWideError)
 
 # Held for a read and write of a batch's `results`, never across an import.
 # One for the process, every tenant included, on purpose: it makes writers

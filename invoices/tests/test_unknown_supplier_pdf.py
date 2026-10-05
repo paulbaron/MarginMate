@@ -51,9 +51,7 @@ def pdf_bytes(test, lines):
 class OwnReaderTests(TestCase):
     def test_who_has_a_reader_of_their_own(self):
         self.assertTrue(has_own_reader(Supplier.objects.get(code="METRO")))
-        for code in ("SABBH", "OTHER"):
-            with self.subTest(code=code):
-                self.assertFalse(has_own_reader(Supplier.objects.get(code=code)))
+        self.assertFalse(has_own_reader(Supplier.objects.get(code="SABBH")))
         self.assertFalse(has_own_reader(make_supplier(code="CUISIPRO", parser_key="")))
 
 

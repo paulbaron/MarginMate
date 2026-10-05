@@ -261,9 +261,8 @@
         {% endif %}
         {% if sources_refused %}
             {% comment %}
-            The mailbox and the portals are the server's own accounts
-            (invoices/integrations.py): said as on the Sources tab, and no
-            link to a source form that would only say it again.
+            Unbound only (invoices/integrations.py): said as on the Sources
+            tab, and no link to a source form that would only say it again.
             {% endcomment %}
             <p class="muted">{{ sources_refused }}</p>
         {% else %}

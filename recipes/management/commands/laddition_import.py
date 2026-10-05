@@ -13,10 +13,13 @@ till day it read (recipes/payments.py) - which --dry-run reads and reports
 without writing. Ranges longer than two years are handled; --file skips the
 download and reads one already downloaded.
 
-In multi mode it runs for one tenant (`manage.py tenant <folder>
-laddition_import …`) and downloads into that tenant's own folder. Downloading
-uses the server's L'Addition account, the owner's: refused elsewhere, like
-the page's import (recipes/integration.py).
+It runs for one tenant (`manage.py tenant <folder> laddition_import …`)
+and downloads into that tenant's own folder, signing in with that espace's
+own L'Addition account - its « Identifiants », the .env standing in for the
+platform owner's espace alone -: refused unbound, like the page's import
+(recipes/integration.py). The job's failure line is the till's own French
+refusal or one fixed sentence (tasks.fail): the Ventes tab of the espace
+shows it.
 
 **A download holds the one sales import's lock** (importing.claim_sales_import,
 the Ventes tab's and the scheduler's): a manual SalesImportJob of the period,
@@ -40,22 +43,30 @@ from django.utils import timezone
 from accounts import paths
 from recipes import auto_sales
 from recipes.importing import claim_sales_import
-from recipes.integration import refusal, require_tenant_for_command, till_allowed
+from recipes.integration import refusal, require_tenant_for_command, till_allowed, till_commands_shown
 from recipes.models import SalesImportJob
-from recipes.payments import record_payments
 from recipes.pos.laddition_download import DownloadCancelled, LadditionDownloadError, download_sales_lines
 from recipes.pos.laddition_session import LadditionAuthError
 from recipes.pos.laddition_xlsx import LadditionExportError, parse_sales_exports
-from recipes.sales import record_sales
 from recipes.sales_sources import LADDITION
-from recipes.tasks import payments_log, sync_pos_products
+from recipes.tasks import fail, payments_log, store_reading
 
 BUSY = "Une récupération des ventes est déjà en cours dans l'application : attendez qu'elle finisse."
-#: The first line of the command's job, as the Ventes tab shows it.
+#: The first line of the command's job, as the Ventes tab shows it - in the
+#: platform owner's espace (`till_commands_shown`); any other bar's tab names
+#: no server command (SERVER_NOTE).
 COMMAND_NOTE = "Lancé par la commande laddition_import."
+SERVER_NOTE = "Lancé depuis le serveur."
 CANCELLED = "Annulé depuis l'application."
+#: What the server's log calls a failure of the command's job.
+COMMAND_FAILED = "Commande laddition_import"
 #: What the command's job saves when it ends.
 END_FIELDS = ["status", "finished_at", "items_sold", "recorded", "unmatched"]
+
+
+def _note() -> str:
+    """The job's first line: the command named where a page may name it."""
+    return COMMAND_NOTE if till_commands_shown() else SERVER_NOTE
 
 
 def _as_date(value: str) -> date:
@@ -105,7 +116,7 @@ class Command(BaseCommand):
             raise CommandError(refusal())
         # The lock the page and the scheduler take (a dead run reaped first,
         # so that it does not hold this up for ever).
-        job = claim_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL, notes=[COMMAND_NOTE])
+        job = claim_sales_import(start, end, trigger=SalesImportJob.Trigger.MANUAL, notes=[_note()])
         if not isinstance(job, SalesImportJob):  # None: another import runs (no plan, so never a sentence)
             raise CommandError(BUSY)
         if options["no_headless"]:
@@ -125,7 +136,9 @@ class Command(BaseCommand):
             job.append_log("Annulé.")
             raise CommandError(CANCELLED) from None
         except Exception as exc:  # said in the job's log, then raised as it was
-            job.append_log(f"Échec : {exc}")
+            # A refused sign-in arrives wrapped in a CommandError: its own
+            # French words are what the Ventes tab says.
+            fail(job, exc.__cause__ if isinstance(exc, CommandError) and exc.__cause__ else exc, COMMAND_FAILED)
             raise
         finally:
             self._end(job, status, own, dry_run=options["dry_run"])
@@ -204,35 +217,18 @@ class Command(BaseCommand):
             self._report_unmatched(unknown)
             return
 
-        # The job's order exactly (tasks.import_laddition_sales_task): the
-        # till products and their days - « Ventes », the day's money - then
-        # the recipes' sales, then the payments. Without the first, this
-        # command stored a day's card and cash with no takings behind them:
-        # the very day the backfill refuses to write and « Remplacer »
-        # prunes. One rule for every writer.
-        seen = sync_pos_products(export)
-        self.stdout.write(f"{seen} till product(s) seen.")
-
-        result = record_sales(export.entries, source="laddition")
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Recorded {result.recorded} recipe/day totals ({result.created} new, {result.updated} updated)."
-            )
-        )
-        self._report_unmatched(sorted(set(result.unmatched)))
+        # The job's writer exactly (tasks.store_reading): the till products
+        # and their days - « Ventes », the day's money - then the recipes'
+        # sales, then the payments, each said in the job's own words.
+        # Without the first, this command once stored a day's card and cash
+        # with no takings behind them: the very day the backfill refuses to
+        # write and « Remplacer » prunes. One writer for every reading.
+        stored = store_reading(export, self.stdout.write)
+        self._report_unmatched(sorted(set(stored.sales.unmatched)))
         if job is not None:
             job.items_sold = export.total_quantity
-            job.recorded = result.recorded
-            job.unmatched = len(set(result.unmatched))
-
-        if export.payments_read:
-            paid = record_payments(export)
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"Recorded the payments of {paid.days_written} till day(s) "
-                    f"({paid.days_unchanged} already up to date)."
-                )
-            )
+            job.recorded = stored.sales.recorded
+            job.unmatched = stored.unmatched
 
     def _report_unmatched(self, names):
         if not names:

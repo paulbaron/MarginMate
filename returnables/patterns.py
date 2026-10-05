@@ -45,6 +45,18 @@ read of the row (SQLite quantizes decimals on the way out).
 
 Pure: no model, no request. `reading.py` reads a slip with these; the forms
 and « Données » check a pattern with `compile_field` / `compile_pattern`.
+
+**The invoice mailbox's sources** go through it too, in every espace
+(invoices.models.EmailInvoiceSource.clean,
+scrapers.generic_email.find_matching_emails; security audit 04/10/2026):
+`check_invoice_mail_pattern` checks a pattern's shape on the tree `regex`
+builds with no flag and compiles it so - the case-sensitive, single-line
+`re` they were always matched with -, and `invoice_mail_matcher` matches it
+on INVOICE_MAIL_TEXT_LIMIT characters with a timeout: a pattern whatever a
+mail says can make slow freezes the one process every bar runs in. In an
+espace that is not the platform owner's, a pattern finding something in an
+empty text is refused too (`empty_reason`), and one out of time on
+MAX_MAIL_TIMEOUTS mails of a search stops its source.
 """
 
 from __future__ import annotations
@@ -248,10 +260,10 @@ _RX_NODE = _regex_core.RegexBase
 MAX_TREE_NODES = 20_000
 
 
-def _regex_tree(pattern: str):
-    """`regex`'s parse of `pattern`, as `regex.compile(pattern, FLAGS)` would
+def _regex_tree(pattern: str, flags: int = FLAGS):
+    """`regex`'s parse of `pattern`, as `regex.compile(pattern, flags)` would
     parse it (regex/_main.py _compile), and nothing more."""
-    flags = FLAGS | regex.VERSION0
+    flags = flags | regex.VERSION0
     for _attempt in range(3):
         source = _regex_core.Source(pattern)
         info = _regex_core.Info(flags, source.char_type, {})
@@ -277,10 +289,10 @@ def _rx_children(node):
                     yield item
 
 
-def _check_regex_tree(pattern: str) -> None:
+def _check_regex_tree(pattern: str, flags: int = FLAGS) -> None:
     """Steps 5's rules on `regex`'s own tree - _Refused when broken."""
     try:
-        parsed = _regex_tree(pattern)
+        parsed = _regex_tree(pattern, flags)
     except _Refused:
         raise
     except Exception:  # noqa: BLE001 - regex.error, RecursionError on a deep pattern, ...: a refusal, never a 500
@@ -370,12 +382,14 @@ def _checked(pattern: str, required_groups: tuple, max_length: int):
     return compiled
 
 
-def _check_shape(pattern: str) -> None:
+def _check_shape(pattern: str, flags: int = FLAGS) -> None:
     """Steps 2 to 5b: the pattern's shape, read without compiling it -
-    _Refused when a rule is broken."""
+    _Refused when a rule is broken. `flags`: what it will be compiled with
+    (FLAGS, or 0 for an invoice source's pattern: case-sensitive and
+    single-line, as `re` read it), so the tree checked is the one compiled."""
     # 2. The standard parser shows the pattern's shape and expands nothing.
     try:
-        parsed = sre_parser.parse(pattern, re.IGNORECASE | re.MULTILINE)
+        parsed = sre_parser.parse(pattern, flags & (re.IGNORECASE | re.MULTILINE))
     except re.error as error:
         raise _Refused(_translate(error.msg, error.pos)) from None
     except Exception:  # noqa: BLE001 - whatever the parser raises is a refusal in French, never a 500
@@ -414,7 +428,7 @@ def _check_shape(pattern: str) -> None:
     # 5b. The same rules on the tree `regex` itself builds - the one it
     # compiles (see _check_regex_tree): a disagreement between the two
     # parsers can no longer hide a repetition.
-    _check_regex_tree(pattern)
+    _check_regex_tree(pattern, flags)
 
 
 def compile_pattern(text, *, field_label: str, required_groups=(), max_length: int = MAX_PATTERN_LENGTH):
@@ -618,11 +632,17 @@ class MailMatcher:
     timeout is « no match » (a header anybody can write must not hang the
     gather), logged and counted (`timed_out`): find_matching_emails takes
     the search for an incomplete one - a mail left out for its pattern's
-    time is not one that does not match."""
+    time is not one that does not match. Past `max_timeouts` in one search
+    (another bar's invoice sources: MAX_MAIL_TIMEOUTS), a PatternError naming
+    `field_label` stops the source: a pattern slow on mail after mail would
+    hold the gather's thread, in the one process every bar runs in, for as
+    long as the mailbox is big."""
 
-    def __init__(self, pattern, log=None):
+    def __init__(self, pattern, log=None, *, max_timeouts=None, field_label="Motif de mail"):
         self._pattern = pattern
         self._log = log
+        self._max_timeouts = max_timeouts
+        self._field_label = field_label
         self.pattern = pattern.pattern
         self.timed_out = 0
 
@@ -642,6 +662,8 @@ class MailMatcher:
             logger.warning(message)
             if self._log is not None:
                 self._log(message)
+            if self._max_timeouts is not None and self.timed_out >= self._max_timeouts:
+                raise PatternError(f"{self._field_label} : motif trop lent sur ces mails — simplifiez-le.") from None
             return None
 
 
@@ -657,34 +679,55 @@ def mail_matcher(text, *, log=None) -> MailMatcher:
 INVOICE_MAIL_PATTERN_LENGTH = 500
 INVOICE_MAIL_TEXT_LIMIT = 200_000
 INVOICE_MAIL_TIMEOUT = 1.0
+#: In an espace that is not the platform owner's, an invoice source's
+#: pattern out of time on this many mails of one search stops the source
+#: (MailMatcher's `max_timeouts`); before, each is « no match » and makes
+#: the search an incomplete one.
+MAX_MAIL_TIMEOUTS = 3
 
 
 @functools.lru_cache(maxsize=256)
 def _invoice_mail_compiled(pattern: str):
-    _check_shape(pattern)
+    # Checked on the tree `regex` builds with no flag: the one compiled.
+    _check_shape(pattern, 0)
     try:
         # No flag: an invoice source's patterns were always matched like
         # `re.compile(pattern)` - case-sensitive unless they say (?i), and a
-        # blank-matching « .* » is accepted.
+        # blank-matching « .* » is accepted (outside the owner's espace,
+        # see check_invoice_mail_pattern's `empty_reason`).
         return regex.compile(pattern)
     except Exception as error:  # noqa: BLE001 - anything compile raises is a refusal, not a 500
         raise _Refused(_translate(getattr(error, "msg", ""), None)) from None
 
 
-def check_invoice_mail_pattern(text, *, field_label: str = "Motif de mail"):
+def check_invoice_mail_pattern(text, *, field_label: str = "Motif de mail", empty_reason: str | None = None):
     """An invoice source's pattern (EmailInvoiceSource) checked by the motif
     guard and compiled with `re`'s meaning - or PatternError. It used to be
     a bare `re.compile`: no shape check, no timeout, on a body anybody on the
-    internet writes (security audit 04/10/2026)."""
+    internet writes (security audit 04/10/2026).
+
+    `empty_reason`, given in an espace that is not the platform owner's
+    (EmailInvoiceSource.EMPTY_MATCH_REASONS, its field's own sentence): a
+    pattern finding something in an empty text keeps every mail, or every
+    attachment, until the byte budgets stop the search - refused with it.
+    The owner's « .* » is accepted, as `re` took it."""
     pattern = (text or "").strip()
     if not pattern:
         raise PatternError(f"{field_label} : le motif est vide.")
     if len(pattern) > INVOICE_MAIL_PATTERN_LENGTH:
         raise PatternError(f"{field_label} : {INVOICE_MAIL_PATTERN_LENGTH} caractères au plus ({len(pattern)} ici).")
     try:
-        return _invoice_mail_compiled(pattern)
+        compiled = _invoice_mail_compiled(pattern)
     except _Refused as refused:
         raise PatternError(f"{field_label} : {refused.reason}.") from None
+    if empty_reason is not None:
+        try:
+            empty = compiled.search("", timeout=PATTERN_TIMEOUT, concurrent=True)
+        except TimeoutError:
+            raise PatternError(f"{field_label} : le motif est trop lent.") from None
+        if empty is not None:
+            raise PatternError(f"{field_label} : {empty_reason}.")
+    return compiled
 
 
 class InvoiceMailMatcher(MailMatcher):
@@ -696,11 +739,25 @@ class InvoiceMailMatcher(MailMatcher):
         return INVOICE_MAIL_TEXT_LIMIT, INVOICE_MAIL_TIMEOUT
 
 
-def invoice_mail_matcher(text, *, field_label: str = "Motif de mail", log=None) -> InvoiceMailMatcher:
+def invoice_mail_matcher(
+    text,
+    *,
+    field_label: str = "Motif de mail",
+    log=None,
+    empty_reason: str | None = None,
+    max_timeouts: int | None = None,
+) -> InvoiceMailMatcher:
     """The `compile` an invoice source's patterns are handed to
-    find_matching_emails with (the gather and « Tester »). `field_label`:
-    which of the source's patterns it is, named by a refusal."""
-    return InvoiceMailMatcher(check_invoice_mail_pattern(text, field_label=field_label), log)
+    find_matching_emails with (the gather and « Tester »), in every espace.
+    `field_label`: which of the source's patterns it is, named by a refusal.
+    Outside the platform owner's espace the caller adds `empty_reason`
+    (check_invoice_mail_pattern) and `max_timeouts` (MAX_MAIL_TIMEOUTS)."""
+    return InvoiceMailMatcher(
+        check_invoice_mail_pattern(text, field_label=field_label, empty_reason=empty_reason),
+        log,
+        max_timeouts=max_timeouts,
+        field_label=field_label,
+    )
 
 
 # -- Numbers, dates, times ------------------------------------------------------------------------------------------

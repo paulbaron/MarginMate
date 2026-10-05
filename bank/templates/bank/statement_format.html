@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}{{ fmt.name }} - Format du relevé - MarginMate{% endblock %}
 {% block content %}
     <div class="page-header">
@@ -16,7 +17,7 @@
     <div class="card" id="essai-format">
         <form method="post" action="{% url 'bank:statement_format' fmt.pk %}#essai-format" enctype="multipart/form-data">
             {% csrf_token %}
-            {% include "_form_fields.html" with form=form %}
+            {% include "bank/_statement_format_fields.html" %}
             {% include "bank/_statement_format_file.html" %}
             {% comment %}
             « Tester » first: Enter in a field presses the form's first submit
@@ -32,4 +33,7 @@
     </div>
 
     {% include "bank/_statement_format_help.html" %}
+{% endblock %}
+{% block extra_js %}
+    <script src="{% asset 'js/statement_format.js' %}" defer></script>
 {% endblock %}

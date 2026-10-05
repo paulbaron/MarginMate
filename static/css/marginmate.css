@@ -458,6 +458,7 @@ body.catalogue-searching #catalogue tr[data-child-row]:not(.search-mine) { displ
 /* A part of a form that is sent or not as a whole (an invoice type's source):
    grouped for the browser, not drawn as a box. */
 fieldset.source-kind { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.format-columns { border: 0; margin: 0; padding: 0; min-width: 0; }
 
 label { display: block; margin-bottom: var(--s1); color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
 

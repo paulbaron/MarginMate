@@ -24,13 +24,15 @@ from accounts import paths
 from inventory.models import Product
 from invoices.forms import ReceiptShopForm
 from invoices.models import Invoice, ShopItemPrice, Supplier
-from invoices.parsers import is_ticket_shop
+from invoices.parsers import PARSER_REGISTRY, is_ticket_shop
 from invoices.receipt_batches import run_receipt_batch, stage_batch
 from invoices.receipts import (
     UnrecognisedShopError,
+    configured_tills,
     create_shop,
     describe_tickets,
     detect_parser,
+    document_supplier,
     first_reading,
     header_guess,
     import_receipt,
@@ -38,6 +40,7 @@ from invoices.receipts import (
     parser_for,
     pending_receipts,
     plain_text,
+    recognise_shop,
     tickets_printing,
 )
 from invoices.tests.test_generic_receipt import UNKNOWN_SHOP
@@ -62,18 +65,17 @@ def staged_file(test, name):
 
 
 class WhoseTicketsAreReadTests(TestCase):
-    def test_every_supplier_but_the_ai_one_has_its_tickets_read(self):
+    def test_every_supplier_has_its_tickets_read(self):
         for code in ("FRANPRIX", "METRO", "UBA"):
             with self.subTest(code=code):
                 self.assertIsNotNone(parser_for(Supplier.objects.get(code=code)))
-        self.assertIsNone(parser_for(Supplier.objects.get(code="OTHER")))
         reader = parser_for(make_supplier(code="EPICERIE", name="Épicerie du coin"))
         self.assertEqual(reader.parse_text(UNKNOWN_SHOP).supplier_code, "EPICERIE")
 
     def test_a_shop_is_a_till_configured_or_a_supplier_without_invoices(self):
         self.assertTrue(is_ticket_shop(Supplier.objects.get(code="SABBH")))
         self.assertTrue(is_ticket_shop(make_supplier(code="EPICERIE", parser_key="")))
-        for code in ("METRO", "UBA", "OTHER"):
+        for code in ("METRO", "UBA"):
             with self.subTest(code=code):
                 self.assertFalse(is_ticket_shop(Supplier.objects.get(code=code)))
 
@@ -99,10 +101,6 @@ class HeaderTests(TestCase):
     def test_a_header_is_whole_words(self):
         make_supplier(code="COIN", name="Coin", ticket_header="COIN")
         self.assertIsNone(detect_parser("RECOINS\nPAIN 1,00\n"))
-
-    def test_the_ai_pseudo_supplier_is_never_found(self):
-        Supplier.objects.filter(code="OTHER").update(ticket_header="EPICERIE DU COIN")
-        self.assertIsNone(detect_parser(UNKNOWN_SHOP))
 
     def test_comparing_ignores_accents_case_and_punctuation(self):
         self.assertEqual(plain_text("Épicerie  d'Été, 12-bis"), "EPICERIE D ETE 12 BIS")
@@ -133,6 +131,27 @@ class CreateShopTests(TestCase):
     def test_a_code_taken_gets_a_number(self):
         make_supplier(code="EPICERIE_DU_COIN", name="Autre")
         self.assertEqual(create_shop("Épicerie du coin").code, "EPICERIE_DU_COIN_2")
+
+    def test_never_a_code_a_reader_of_the_code_answers_to(self):
+        """A new espace has no Sabbh Oriental nor Wing Seng (invoices.seeds):
+        a shop of its own named so must not become that till - its settings,
+        its header patterns - nor any other reader's supplier."""
+        Supplier.objects.filter(code__in=["SABBH", "WINGSENG"]).delete()
+        for name, code in (("Sabbh", "SABBH_2"), ("Wingseng", "WINGSENG_2"), ("Cecina", "CECINA_2")):
+            with self.subTest(name=name):
+                self.assertEqual(create_shop(name).code, code)
+
+    def test_never_the_code_of_the_removed_ai_reading_s_supplier(self):
+        """invoices/0038 took OTHER away; an archive written before
+        04/10/2026 still carries « Autre (analyse IA) » under it, and
+        « Données » pairs a supplier by its code - a shop of that code would
+        take that supplier and its documents."""
+        self.assertFalse(Supplier.objects.filter(code="OTHER").exists())
+        for name in ("Other", "other", "OTHER"):
+            with self.subTest(name=name):
+                shop = create_shop(name)
+                self.assertEqual(shop.code, "OTHER_2")
+                shop.delete()
 
     def test_what_is_refused(self):
         make_invoice(supplier=Supplier.objects.get(code="SABBH"), ocr_text="Sabbh Oriental\nRUE DU TEMPLE\n")
@@ -264,7 +283,6 @@ class ShopFormTests(TestCase):
             {"supplier": ""},
             {"supplier": "abc"},
             {"supplier": "new"},
-            {"supplier": str(Supplier.objects.get(code="OTHER").pk)},
         ):
             with self.subTest(data=data):
                 self.assertFalse(ReceiptShopForm(data).is_valid())
@@ -359,6 +377,57 @@ class NewShopFromBatchTests(TestCase):
         start.assert_not_called()
         said = messages_of(response)
         self.assertTrue(any("Sur la page du ticket" in message for message in said), said)
+
+
+class TillWithoutItsSupplierTests(TestCase):
+    """A till configured in the code (generic_receipt.SHOPS) answers only in
+    an espace holding its supplier: a new espace starts without the original
+    bar's local shops (invoices.seeds), and another bar's « Épicerie Sabah »
+    was filed under « Sabbh Oriental », or crashed the import once that row
+    was gone."""
+
+    WING_SENG = UNKNOWN_SHOP.replace("EPICERIE DU COIN", "WING SENG")
+    SABAH = UNKNOWN_SHOP.replace("EPICERIE DU COIN", "EPICERIE SABAH")
+
+    def test_a_till_answers_where_its_supplier_is(self):
+        for text, code in ((self.WING_SENG, "WINGSENG"), (self.SABAH, "SABBH")):
+            with self.subTest(code=code):
+                parser, identifiers, conflict = recognise_shop(text)
+                self.assertEqual((parser.supplier_code, identifiers, conflict), (code, [], ""))
+                self.assertEqual(document_supplier(text).code, code)
+        self.assertEqual(
+            sorted(till.supplier_code for till in configured_tills()), ["FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"]
+        )
+
+    def test_not_where_it_is_not(self):
+        Supplier.objects.filter(code__in=["WINGSENG", "SABBH"]).delete()
+        for text in (self.WING_SENG, self.SABAH):
+            with self.subTest(text=text.splitlines()[0]):
+                self.assertEqual(recognise_shop(text), (None, [], ""))
+                self.assertIsNone(document_supplier(text))
+        self.assertEqual(sorted(till.supplier_code for till in configured_tills()), ["FRANPRIX", "MONOPRIX"])
+
+    def test_its_ticket_is_then_unrecognised_not_a_crash(self):
+        Supplier.objects.filter(code="WINGSENG").delete()
+        path = staged_file(self, "wing-seng.pdf")
+        with mock.patch("invoices.receipts.recognise", return_value=recognised(self.WING_SENG)):
+            with self.assertRaises(UnrecognisedShopError) as raised:
+                import_receipt(path)
+        self.assertIn("WING SENG", raised.exception.text)
+        self.assertFalse(Invoice.objects.exists())
+
+    def test_a_reader_naming_a_supplier_that_is_gone_is_unrecognised(self):
+        """Whoever answers - a till, a reader patched in - the import files
+        under a row of this espace, or says the shop was not recognised."""
+        Supplier.objects.filter(code="WINGSENG").delete()
+        path = staged_file(self, "wing-seng.pdf")
+        with (
+            mock.patch("invoices.receipts.recognise", return_value=recognised(self.WING_SENG)),
+            mock.patch("invoices.receipts.recognise_shop", return_value=(PARSER_REGISTRY["WINGSENG"], [], "")),
+        ):
+            with self.assertRaisesMessage(UnrecognisedShopError, "Enseigne non reconnue"):
+                import_receipt(path)
+        self.assertFalse(Invoice.objects.exists())
 
 
 class ImportTests(TestCase):

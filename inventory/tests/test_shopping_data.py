@@ -7,7 +7,7 @@ What the page promises at that level, pinned on worked examples:
 * a purchase is dated by its movement's own `occurred_on`, else by its
   invoice's date, never by when it was classified; an undated invoice and
   one dated after today are left out; a return is kept apart;
-* the suppliers of charges and the AI pseudo-supplier are never offered,
+* the suppliers of charges and the removed AI reading's are never offered,
   while what was bought there still counts;
 * the till is read over the year up to its import's coverage, attributed
   once by the engine (`variance.attribute_sales`) and spread per day so
@@ -58,7 +58,6 @@ from inventory.shopping_data import (
 )
 from inventory.variance import attribute_sales, read_sales
 from invoices.models import GatherCoverage, Invoice
-from invoices.parsers import LLM_PARSER_KEY
 from recipes import auto_sales, sales_sources
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.models import (
@@ -67,6 +66,7 @@ from recipes.models import (
     RecipeSale,
     SaleDocument,
     SaleDocumentLine,
+    SalesImportJob,
     variation_scope,
 )
 from tests.factories import (
@@ -292,9 +292,12 @@ class PurchaseFilterTests(TestCase):
 
 class OfferedStoresTests(TestCase):
     def test_the_suppliers_of_charges_and_the_ai_pseudo_supplier_are_not_offered(self):
+        """The AI reading is gone (invoices/0038): its supplier, kept as an
+        ordinary one where something named it, is told by its code - its
+        reader key emptied."""
         shop = make_supplier(name="Grossiste exemple")
         charges = make_supplier(name="Loyer exemple", expenses_only=True)
-        reader = make_supplier(name="Analyse exemple", parser_key=LLM_PARSER_KEY)
+        reader = make_supplier(code="OTHER", name="Autre (analyse IA)")
         make_supplier(name="Fournisseur sans achat exemple")
         beer = article("Bière exemple", unit=UnitChoices.UNIT)
         bought(shop, beer, D1, "24")
@@ -465,6 +468,36 @@ class TillWindowTests(TestCase):
         # The syrup's own purchase in the window is its capacity.
         sold(self.soda, 2, D2)
         self.assertEqual(self.read().base[self.syrup.pk].available, Decimal("1"))
+
+    def test_till_files_continuing_the_coverage_carry_the_window_on(self):
+        """L'Addition fetched up to REF − 10, the days after uploaded as till
+        files on « Ventes » (a bar filling days by file, or one that left
+        L'Addition): the window runs on through the files that continue it
+        - never across a gap, never a failed one, never past the last
+        complete day when it was read - and L'Addition's own coverage, where
+        its imports start, stays where it was."""
+        covered(REF - 10 * DAY)
+        for day, quantity in ((REF - 12 * DAY, 2), (REF - 6 * DAY, 4), (REF - 2 * DAY, 8)):
+            sold(self.soda, quantity, day)
+
+        def a_file(first, last, status=SalesImportJob.Status.SUCCESS):
+            job = SalesImportJob.objects.create(
+                source=SalesImportJob.FILE, status=status, range_start=first, range_end=last
+            )
+            # Read on the page's day: its last complete day is REF.
+            SalesImportJob.objects.filter(pk=job.pk).update(started_at=NOW, finished_at=NOW)
+
+        a_file(REF - 7 * DAY, REF - 5 * DAY)  # after a gap (REF − 9, REF − 8)
+        self.assertEqual(self.read().until, REF - 10 * DAY)
+        a_file(REF - 9 * DAY, REF - 8 * DAY)  # the gap filled
+        self.assertEqual(self.read().until, REF - 5 * DAY)
+        a_file(REF - 4 * DAY, REF - DAY, status=SalesImportJob.Status.FAILED)
+        self.assertEqual(self.read().until, REF - 5 * DAY)
+        a_file(REF - 5 * DAY, TODAY)  # today is not over
+        read = self.read()
+        self.assertEqual((read.until, read.data.covered_until), (REF, REF))
+        self.assertEqual(read.data.series[self.syrup.pk][-1], (REF - 2 * DAY, 0.4))
+        self.assertEqual(auto_sales.covered_until(sales_sources.LADDITION), REF - 10 * DAY)
 
     def test_a_lagging_import_is_said_stale_on_the_plan(self):
         covered(REF - 10 * DAY)
@@ -648,10 +681,11 @@ class QueryCountTests(TestCase):
     #: What `prepare` reads with the till off: the scan, the articles, the
     #: suppliers, the products' names, the exclusions.
     TILL_OFF_QUERIES = 5
-    #: And with it on: the night and the coverage, the window's recipe
+    #: And with it on: the night and the coverage, the till's files that
+    #: continue it (`auto_sales.till_covered_until`), the window's recipe
     #: sales and sale-document lines, the till's first day (two), and the
     #: engine's reading of the recipes inside one variation_scope.
-    TILL_ON_QUERIES = 20
+    TILL_ON_QUERIES = 21
 
     def setUp(self):
         covered(REF)
