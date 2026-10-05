@@ -70,6 +70,7 @@ from xml.etree import ElementTree
 
 from common import format_money, group_thousands
 
+from .identifiers import document_identifiers
 from .parsers.base import EInvoiceFacts, ParseCheck, ParsedInvoice, ParsedLine
 
 ZERO = Decimal("0")
@@ -98,6 +99,11 @@ MAX_RATE = Decimal("9.9999")  # InvoiceLine.vat_rate (5,4) - 999,99 %
 # to what the column holds rather than refused, because the figures beside it
 # are worth keeping and a 7 MB "product name" is not the invoice's substance.
 MAX_NAME = 255
+# A party's identifier as stated (BT-30, BT-31, BT-47, BT-48) and the
+# invoice a credit note corrects (BT-25), read for the sales side: cut to
+# what their columns hold, like a name - an identifier is not money either.
+MAX_IDENTIFIER = 40
+MAX_REFERENCE = 100
 
 # The two EN 16931 syntaxes.
 CII = "CII"
@@ -147,6 +153,14 @@ class EInvoiceError(ValueError):
     ValueError as one file's error and carries on with the folder, which is
     exactly what a broken or hostile attachment deserves.
     """
+
+
+class OwnSalesInvoiceError(EInvoiceError):
+    """Achats' refusal of an electronic invoice the bar ISSUED - its seller
+    the SIREN the bar's own sales invoices state (receipts.own_sales_invoice).
+    An EInvoiceError, so every handler already saying those in their own
+    words (receipt_batches.READING_REFUSALS, the upload, the gathers) says
+    this one too."""
 
 
 # --------------------------------------------------------------------------
@@ -394,9 +408,19 @@ def looks_like_an_invoice(data: bytes) -> bool:
     refused here too rather than parsed.
     """
     try:
-        return _syntax(_root_tag(data)) is not None
+        return root_syntax(data) is not None
     except EInvoiceError:
         return False
+
+
+def root_syntax(data: bytes) -> str | None:
+    """CII or UBL by the root element, None for another XML - and RAISING
+    `EInvoiceError` for what the root check refuses (not bytes, over
+    MAX_XML_BYTES, a DOCTYPE or an ENTITY, a UTF-16/32 encoding, nothing
+    parseable). `looks_like_an_invoice` with the refusal kept: the sales
+    side's typed form (« + Facture de vente ») says it rather than taking
+    such a file for a plain one."""
+    return _syntax(_root_tag(data))
 
 
 def _root_tag(data: bytes) -> str:
@@ -414,14 +438,18 @@ def _root_tag(data: bytes) -> str:
         parser.feed(bytes(data))
         for _event, element in parser.read_events():
             return element.tag
-    except ElementTree.ParseError:
+    except (ElementTree.ParseError, ValueError, LookupError):
+        # expat's own refusals of an encoding it cannot use: LookupError for
+        # an unknown one (« UCS2 »), a plain ValueError for a multi-byte one
+        # (« utf_16 » past the prefix check). Nothing in this block raises
+        # an EInvoiceError, so none of its refusals is swallowed here.
         raise EInvoiceError("Ce document n'est pas un fichier XML lisible.") from None
     raise EInvoiceError("Ce document n'est pas un fichier XML lisible.")
 
 
 _WIDE_BOMS = (b"\xff\xfe", b"\xfe\xff")
 _DECLARED_ENCODING = re.compile(rb"""encoding\s*=\s*["']([\w.:+-]+)["']""")
-_WIDE_ENCODINGS = ("utf-16", "utf16", "utf-32", "utf32", "ucs-2", "ucs-4", "unicodefffe")
+_WIDE_ENCODINGS = ("utf-16", "utf16", "utf-32", "utf32", "ucs-2", "ucs-4", "ucs2", "ucs4", "unicodefffe")
 
 
 def _refuse_a_doctype(data: bytes) -> None:
@@ -445,7 +473,8 @@ def _refuse_a_doctype(data: bytes) -> None:
     declared = _DECLARED_ENCODING.search(head)
     wide = head.startswith(_WIDE_BOMS) or b"\x00" in head[:4]
     if not wide and declared is not None:
-        wide = declared.group(1).decode("ascii", "replace").lower().startswith(_WIDE_ENCODINGS)
+        # « utf_16 » is Python's spelling of « utf-16 »: normalised first.
+        wide = declared.group(1).decode("ascii", "replace").lower().replace("_", "-").startswith(_WIDE_ENCODINGS)
     if wide:
         raise EInvoiceError(
             "Cette facture électronique n'est pas encodée en UTF-8 : elle est refusée "
@@ -483,7 +512,10 @@ def read(data: bytes, supplier_code: str = "") -> ParsedInvoice:
     where `invoices/identifiers.py` - the one matcher for those - finds
     them. The BUYER's are deliberately left out: that is the bar's own
     company number, printed on every supplier's invoice, and the one figure
-    that must never name a supplier.
+    that must never name a supplier. The buyer's name and numbers, and the
+    references BT-25 / BT-72 / BG-14, are read into `EInvoiceFacts` for the
+    sales side (recipes/sale_einvoice.py) - and still never into
+    `source_text`.
     """
     tag = _root_tag(data)
     syntax = _syntax(tag)
@@ -492,7 +524,7 @@ def read(data: bytes, supplier_code: str = "") -> ParsedInvoice:
     _refuse_a_doctype(data)
     try:
         root = ElementTree.fromstring(bytes(data))
-    except ElementTree.ParseError as error:
+    except (ElementTree.ParseError, ValueError, LookupError) as error:
         raise EInvoiceError(f"Cette facture électronique n'est pas un XML lisible ({error}).") from None
     document = _Cii(root) if syntax == CII else _Ubl(root)
     try:
@@ -587,6 +619,9 @@ class _Cii:
         self.settlement = _kid(transaction, "ApplicableHeaderTradeSettlement")
         self.summation = _kid(self.settlement, "SpecifiedTradeSettlementHeaderMonetarySummation")
         self.seller = _kid(self.agreement, "SellerTradeParty")
+        # Read for the sales side only (EInvoiceFacts.buyer_*, .delivered).
+        self.buyer = _kid(self.agreement, "BuyerTradeParty")
+        self.delivery = _kid(transaction, "ApplicableHeaderTradeDelivery")
 
     def profile(self) -> str:
         return _text(self.root, "ExchangedDocumentContext", "GuidelineSpecifiedDocumentContextParameter", "ID")
@@ -618,11 +653,32 @@ class _Cii:
 
     def seller_vat(self) -> str:
         """BT-31, among the tax registrations - the one with schemeID="VA"."""
-        for registration in _kids(self.seller, "SpecifiedTaxRegistration"):
-            for identifier in _kids(registration, "ID"):
-                if identifier.get("schemeID", "").upper() == "VA":
-                    return (identifier.text or "").strip()
-        return ""
+        return _registered_vat(self.seller)
+
+    def buyer_name(self) -> str:
+        return _text(self.buyer, "Name")
+
+    def buyer_siren(self) -> str:
+        """BT-47, the buyer's legal registration."""
+        return _text(_kid(self.buyer, "SpecifiedLegalOrganization"), "ID")
+
+    def buyer_vat(self) -> str:
+        """BT-48."""
+        return _registered_vat(self.buyer)
+
+    def preceding_number(self) -> str:
+        """BT-25: the invoice a credit note corrects."""
+        return _text(_kid(self.settlement, "InvoiceReferencedDocument"), "IssuerAssignedID")
+
+    def delivered(self) -> date | None:
+        """BT-72, the actual delivery date."""
+        return _stamped_date(
+            _kid(self.delivery, "ActualDeliverySupplyChainEvent", "OccurrenceDateTime", "DateTimeString")
+        )
+
+    def period_start(self) -> date | None:
+        """BG-14's start: the first day the invoice bills for."""
+        return _stamped_date(_kid(self.settlement, "BillingSpecifiedPeriod", "StartDateTime", "DateTimeString"))
 
     def lines(self):
         for item in _kids(self.transaction, "IncludedSupplyChainTradeLineItem"):
@@ -696,6 +752,8 @@ class _Ubl:
         self.root = root
         self.is_credit_root = _local(root) == "CreditNote"
         self.seller = _kid(root, "AccountingSupplierParty", "Party")
+        # Read for the sales side only (EInvoiceFacts.buyer_*).
+        self.buyer = _kid(root, "AccountingCustomerParty", "Party")
         self.monetary = _kid(root, "LegalMonetaryTotal")
         # The document's TaxTotal is the one whose TaxSubtotals are the
         # breakdown; a line's TaxTotal is a child of the line and is never
@@ -733,11 +791,25 @@ class _Ubl:
         return _text(self.seller, "PartyLegalEntity", "CompanyID")
 
     def seller_vat(self) -> str:
-        for scheme in _kids(self.seller, "PartyTaxScheme"):
-            value = _text(scheme, "CompanyID")
-            if value:
-                return value
-        return ""
+        return _party_tax_id(self.seller)
+
+    def buyer_name(self) -> str:
+        return _text(self.buyer, "PartyLegalEntity", "RegistrationName") or _text(self.buyer, "PartyName", "Name")
+
+    def buyer_siren(self) -> str:
+        return _text(self.buyer, "PartyLegalEntity", "CompanyID")
+
+    def buyer_vat(self) -> str:
+        return _party_tax_id(self.buyer)
+
+    def preceding_number(self) -> str:
+        return _text(self.root, "BillingReference", "InvoiceDocumentReference", "ID")
+
+    def delivered(self) -> date | None:
+        return _iso_date(_text(self.root, "Delivery", "ActualDeliveryDate"))
+
+    def period_start(self) -> date | None:
+        return _iso_date(_text(self.root, "InvoicePeriod", "StartDate"))
 
     def lines(self):
         for item in _kids(self.root, "InvoiceLine") + _kids(self.root, "CreditNoteLine"):
@@ -789,6 +861,64 @@ class _Ubl:
             grand=grand,
             payable=_amount(self.monetary, "PayableAmount"),
         )
+
+
+def _registered_vat(party) -> str:
+    """A CII party's VAT number (BT-31, BT-48): among its tax registrations,
+    the one with schemeID="VA"."""
+    for registration in _kids(party, "SpecifiedTaxRegistration"):
+        for identifier in _kids(registration, "ID"):
+            if identifier.get("schemeID", "").upper() == "VA":
+                return (identifier.text or "").strip()
+    return ""
+
+
+def _party_tax_id(party) -> str:
+    """A UBL party's VAT number: the first PartyTaxScheme stating one."""
+    for scheme in _kids(party, "PartyTaxScheme"):
+        value = _text(scheme, "CompanyID")
+        if value:
+            return value
+    return ""
+
+
+def _stamped_date(stamp) -> date | None:
+    """A CII `DateTimeString` element as a date - None when it is absent or
+    unreadable, never a refusal."""
+    if stamp is None:
+        return None
+    return _coded_date((stamp.text or "").strip(), stamp.get("format", ""))
+
+
+def party_siren(legal_id: str, vat: str) -> str:
+    """The nine digits a party's company number names, or "".
+
+    Read by `invoices/identifiers.py` - the one reader of company numbers
+    (Luhn, a SIRET's first nine, a VAT number's key) - off the party's legal
+    registration (BT-30 / BT-47) and its VAT number (BT-31 / BT-48). Two
+    different companies named there name neither: a party stated as two
+    companies is evidence of none.
+    """
+    found = {
+        key.removeprefix("siren:")
+        for key in document_identifiers(f"SIREN {legal_id or ''}\n{vat or ''}")
+        if key.startswith("siren:")
+    }
+    return found.pop() if len(found) == 1 else ""
+
+
+def _identifier(value: str) -> str:
+    """A party's identifier as stated, cut to MAX_IDENTIFIER."""
+    return (value or "").strip()[:MAX_IDENTIFIER]
+
+
+def _signed(value: Decimal | None, sign: Decimal) -> Decimal | None:
+    """`value` with the document's sign, by `copy_negate` - exact, and
+    asking no context: a stated figure no arithmetic survives (1E+999999999)
+    is copied, never a new refusal (see `_assemble`)."""
+    if value is None:
+        return None
+    return value.copy_negate() if sign < 0 else value
 
 
 def _in_currency(elements, currency: str) -> Decimal | None:
@@ -929,6 +1059,21 @@ def _assemble(document, syntax: str, supplier_code: str) -> ParsedInvoice:
         currency=currency or ONLY_CURRENCY,
         adjustment_reasons=[_short(item.reason) for item in adjustments if item.reason],
         adjustment_vat_rate=_adjustment_rate(adjustments, adjustment),
+        # The sales side's (recipes/sale_einvoice.py): read here and written
+        # nowhere else - never into source_text, and never by arithmetic that
+        # could refuse what Achats reads (`_signed`).
+        seller_siren=_identifier(document.seller_siren()),
+        seller_vat=_identifier(document.seller_vat()),
+        buyer_name=_short(document.buyer_name()),
+        buyer_siren=_identifier(document.buyer_siren()),
+        buyer_vat=_identifier(document.buyer_vat()),
+        taxable_total=_signed(totals.taxable, sign),
+        prepaid=_signed(totals.prepaid, sign),
+        rounding=_signed(totals.rounding, sign),
+        payable=_signed(totals.payable, sign),
+        preceding_number=document.preceding_number()[:MAX_REFERENCE],
+        delivered=document.delivered(),
+        period_start=document.period_start(),
     )
 
     breakdown = [

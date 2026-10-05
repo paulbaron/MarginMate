@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from .gap_planner import Consumption, Offer, Plan, first_sales, plan_sales
@@ -389,8 +389,10 @@ def duration_words(months: int) -> str:
 
 def _last_sale_days(end: date) -> dict[int, date]:
     """{recipe_id: the last day it sold, up to `end`} - on the till or on a
-    sale document, as `sales_between` counts them; a refund is no sale."""
-    from recipes.models import RecipeSale, SaleDocumentLine
+    sale document that counts, as `sales_between` counts them; a refund is no
+    sale, nor is a line nothing was poured for (its consumed quantity, else
+    the invoiced one, at 0 or below)."""
+    from recipes.models import RecipeSale, SaleDocument, SaleDocumentLine
 
     days = dict(
         RecipeSale.objects.filter(quantity__gt=0, sold_on__lte=end)
@@ -399,7 +401,12 @@ def _last_sale_days(end: date) -> dict[int, date]:
         .order_by()
     )
     for recipe_id, day in (
-        SaleDocumentLine.objects.filter(recipe__isnull=False, quantity__gt=0, document__sold_on__lte=end)
+        SaleDocumentLine.objects.filter(
+            recipe__isnull=False, document__counting=SaleDocument.Counting.COUNTED, document__sold_on__lte=end
+        )
+        # `SaleDocumentLine.consumption` above 0, as a filter: an annotation
+        # before the GROUP BY would group by it.
+        .filter(Q(consumed_quantity__gt=0) | Q(consumed_quantity__isnull=True, quantity__gt=0))
         .values_list("recipe_id")
         .annotate(day=Max("document__sold_on"))
         .order_by()
@@ -787,10 +794,11 @@ def entry_rows(entry) -> list[EntryLine]:
 
 
 def servings_from(day: date, end: date) -> Decimal:
-    """Every serving the till (and the sale documents) sold from `day` to
-    `end`, all recipes together - what moves when the day an entry was made,
-    or a later one, is imported again or for the first time."""
-    from recipes.models import RecipeSale, SaleDocumentLine
+    """Every serving the till (and the sale documents that count, by what
+    they poured) sold from `day` to `end`, all recipes together - what moves
+    when the day an entry was made, or a later one, is imported again or for
+    the first time."""
+    from recipes.models import RecipeSale, SaleDocument, SaleDocumentLine, line_consumption
 
     total = sum(
         (
@@ -802,9 +810,18 @@ def servings_from(day: date, end: date) -> Decimal:
         start=ZERO,
     )
     lines = SaleDocumentLine.objects.filter(
-        recipe__isnull=False, document__sold_on__gte=day, document__sold_on__lte=end
+        recipe__isnull=False,
+        document__counting=SaleDocument.Counting.COUNTED,
+        document__sold_on__gte=day,
+        document__sold_on__lte=end,
+    ).order_by()
+    return total + sum(
+        (
+            line_consumption(consumed, quantity)
+            for consumed, quantity in lines.values_list("consumed_quantity", "quantity")
+        ),
+        start=ZERO,
     )
-    return total + sum((quantity for quantity in lines.values_list("quantity", flat=True)), start=ZERO)
 
 
 def sales_watched_from(today: date) -> date:

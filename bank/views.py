@@ -25,7 +25,7 @@ import math
 import re
 import tempfile
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
@@ -34,7 +34,7 @@ from django.contrib import messages
 from django.contrib.messages import get_messages
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, prefetch_related_objects
+from django.db.models import Exists, OuterRef, Prefetch, Q, prefetch_related_objects
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import date as date_filter
 from django.urls import reverse
@@ -64,9 +64,22 @@ from inventory.templatetags.assets import money
 from invoices.models import Invoice
 from invoices.workspace import documents_matching
 from recipes.integration import TILL_TO_CONFIGURE, till_allowed
+from recipes.models import SaleDocument, SaleDocumentPayment
+from recipes.sale_payments import read_links
 from returnables.patterns import PatternError
 
-from . import income, invoice_files, matching, recognition, reconcile, spending, statements, treasury
+from . import (
+    income,
+    invoice_files,
+    matching,
+    recognition,
+    reconcile,
+    sale_matching,
+    sale_reconcile,
+    spending,
+    statements,
+    treasury,
+)
 from .forms import (
     FORMAT_NAME_TAKEN,
     NAME_TAKEN,
@@ -139,6 +152,42 @@ MAX_EXAMPLES = 15
 #: one line of a table is not a list anybody reads - and what it leaves out
 #: is still counted and said.
 MAX_FOUND = 50
+#: Banque's « Entrées »: the credit whose pick-list of sales invoices is
+#: drawn although a till rule, its payer or a person says what it is - a
+#: payout a day is a form a day otherwise (the payouts' `changer` rule).
+ATTACH_PARAM = "rattacher"
+#: The id of a credit's row on the « Entrées » tab, where « Rattacher une
+#: facture de vente » lands.
+ENTRY_ROW = "entree-{pk}"
+
+#: The debit's own actions - an invoice is a PURCHASE: each refuses a credit
+#: (bank critique 9). No form of theirs is drawn on one, so it is a stale or
+#: crafted POST - and `reopen` handed back a credit a person had unlinked
+#: from a sale, `no_invoice` froze it.
+DEBIT_ACTIONS = ("link", "unlink_invoice", "unlink", "no_invoice", "reopen")
+CREDIT_PAYS_NO_INVOICE = "Une entrée d'argent ne règle pas une facture."
+#: A credit paying a sales invoice (bank/sale_reconcile.py): every link and
+#: unlink goes through here - the « Banque » gate - whichever page it was
+#: drawn on.
+SALE_ACTIONS = ("sale_link", "sale_unlink_document", "sale_unlink", "sale_reopen")
+#: Where a sales action's message is said when its form names the place
+#: (`lieu`): a sale document's « Règlement » (recipes/_sale_payments.html).
+SALE_MESSAGE_PLACES = frozenset({"reglements"})
+SALE_NO_DOCUMENT = "Choisissez la facture de vente que cette entrée a réglée."
+SALE_NO_DOCUMENT_OFF = "Choisissez la facture de vente à détacher de cette entrée."
+SALE_LINKED = "Entrée rattachée à la facture de vente {labels}."
+SALE_LINKED_SEVERAL = "Entrée rattachée aux factures de vente {labels}."
+SALE_NOT_PAID_BY_IT = "Cette entrée ne règle pas la facture de vente {label}."
+SALE_DOCUMENT_OFF = "Facture de vente {label} détachée de cette entrée."
+SALE_UNLINKED = "Rattachement retiré : cette entrée ne sera plus rapprochée automatiquement d'une facture de vente."
+SALE_LINKED_MEANWHILE = (
+    "Cette entrée a été rattachée entre-temps à une facture de vente : rien n'a changé. Déliez-la d'abord si besoin."
+)
+SALE_REOPENED = "Entrée rendue au rapprochement automatique."
+SALE_REOPENED_LINKED = "Entrée rendue au rapprochement automatique, et rattachée à sa facture de vente."
+#: « En caisse » set back to « Automatique » on a credit paying a sales
+#: invoice: it reads the invoice again.
+BACK_TO_ITS_INVOICE = "Entrée rendue à sa facture de vente : elle compte comme « Facture de vente »."
 
 
 @dataclass
@@ -246,6 +295,22 @@ class Row:
     #: Where its forms post and its search box asks (`bank_home`, `_by_pk`).
     action_url: str = ""
     search_url: str = ""
+    #: A credit and the sales invoices it pays (`sale_reconcile.fill_credit_rows`):
+    #: each with its share, what the credit gives none, the suggestion and
+    #: its options, the pick-list (drawn - `sale_pick` - or the link asking
+    #: for it, `sale_attach_url`), and the row's search.
+    sale_links: list = field(default_factory=list)
+    sale_gap: sale_reconcile.SaleGap | None = None
+    sale_suggestion: matching.Match | None = None
+    sale_options: list = field(default_factory=list)
+    sale_choices: list = field(default_factory=list)
+    more_sale_choices: int = 0
+    sale_pick: bool = False
+    sale_attach_url: str = ""
+    sale_search_url: str = ""
+    sale_search: str = ""
+    sale_found: list = field(default_factory=list)
+    more_sale_found: int = 0
 
     @property
     def is_open(self) -> bool:
@@ -360,27 +425,41 @@ def bank_home(request):
     _search(shown, request)
     # Each row's addresses, reversed once for the page rather than by a
     # `{% url %}` per form - several a row, a fifth of a long tab.
-    action, search, detail = (
+    action, search, detail, sale_search = (
         _by_pk("bank:bank_line_action"),
         _by_pk("bank:invoice_search"),
         _by_pk("invoices:invoice_detail"),
+        _by_pk("bank:sale_document_search"),
     )
     for row in shown:
         row.action_url, row.search_url = action(row.line.pk), search(row.line.pk)
+        if row.status == INCOME:
+            row.sale_search_url = sale_search(row.line.pk)
         for link in row.links:
             link.url = detail(link.invoice.pk)
     # What each credit is, rather than « Entrée d'argent » for all of them:
-    # the same reading « Entrées d'argent » makes - the payers retained and
-    # the till rules included, each read once - so the tab and that page
-    # cannot call one line two things. No query per row, and none at all
-    # where no credit is shown.
+    # the same reading « Entrées d'argent » makes - the payers retained, the
+    # till rules and the sales invoices it pays included, each read once -
+    # so the tab and that page cannot call one line two things. No query per
+    # row, and none at all where no credit is shown.
     rule_problems = []
-    if any(row.status == INCOME for row in shown):
+    sale_tier_rules = ()
+    credits = [row for row in shown if row.status == INCOME]
+    if credits:
         payers = income.known_payers()
         till_rules = recognition.load()
-        for row in shown:
-            if row.status == INCOME:
-                row.entry = income.entry_for(row.line, payers, till_rules)
+        links = read_links()
+        for row in credits:
+            row.entry = income.entry_for(row.line, payers, till_rules, income.sale_refs(links, row.line.pk))
+        # The sales invoices each pays, what it leaves to none, what could
+        # pay it: the documents near these credits and the bar's own names -
+        # with the links, six queries whatever the statement holds.
+        sale_reconcile.fill_credit_rows(
+            credits, links, payers, till_rules, asked=request.GET.get(ATTACH_PARAM, ""), choices=MAX_CHOICES
+        )
+        _share_sales(credits)
+        _sale_addresses(credits, _page_url(view, month, window))
+        sale_tier_rules = sale_matching.TIER_RULES
         # Said as « Entrées d'argent » says them, and read after the last
         # credit: a rule is found too slow only once it has read lines.
         rule_problems = till_rules.problems
@@ -408,6 +487,9 @@ def bank_home(request):
             "stats": stats,
             # A till rule that recognised nothing while the credits were read.
             "rule_problems": rule_problems,
+            # How a credit is matched to a sales invoice, once above the
+            # table - only where a credit is shown.
+            "sale_tier_rules": sale_tier_rules,
             # An ignore rule that hid nothing - its pattern refused, or too
             # slow on a label - read after every line was classified.
             "ignore_problems": rules.problems,
@@ -589,6 +671,7 @@ def income_home(request):
     report = income.income_for(window)
     for month in report.months:
         month.label = _month_label(month.first_day)
+    _with_sale_pages(report)
     here = _income_page_url(asked, showing_all)
     # « Changer » on a payout: its « En caisse » menu is drawn on that row
     # only. A payout a day is a form a day otherwise, on a list nobody
@@ -644,6 +727,24 @@ def income_home(request):
     )
 
 
+def _with_sale_pages(report: income.IncomeReport) -> None:
+    """Each credit of the report's three lists given the page of every sales
+    invoice it pays (`SaleRef.url`), one reverse for the page - drawn as a
+    link for « Recettes & ventes » only: a recognition nobody can see is one
+    nobody can correct, whatever the credit reads as."""
+    page = _by_pk("recipes:sale_document_update")
+
+    def with_pages(entry: income.Entry) -> income.Entry:
+        if not entry.sales:
+            return entry
+        return replace(entry, sales=tuple(ref._replace(url=page(ref.pk)) for ref in entry.sales))
+
+    for row in report.payouts:
+        row.entry = with_pages(row.entry)
+    report.others = [with_pages(entry) for entry in report.others]
+    report.other_means = [with_pages(entry) for entry in report.other_means]
+
+
 def income_source(request, pk):
     """« En caisse » on one credit of « Entrées d'argent »: what it is in the
     till, for this line or - « retenir pour ce payeur » - for every credit of
@@ -687,7 +788,8 @@ def _source_said(change: income.SourceChange) -> str:
     """The message after an « En caisse » choice: what the line counts as
     now, and what happened to its payer."""
     entry = change.entry
-    counted = f"« {IncomeSource(entry.source).label} »"
+    # A sale is no IncomeSource (no menu offers it): its own word.
+    counted = f"« {income.ONE[income.SALE] if entry.source == income.SALE else IncomeSource(entry.source).label} »"
     if change.remembered:
         said = f"« {change.payer} » retenu : ses entrées non reconnues comptent comme {counted}"
         said += f", cette entrée et {change.followers} autre(s)." if change.followers else ", à commencer par celle-ci."
@@ -700,6 +802,8 @@ def _source_said(change: income.SourceChange) -> str:
         said = f"Entrée comptée comme {counted}, elle seule."
     elif entry.how == income.BY_PAYER:
         said = f"Entrée rendue à son payeur retenu « {entry.payer} » : elle compte comme {counted}."
+    elif entry.how == income.BY_SALE:
+        said = BACK_TO_ITS_INVOICE
     else:
         said = f"Entrée rendue à la reconnaissance automatique : elle compte comme {counted}."
     if change.kept:
@@ -708,11 +812,16 @@ def _source_said(change: income.SourceChange) -> str:
 
 
 def bank_reconcile(request):
+    """« Relancer le rapprochement »: the debits' pass, then the credits'
+    (bank/sale_reconcile.py) - each said when it linked something."""
     if request.method == "POST":
         linked = reconcile.reconcile()
+        sold = len(sale_reconcile.reconcile_sales())
         if linked:
             messages.success(request, f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.")
-        else:
+        if sold:
+            messages.success(request, f"{sold} entrée(s) rattachée(s) automatiquement à une facture de vente.")
+        if not linked and not sold:
             messages.info(request, "Aucun nouveau rapprochement certain : les suggestions restent à confirmer.")
     return redirect(_back(request))
 
@@ -770,15 +879,18 @@ def bank_line_action(request, pk):
         return redirect(back)
 
     action = request.POST.get("action")
+    if action in SALE_ACTIONS:
+        return _sale_action(request, line, action, back)
+    if action in DEBIT_ACTIONS and line.amount >= 0:
+        # Only a debit settles an invoice. No form of these is drawn on an
+        # income row, so this is a stale or a crafted POST - but linked, the
+        # invoice would leave `unpaid_invoices` for ever and read « Payée »
+        # on its own page while showing on no bank tab and in no figure of
+        # « Dépenses », which reads debits only; and `reopen` / `no_invoice`
+        # would undo a person's decision about a credit's sales invoice.
+        messages.error(request, CREDIT_PAYS_NO_INVOICE)
+        return redirect(back)
     if action == "link":
-        if line.amount >= 0:
-            # Only a debit settles an invoice. No form is drawn on an income
-            # row, so this is a stale or a crafted POST - but linked, the
-            # invoice would leave `unpaid_invoices` for ever and read
-            # « Payée » on its own page while showing on no bank tab and in
-            # no figure of « Dépenses », which reads debits only.
-            messages.error(request, "Une entrée d'argent ne règle pas une facture.")
-            return redirect(back)
         ids = [value for value in request.POST.getlist("invoice") if is_id(value)]
         invoices = list(Invoice.objects.filter(pk__in=ids).select_related("supplier"))
         if not invoices:
@@ -846,6 +958,55 @@ def bank_line_action(request, pk):
             messages.success(request, "Ligne rendue au rapprochement automatique.")
     else:
         messages.error(request, "Action inconnue.")
+    return redirect(back)
+
+
+def _sale_action(request, line: BankTransaction, action: str, back: str):
+    """A credit paying a sales invoice (bank/sale_reconcile.py): link,
+    take one invoice off, take off what the row showed, hand back to the
+    automatic pass. Each id read with `is_id` before it reaches a query; a
+    debit refused before anything is written. Said where the form asks
+    (`lieu`, one of SALE_MESSAGE_PLACES: a document's « Règlement »)."""
+    place = request.POST.get("lieu", "")
+    tags = place if place in SALE_MESSAGE_PLACES else ""
+    if line.amount <= 0:
+        messages.error(request, sale_reconcile.DEBIT_PAYS_NO_SALE, extra_tags=tags)
+        return redirect(back)
+    if action == "sale_link":
+        ids = [value for value in request.POST.getlist("document") if is_id(value)]
+        documents = list(SaleDocument.objects.filter(pk__in=ids).order_by("sold_on", "pk"))
+        if not documents:
+            messages.error(request, SALE_NO_DOCUMENT, extra_tags=tags)
+            return redirect(back)
+        # Nothing refused for its amount, nor for an invoice another credit
+        # pays: the person's to record - the allocation and the gap say
+        # what it adds up to.
+        own_choice = sale_reconcile.link(line, documents)
+        labels = ", ".join(document.label for document in documents)
+        said = (SALE_LINKED if len(documents) == 1 else SALE_LINKED_SEVERAL).format(labels=labels)
+        messages.success(request, f"{said} {own_choice}".strip(), extra_tags=tags)
+    elif action == "sale_unlink_document":
+        value = request.POST.get("document", "")
+        document = SaleDocument.objects.filter(pk=value).first() if is_id(value) else None
+        if document is None:
+            messages.error(request, SALE_NO_DOCUMENT_OFF, extra_tags=tags)
+        elif not sale_reconcile.unlink_document(line, document):
+            # A page left open, a second click: already undone.
+            messages.error(request, SALE_NOT_PAID_BY_IT.format(label=document.label), extra_tags=tags)
+        else:
+            messages.success(request, SALE_DOCUMENT_OFF.format(label=document.label), extra_tags=tags)
+    elif action == "sale_unlink":
+        shown = {int(value) for value in request.POST.getlist("shown") if is_id(value)}
+        if sale_reconcile.unlink_as_shown(line, shown):
+            messages.success(request, SALE_UNLINKED, extra_tags=tags)
+        else:
+            messages.error(request, UNLINK_CHANGED_MEANWHILE, extra_tags=tags)
+    elif not sale_reconcile.reopen(line):
+        messages.error(request, SALE_LINKED_MEANWHILE, extra_tags=tags)
+    else:
+        sale_reconcile.reconcile_sales()
+        linked = SaleDocumentPayment.objects.filter(transaction=line).exists()
+        messages.success(request, SALE_REOPENED_LINKED if linked else SALE_REOPENED, extra_tags=tags)
     return redirect(back)
 
 
@@ -940,6 +1101,53 @@ def _share_invoices(rows) -> None:
             continue
         for invoice in chosen.invoices:
             taken[invoice.pk] = row
+
+
+def _pass_order(row) -> tuple:
+    """The order `sale_reconcile.reconcile_sales` takes credits in."""
+    return row.line.operation_date, row.line.pk
+
+
+def _share_sales(rows) -> None:
+    """One sales invoice proposed on several credits (a deposit and its
+    balance of one amount, two transfers of one customer) is said on each
+    option that carries it - « proposée aussi pour l'entrée du … », the
+    other entries in the pass's order, so the first named is the one
+    « Rapprocher automatiquement » serves first (bank critique 15,
+    `_share_invoices`' rule): one invoice, one entry."""
+    wanting = defaultdict(list)
+    for row in sorted(rows, key=_pass_order):
+        seen = set()
+        for option in row.sale_options:
+            for candidate in option.candidates:
+                if candidate.pk not in seen:
+                    seen.add(candidate.pk)
+                    wanting[candidate.pk].append(row)
+    for row in rows:
+        for option in row.sale_options:
+            others = {
+                other.line.pk: other
+                for candidate in option.candidates
+                for other in wanting[candidate.pk]
+                if other is not row
+            }
+            option.also_for = [other.line for other in sorted(others.values(), key=_pass_order)]
+
+
+def _sale_addresses(rows, page_url: str) -> None:
+    """The addresses a credit's sales rows link to, one reverse for the
+    page: each invoice's page (drawn for « Recettes & ventes » only), and,
+    where its pick-list is not drawn, the row asking for it (`ATTACH_PARAM`,
+    the period kept)."""
+    page = _by_pk("recipes:sale_document_update")
+    for row in rows:
+        for link in row.sale_links:
+            link.url = page(link.fact.document_pk)
+        for found in row.sale_found:
+            found.url = page(found.document.pk)
+        if not row.sale_pick:
+            pk = row.line.pk
+            row.sale_attach_url = f"{page_url}&{urlencode({ATTACH_PARAM: pk})}#{ENTRY_ROW.format(pk=pk)}"
 
 
 #: What each group's heading on « Propositions » says beside its count: the
@@ -1608,13 +1816,24 @@ def _detached(pending: recognition.Changes) -> tuple[int, int]:
     moving = [one for one in pending.changes if one.payee_changes]
     if not moving:
         return 0, 0
-    retained = set(IncomePayer.objects.values_list("key", flat=True))
+    retained = dict(IncomePayer.objects.values_list("key", "source"))
     learnt = set(CounterpartyAlias.objects.values_list("name", flat=True))
     # `stored_changes` read the lines without their « En caisse » choice:
-    # the credits holding one, in one query rather than one a line.
-    chosen = dict(
-        BankTransaction.objects.filter(amount__gt=0, income_source__in=income.CHOSEN).values_list("pk", "income_source")
+    # the credits holding one, or paying a sales invoice that counts off the
+    # till (a payer retained « Pas une vente » never reached those), in one
+    # query rather than one a line.
+    sold = Exists(
+        SaleDocumentPayment.objects.filter(transaction=OuterRef("pk")).exclude(
+            document__counting=SaleDocument.Counting.TILL
+        )
     )
+    marked = {
+        pk: (source, paying)
+        for pk, source, paying in BankTransaction.objects.filter(amount__gt=0)
+        .annotate(sold=sold)
+        .filter(Q(income_source__in=income.CHOSEN) | Q(sold=True))
+        .values_list("pk", "income_source", "sold")
+    }
     payers = aliases = 0
     for one in moving:
         line = one.line
@@ -1623,8 +1842,8 @@ def _detached(pending: recognition.Changes) -> tuple[int, int]:
         if line.amount > 0:
             key = income.payer_key(line)
             if key in retained and income.payer_key(after) != key:
-                line.income_source = chosen.get(line.pk, income.AUTOMATIC)
-                payers += income.follows_its_payer(line, pending.rules)
+                line.income_source, paying = marked.get(line.pk, (income.AUTOMATIC, False))
+                payers += income.follows_its_payer(line, pending.rules, sold=paying, holds=retained[key])
         elif line.amount < 0:
             key = matching.alias_key(reconcile.payee_of(line))
             if key in learnt and matching.alias_key(reconcile.payee_of(after)) != key:
@@ -2017,10 +2236,12 @@ def _import_statements(request):
         known += summary.known
     if created or known:
         linked = reconcile.reconcile()
+        sold = len(sale_reconcile.reconcile_sales(rules))
+        sales = f", et {sold} entrée(s) à une facture de vente" if sold else ""
         messages.success(
             request,
             f"{created} opération(s) importée(s), {known} déjà connue(s) ; "
-            f"{linked} paiement(s) rattaché(s) automatiquement à leur facture.",
+            f"{linked} paiement(s) rattaché(s) automatiquement à leur facture{sales}.",
         )
     if created and not rules.kinds:
         messages.warning(request, NO_KIND_RULE)
@@ -2710,8 +2931,14 @@ def _search(rows, request) -> None:
     query = request.GET.get("recherche", "").strip()
     if not query or not is_id(line_id):
         return
-    row = next((row for row in rows if row.line.pk == int(line_id) and row.status != INCOME), None)
+    row = next((row for row in rows if row.line.pk == int(line_id)), None)
     if row is None:
+        return
+    if row.status == INCOME:
+        # A credit pays no invoice: its search finds the sales invoices
+        # (`sale_document_search`, the same rule).
+        row.sale_search = query
+        row.sale_found, row.more_sale_found = sale_reconcile.documents_found_for(row.line, query)
         return
     row.search = query
     row.found, row.more_found = _found_for(row.line, query)
@@ -2744,6 +2971,37 @@ def _found_for(line: BankTransaction, query: str) -> tuple[list[Found], int]:
             )
         )
     return results, more
+
+
+def sale_document_search(request, pk):
+    """The sales invoices a search finds for one credit, and nothing else -
+    `invoice_search`'s fragment, the other way round: swapped into the row,
+    the page does not move; the plain GET underneath (`_search`) answers a
+    browser with no JavaScript, through the same
+    `sale_reconcile.documents_found_for`. A debit, or no words, finds
+    nothing: no box is drawn on one."""
+    line = get_object_or_404(BankTransaction, pk=pk)
+    query = request.GET.get("recherche", "").strip()
+    if not query or line.amount <= 0:
+        query, found, more = "", [], 0
+    else:
+        found, more = sale_reconcile.documents_found_for(line, query)
+        page = _by_pk("recipes:sale_document_update")
+        for item in found:
+            item.url = page(item.document.pk)
+    return render(
+        request,
+        "bank/_found_sale_documents.html",
+        {
+            "line": line,
+            "search": query,
+            "found": found,
+            "more_found": more,
+            # Where « Rattacher » comes back to, checked by `_back` exactly
+            # as a posted one is.
+            "page_url": _back(request),
+        },
+    )
 
 
 def invoice_search(request, pk):

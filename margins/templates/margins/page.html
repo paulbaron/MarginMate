@@ -263,21 +263,23 @@ that is where it says what changed (views._messages_by_place).
 
     <h2>Marge produits</h2>
     <p class="lead">
-        L'encaissé face à <strong>ce que les recettes vendues ont consommé</strong>, plus les achats des
-        articles cochés, en HT.
+        L'encaissé face à <strong>ce que les recettes et les articles vendus ont consommé</strong>, plus les
+        achats des articles cochés, en HT.
     </p>
 
     <div class="stat-row">
         <div class="stat">
-            <div class="stat-label">Coût des recettes vendues (HT)</div>
+            <div class="stat-label">Coût de ce qui a été vendu (HT)</div>
             <div class="stat-value">{% if report.is_costed %}{% include "margins/_money_range.html" with low=report.cogs_low high=report.cogs_high %}{% else %}—{% endif %}</div>
             {% comment %}
             The till's units AND the servings sold off the till: the cost
             counts both, and the note named only one - 100 €
-            « pour 10 unités » when 40 more servings were in it.
+            « pour 10 unités » when 40 more servings were in it. The articles
+            sold off the till are counted apart, in articles: their
+            quantities are litres and bottles, not servings.
             {% endcomment %}
             <div class="stat-note">
-                {{ report.costed_units }} unité{{ report.costed_units|pluralize }} de caisse chiffrée{{ report.costed_units|pluralize }}{% if report.document_costed_units %} + {{ report.document_costed_units|floatformat:"-2" }} hors caisse{% endif %}{% if report.cogs_low != report.cogs_high %} — de la variation la moins chère à la plus chère{% endif %}
+                {{ report.costed_units }} unité{{ report.costed_units|pluralize }} de caisse chiffrée{{ report.costed_units|pluralize }}{% if report.document_costed_units %} + {{ report.document_costed_units|floatformat:"-2" }} hors caisse{% endif %}{% if report.document_costed_articles %} + {{ report.document_costed_articles }} article{{ report.document_costed_articles|pluralize }} vendu{{ report.document_costed_articles|pluralize }} hors caisse{% endif %}{% if report.cogs_low != report.cogs_high %} — de la variation la moins chère à la plus chère{% endif %}
             </div>
         </div>
         {% if report.extra_products %}
@@ -327,12 +329,12 @@ that is where it says what changed (views._messages_by_place).
         </p>
     {% elif not report.is_costed %}
         <p class="message message-warning">
-            Pas de marge produits : aucun produit vendu sur cette période n'a de recette chiffrée.
+            Pas de marge produits : aucun produit vendu sur cette période n'a de coût connu.
         </p>
     {% elif revenue_coverage_percent is not None and revenue_coverage_percent < 100 %}
         <p class="message message-warning">
             Seulement <strong>{{ revenue_coverage_percent|floatformat:0 }} %</strong> du chiffre d'affaires a
-            une recette chiffrée : la marge produits est <strong>surestimée</strong>.
+            un coût connu : la marge produits est <strong>surestimée</strong>.
         </p>
     {% endif %}
 
@@ -519,15 +521,19 @@ that is where it says what changed (views._messages_by_place).
         <p class="table-empty">Aucune vente de caisse sur cette période.</p>
     {% endif %}
 
-    {% if report.revenue_without_rate_ttc or report.undated_invoices or report.hand_typed_units %}
+    {% if report.revenue_without_rate_ttc or report.undated_invoices or report.hand_typed_units or report.document_free_ttc or report.documents_set_aside or report.deposits_counted_twice %}
         <details class="explainer">
             {% comment %}
             The gaps are named in the summary itself: on a page whose
             whole argument is « a gap is said, not absorbed », a
             closed fold that does not say what it hides is never read.
+            The sales invoices' own: money no recipe or article carries
+            (its part with no rate is in the first figure already, said
+            once, as « dont »), the invoices that count in nothing, and a
+            deposit counted twice.
             {% endcomment %}
             <summary>
-                Ce que ces chiffres ne disent pas{% if report.revenue_without_rate_ttc %} — {{ report.revenue_without_rate_ttc|money }} € sans taux de TVA{% endif %}{% if report.undated_invoices %} — {{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date{% endif %}{% if report.hand_typed_units %} — {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} saisie{{ report.hand_typed_units|pluralize }} à la main{% endif %}
+                Ce que ces chiffres ne disent pas{% if report.revenue_without_rate_ttc %} — {{ report.revenue_without_rate_ttc|money }} € sans taux de TVA{% endif %}{% if report.undated_invoices %} — {{ report.undated_invoices }} facture{{ report.undated_invoices|pluralize }} sans date{% endif %}{% if report.hand_typed_units %} — {{ report.hand_typed_units }} unité{{ report.hand_typed_units|pluralize }} saisie{{ report.hand_typed_units|pluralize }} à la main{% endif %}{% if report.document_free_ttc %} — {{ report.document_free_ttc|money }} € de ventes hors caisse sans recette ni article{% endif %}{% if report.documents_set_aside %} — {{ report.documents_set_aside }} facture{{ report.documents_set_aside|pluralize }} de vente hors des marges{% endif %}{% if report.deposits_counted_twice %} — {{ report.deposits_counted_twice|length }} acompte{{ report.deposits_counted_twice|length|pluralize }} compté{{ report.deposits_counted_twice|length|pluralize }} deux fois{% endif %}
             </summary>
             {% if report.revenue_without_rate_ttc %}
                 <p>
@@ -553,6 +559,26 @@ that is where it says what changed (views._messages_by_place).
                     d'affaires ni dans le coût.
                 </p>
             {% endif %}
+            {% if report.document_free_ttc %}
+                <p>
+                    {{ report.document_free_ttc|money }} € TTC de factures de vente ne correspondent à aucune recette ni
+                    à aucun article{% if report.document_free_without_rate_ttc %} (dont {{ report.document_free_without_rate_ttc|money }} € sans taux de TVA, comptés aussi ci-dessus){% endif %} :
+                    dans l'encaissé, sans coût — la « Part chiffrée » en tient compte.
+                </p>
+            {% endif %}
+            {% if report.documents_set_aside %}
+                <p>
+                    {{ report.documents_set_aside }} facture{{ report.documents_set_aside|pluralize }} de vente
+                    ne compte{{ report.documents_set_aside|pluralize:"nt" }} pas ici : déjà comptée{{ report.documents_set_aside|pluralize }}
+                    par la caisse, ou acompte{{ report.documents_set_aside|pluralize }} repris par la facture finale.
+                </p>
+            {% endif %}
+            {% for deposit, final in report.deposits_counted_twice %}
+                <p>
+                    L'acompte {{ deposit }} est compté ici, et la facture finale {{ final }} le déduit de son
+                    total : la même vente compte deux fois. Marquez l'acompte « Acompte ».
+                </p>
+            {% endfor %}
         </details>
     {% endif %}
 {% endblock %}

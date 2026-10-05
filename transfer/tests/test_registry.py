@@ -2,6 +2,7 @@
 from it. Locked: a change to the table has to be deliberate, since both the
 page's ticks and the server's refusals follow it."""
 
+import re
 from pathlib import Path
 from unittest import mock
 
@@ -24,7 +25,7 @@ TABLE = {
     "types_consignes": ("Types et formats de consignes", Group.CONFIG, 58, ("fournisseurs",), ()),
     "factures": ("Factures et tickets", Group.DATA, 60, ("fournisseurs",), ("associations",)),
     "banque": ("Banque", Group.DATA, 70, (), ("factures", "fournisseurs", "regles_banque")),
-    "ventes": ("Ventes", Group.DATA, 80, ("recettes",), ("liens_ventes",)),
+    "ventes": ("Ventes", Group.DATA, 80, ("recettes",), ("liens_ventes", "banque")),
     "inventaires": ("Inventaires", Group.DATA, 90, ("factures", "associations"), ()),
     "consignes": ("Consignes", Group.DATA, 100, ("fournisseurs", "types_consignes"), ("factures",)),
 }
@@ -104,11 +105,13 @@ class TableTests(SimpleTestCase):
     def test_what_moved_is_described_where_it_is_now(self):
         """The rules, formats and types left « Banque » and « Consignes »:
         their descriptions and their « à savoir » no longer promise them.
-        « Banque »'s « à savoir » is the treasury's, which stayed."""
+        « Banque »'s « à savoir » is the treasury's, which stayed, and the
+        sales invoices' links its lines take with them - « règlements », a
+        word, never a rule."""
         for word in ("règle", "format"):
             with self.subTest(word=word):
-                self.assertNotIn(word, INFO["banque"].description)
-                self.assertNotIn(word, INFO["banque"].clear_note)
+                self.assertIsNone(re.search(rf"\b{word}s?\b", INFO["banque"].description))
+                self.assertIsNone(re.search(rf"\b{word}s?\b", INFO["banque"].clear_note))
                 self.assertIn(word, INFO["regles_banque"].description.lower())
         for word in ("type", "format"):
             with self.subTest(word=word):
@@ -118,6 +121,25 @@ class TableTests(SimpleTestCase):
         self.assertIn("trésorerie", INFO["banque"].clear_note)
         self.assertIn("la sauvegarde", INFO["regles_banque"].clear_note)
         self.assertIn("la sauvegarde", INFO["types_consignes"].clear_note)
+
+    def test_the_sales_recommend_the_bank_and_say_what_clearing_either_takes(self):
+        """A sale document's bank links name the credits « Banque » carries:
+        recommended, never required - clearing one never clears the other.
+        What « Effacer » takes beyond its rows is said before, on both."""
+        self.assertIn("banque", INFO["ventes"].recommends)
+        self.assertNotIn("banque", INFO["ventes"].requires)
+        self.assertIn("un règlement vers une entrée absente est ignoré", INFO["ventes"].recommend_reason["banque"])
+        self.assertIn("factures de vente", INFO["ventes"].description)
+        self.assertEqual(
+            INFO["ventes"].clear_note,
+            "les fichiers des factures de vente et leurs règlements bancaires partent aussi ; la sauvegarde prise "
+            "avant l'effacement les ramène",
+        )
+        self.assertEqual(
+            INFO["banque"].clear_note,
+            "les points et les ajustements de trésorerie partent aussi, et les règlements des factures de vente "
+            "rattachés aux entrées ; la sauvegarde prise avant l'effacement les ramène",
+        )
 
     def test_the_configuration_needs_no_data(self):
         """« Configuration seule » ticks the group alone, and that selection

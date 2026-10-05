@@ -21,6 +21,7 @@ Every name, amount and label below is invented.
 
 import hashlib
 import itertools
+import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest import mock
@@ -45,8 +46,9 @@ from bank.models import (
 from common import DateRange
 from invoices.deletion import delete_invoice
 from invoices.models import Invoice, Supplier
-from tests.factories import make_invoice, make_supplier
-from transfer import archive, codec, keys, registry
+from recipes.models import SaleDocument, SaleDocumentPayment
+from tests.factories import make_invoice, make_sale_document, make_sale_line, make_sale_payment, make_supplier
+from transfer import archive, codec, keys, registry, safety
 from transfer.archive import ArchiveError, ArchiveReader
 from transfer.runner import run_clear
 from transfer.sections import bank as section
@@ -60,11 +62,12 @@ from transfer.sections.bank import (
     PAYERS,
     PAYMENTS,
     RECONCILE_NOTE,
+    SALE_LINKS_NOTE,
     TREASURY_CLEAR_NOTE,
     BankSection,
 )
 from transfer.sections.bank_rules import BankRulesSection
-from transfer.sections.base import Strategy
+from transfer.sections.base import SALE_LINKS, Strategy
 from transfer.tests.support import (
     db_fingerprint,
     export_archive,
@@ -2560,8 +2563,9 @@ class ClearTests(BankData, RulesData, TestCase):
     def test_the_formats_and_the_rules_stay(self):
         # « Règles de la banque »'s, the seeded ones included: « Effacer » of
         # « Banque » takes none of them, and says nothing of them - neither
-        # on the Effacer tab before (its clear_note is the treasury's) nor
-        # after.
+        # on the Effacer tab before (its clear_note is the treasury's and
+        # the sales invoices' links') nor after. Read as words: « règlements
+        # des factures de vente » is no rule.
         rules = BankRulesSection().snapshot()
         run = run_clear({"banque"}, preview=False)
         self.assertEqual(BankRulesSection().snapshot(), rules)
@@ -2573,10 +2577,10 @@ class ClearTests(BankData, RulesData, TestCase):
         self.assertNotIn(bank_rules.FORMAT_CLEAR_NOTE, notes)
         self.assertNotIn(bank_rules.RECOGNITION_CLEAR_NOTE, notes)
         self.assertIsNone(run.section(bank_rules.KEY))
-        for word in ("règle", "format"):
+        for word in ("règles?", "formats?"):
             with self.subTest(word=word):
-                self.assertNotIn(word, registry.INFO["banque"].clear_note)
-                self.assertNotIn(word, registry.INFO["banque"].description)
+                self.assertIsNone(re.search(rf"\b{word}\b", registry.INFO["banque"].clear_note))
+                self.assertIsNone(re.search(rf"\b{word}\b", registry.INFO["banque"].description))
 
     def test_the_treasury_goes_and_the_report_says_what_that_costs(self):
         # No statement brings a balance typed back: the Effacer tab says it
@@ -2610,3 +2614,61 @@ class ClearTests(BankData, RulesData, TestCase):
         # Neither requires the other: « Banque » only recommends its rules.
         self.assertEqual(registry.closure({"banque"}, "clear"), {"banque"})
         self.assertEqual(registry.closure({bank_rules.KEY}, "clear"), {bank_rules.KEY})
+
+
+class SaleLinksTakenTests(BankData, TestCase):
+    """A credit of the statement may pay a « facture de vente »
+    (recipes.SaleDocumentPayment, carried by « Ventes »): a line the bank
+    deletes takes those links with it (CASCADE). « Ventes »' report counts
+    them - from the counts the deletes return, never a count taken before -
+    and says how to bring them back: that is what puts « Ventes » in the
+    safety archive, whichever section's code deleted them."""
+
+    def setUp(self):
+        super().setUp()
+        self.sale = make_sale_document(sold_on=date(2026, 7, 30), reference="FV-2026-0101", customer="Exemple SARL")
+        make_sale_line(self.sale, label="Location de salle", quantity="1", unit_price_ttc="500.00")
+        make_sale_payment(self.sale, self.income)
+
+    def assert_the_sales_say_it(self, run):
+        sales = run.section("ventes")
+        self.assertEqual(sales.tallies[SALE_LINKS].deleted, 1)
+        self.assertEqual(sales.notes, [SALE_LINKS_NOTE[False]])
+        self.assertIn("réimportez ensemble « Banque » et « Ventes » de la sauvegarde", sales.notes[0])
+        self.assertIn("ventes", run.affected())
+        # The sale document is « Ventes »' own: it stays, unpaid.
+        self.assertTrue(SaleDocument.objects.filter(pk=self.sale.pk).exists())
+        self.assertFalse(SaleDocumentPayment.objects.exists())
+
+    def test_a_bank_prune_counts_the_sale_links_it_takes_into_ventes(self):
+        def without_the_credit(payload):
+            payload["transactions"] = [
+                record for record in payload["transactions"] if record["fingerprint"] != self.income.fingerprint
+            ]
+            return payload
+
+        run = import_archive(self.forged(without_the_credit), REPLACE)
+        self.assertEqual(tally(run, OPERATIONS).deleted, 1)
+        self.assert_the_sales_say_it(run)
+        self.assertIn("ventes", safety.sections_at_risk(run, strategies={"banque": REPLACE}))
+
+    def test_a_bank_clear_counts_the_sale_links_and_says_how_to_bring_them_back(self):
+        run = run_clear({"banque"}, preview=False)
+        self.assert_the_sales_say_it(run)
+        self.assertIn("ventes", safety.sections_at_risk(run, cleared={"banque"}))
+        # Said before too, on the Effacer tab.
+        self.assertIn("règlements des factures de vente", registry.INFO["banque"].clear_note)
+
+    def test_two_links_taken_are_said_in_the_plural(self):
+        other = make_sale_document(sold_on=date(2026, 7, 31), reference="FV-2026-0102")
+        make_sale_line(other, label="Vestiaire", quantity="1", unit_price_ttc="20.00")
+        make_sale_payment(other, self.income)
+        run = run_clear({"banque"}, preview=False)
+        self.assertEqual(run.section("ventes").tallies[SALE_LINKS].deleted, 2)
+        self.assertEqual(run.section("ventes").notes, [SALE_LINKS_NOTE[True].format(count=2)])
+
+    def test_with_no_sale_link_ventes_is_not_in_the_report(self):
+        SaleDocumentPayment.objects.all().delete()
+        run = run_clear({"banque"}, preview=False)
+        self.assertIsNone(run.section("ventes"))
+        self.assertEqual(run.affected(), {"banque"})

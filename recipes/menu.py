@@ -10,9 +10,11 @@ linked to, the till product it is for.
 """
 
 import re
+import secrets
 from datetime import timedelta
 from urllib.parse import urlencode
 
+from django.contrib.messages import get_messages
 from django.db.models import Count, Prefetch, Q, Sum
 from django.shortcuts import render
 from django.template import Context
@@ -21,10 +23,10 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 
-from common import RANGE_END, RANGE_START, DateRange, date_range, is_id
+from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, read_date
 from inventory.models import StockMovement, StockType
 
-from .forms import MANUAL_SALE_SOURCE, ManualSaleForm
+from .forms import COUNTING_HELP, MANUAL_SALE_SOURCE, ManualSaleForm
 from .integration import TILL_TO_CONFIGURE, till_allowed
 from .links import RecipeSuggester
 from .models import (
@@ -35,6 +37,9 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
+from .sale_documents import DELETE_QUESTION, DOCUMENTS_PAGE_SIZE, NO_FINAL_INVOICE_PILL, listed
+from .sale_files import EINVOICE_EXTENSIONS
+from .sale_payments import Allocation, payment_state, read_links
 from .usage import article_uses
 
 
@@ -42,10 +47,20 @@ def pending_count() -> int:
     return PosProduct.objects.filter(recipe__isnull=True, ignored=False).count()
 
 
+#: The sale invoices' own search on the tab, and their « tout afficher »
+#: (`factures=toutes`) - beside the sales' (`vente`, `ventes=toutes`).
+DOCUMENT_SEARCH, ALL_DOCUMENTS, SHOW_ALL = "facture", "factures", "toutes"
+
 #: Everything the sales tab reads out of its own address: the window, the
-#: search, and whether the list was unfolded. An action posted from the tab
-#: is given these back, and nothing else.
-SALES_TAB_PARAMS = (RANGE_START, RANGE_END, "vente", "ventes")
+#: sales' search and whether their list was unfolded, the sale invoices'
+#: search and theirs. An action posted from the tab is given these back, and
+#: nothing else - and every GET form of the tab carries the others
+#: (`kept_fields`).
+SALES_TAB_PARAMS = (RANGE_START, RANGE_END, "vente", "ventes", DOCUMENT_SEARCH, ALL_DOCUMENTS)
+
+#: « Factures de vente »: the card's id - where its actions come back to,
+#: `#factures-vente` - and the tag of the messages it says itself.
+SALE_CARD = "factures-vente"
 
 #: The recipes tab reads which article the list is filtered on from its own
 #: address, so the filter is a link that can be sent, bookmarked and gone
@@ -59,8 +74,25 @@ ARTICLE_PARAM = "article"
 COST_FIELDS = ("stock_type", "quantity", "unit_cost_ht")
 
 
+def kept_fields(request, *, leave=()) -> list[tuple[str, str]]:
+    """The tab's parameters the request carries (SALES_TAB_PARAMS), as
+    (name, value) - but those of `leave`: the hidden fields of a GET form,
+    which submits what it holds and nothing else, so a form leaving one out
+    drops it on the next click (« a GET form carries it as hidden fields »).
+    Each form leaves out what it asks itself."""
+    return [(name, value) for name in SALES_TAB_PARAMS if name not in leave and (value := request.GET.get(name))]
+
+
+def kept_query(request) -> str:
+    """The same as a query string, "" or « ?du=…&facture=… » - what every
+    address of the tab and of a sale document's page is given (named so it
+    never meets the context's `sales_query`, the sales' search term)."""
+    kept = kept_fields(request)
+    return f"?{urlencode(kept)}" if kept else ""
+
+
 def sales_list_url(request) -> str:
-    """« Recettes & ventes · Ventes » as the reader had it - period, search
+    """« Recettes & ventes · Ventes » as the reader had it - period, searches
     and « tout afficher » kept.
 
     Every action on that tab comes back here. Sent back to the bare address,
@@ -69,13 +101,24 @@ def sales_list_url(request) -> str:
     it: nothing on screen said the dates had been dropped, so the dates read
     as broken.
 
-    Only the four parameters above travel: an action is posted to whatever
+    Only the six parameters above travel: an action is posted to whatever
     address the reader was on, and a redirect echoing that query string whole
     would hand back anything anyone had hung on it.
     """
-    url = reverse("recipes:sales_list")
-    kept = {name: value for name in SALES_TAB_PARAMS if (value := request.GET.get(name))}
-    return f"{url}?{urlencode(kept)}" if kept else url
+    return reverse("recipes:sales_list") + kept_query(request)
+
+
+def _said_where(request, tab: str) -> tuple[list, list]:
+    """(the page's messages said at the top, those said in the « Factures de
+    vente » card) - the card's are the messages its actions tagged
+    SALE_CARD, said where their redirect lands (CLAUDE.md « Messages are said
+    where the redirect lands »). On the tabs drawing no card, every message
+    is said at the top. Read once, which also marks them said."""
+    top, card = [], []
+    for message in get_messages(request):
+        tags = (message.extra_tags or "").split()
+        (card if tab == "sales" and SALE_CARD in tags else top).append(message)
+    return top, card
 
 
 def render_menu(request, tab, *, status=200, **extra):
@@ -119,13 +162,34 @@ def render_menu(request, tab, *, status=200, **extra):
     ]
     for entry in tabs:
         entry["active"] = entry["key"] == tab
-    context = {"tab": tab, "tabs": tabs, "to_link_count": to_link}
+    top_messages, card_messages = _said_where(request, tab)
+    context = {"tab": tab, "tabs": tabs, "to_link_count": to_link, "top_messages": top_messages}
     if tab == "recipes":
         extra.setdefault("article", article)
     if tab == "sales":
         extra.setdefault("query", request.GET.get("vente", ""))
-        extra.setdefault("show_all", request.GET.get("ventes") == "toutes")
+        extra.setdefault("show_all", request.GET.get("ventes") == SHOW_ALL)
         extra.setdefault("window", window)
+        extra.setdefault("document_query", request.GET.get(DOCUMENT_SEARCH, ""))
+        extra.setdefault("show_all_documents", request.GET.get(ALL_DOCUMENTS) == SHOW_ALL)
+        extra.setdefault("kept", kept_query(request))
+        extra.setdefault(
+            "hidden_fields",
+            {
+                "sales": kept_fields(request, leave=("vente", "ventes")),
+                "period": kept_fields(request, leave=(RANGE_START, RANGE_END)),
+                "documents": kept_fields(request, leave=(DOCUMENT_SEARCH,)),
+            },
+        )
+        # The card's « Date », given back after a refusal of its own: a date
+        # typed that is readable - junk is no value.
+        typed = read_date(request.GET.get("date"))
+        extra.setdefault("read_date", typed.isoformat() if typed else "")
+        # And its « Compte », given back the same way: only a value the card
+        # offers - anything else is its default.
+        counting = request.GET.get("compte", "")
+        extra.setdefault("read_counting", counting if counting in SaleDocument.Counting.values else "")
+        extra.setdefault("card_messages", card_messages)
     builders = {"recipes": _recipes, "to-link": _to_link, "sales": _sales}
     context.update(builders[tab](**extra))
     return render(request, "recipes/menu.html", context, status=status)
@@ -334,9 +398,8 @@ def _sales_matching(query: str):
 #: them was megabytes of HTML on a single page, and they only ever grow.
 SALES_PAGE_SIZE = 300
 
-#: The same for the sale documents, which are listed whole rather than
-#: searched. Windowed, the count beside them says what the cap hides.
-DOCUMENTS_PAGE_SIZE = 50
+#: How many of a sale document's lines its row of the tab names.
+LINES_NAMED = 3
 
 
 def _window_label(window: DateRange) -> str:
@@ -355,12 +418,27 @@ def _window_label(window: DateRange) -> str:
     return ""
 
 
-def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange | None = None) -> dict:
-    """The recent sales, the till import, and a form to add one by hand.
+def _sales(
+    form=None,
+    query: str = "",
+    show_all: bool = False,
+    window: DateRange | None = None,
+    document_query: str = "",
+    show_all_documents: bool = False,
+    kept: str = "",
+    hidden_fields: dict | None = None,
+    read_date: str = "",
+    read_counting: str = "",
+    card_messages=(),
+) -> dict:
+    """The recent sales, the till import, a form to add one by hand, and the
+    « Factures de vente » card.
 
     The list was left whole because the table's own box only searches what is
     rendered - so the search is the database's now (a recipe, a date, an
     origin), as on the Achats list, and the page can stop drawing everything.
+    The sale invoices have a search of their own (`document_query`,
+    recipes/sale_documents.py), for the same reason.
 
     `window` narrows everything said about what was SOLD - the sales, the
     sale documents, the totals by origin - on each one's own date, both ends
@@ -368,13 +446,32 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
     list are read as the window's own figures. It has nothing to do with the
     import card's pair of dates, which says what to fetch from the till, and
     `default_start`/`default_end`/`last_sale` below stay outside it.
+
+    `kept` (the tab's parameters, `kept_query`) is given to every address a
+    row of the card or its read card posts or links to; `hidden_fields` holds
+    each GET form's hidden fields (`kept_fields`).
+
+    Each listed document says what the bank has paid of it (`payment`: the
+    allocation's state, recipes/sale_payments.py) - the amounts it was
+    given, never a bank date, a payer or another invoice's money: the links
+    read once for the tab, two queries, and only when a document is listed.
     """
     window = window or DateRange()
-    sale_documents = window.limit(SaleDocument.objects.all(), "sold_on")
-    documents = list(
-        sale_documents.prefetch_related("lines__recipe", "lines__stock_type").order_by("-sold_on")[:DOCUMENTS_PAGE_SIZE]
-    )
-    documents_found = sale_documents.count()
+    hidden_fields = hidden_fields or {}
+    documents = listed(window, document_query, show_all_documents)
+    allocation = read_links() if documents.documents else Allocation()
+    document_url = url_for_each("recipes:sale_document_update")
+    file_url = url_for_each("recipes:sale_document_file")
+    delete_url = url_for_each("recipes:sale_document_delete")
+    for document in documents.documents:
+        document.url = f"{document_url(document.pk)}{kept}"
+        document.file_url = file_url(document.pk) if document.source_file else ""
+        document.delete_url = f"{delete_url(document.pk)}{kept}"
+        document.delete_question = DELETE_QUESTION.format(label=document.label)
+        document.kind = document.kind_label_of(document.total)
+        document.named_lines = document.line_list[:LINES_NAMED]
+        document.more_lines = max(len(document.line_list) - LINES_NAMED, 0)
+        document.payment = payment_state(document, allocation, document.line_list)
     recorded = window.limit(RecipeSale.objects.all(), "sold_on")
     sales = recorded.select_related("recipe").order_by("-sold_on", "recipe__name")
     query = query.strip()
@@ -400,9 +497,36 @@ def _sales(form=None, query: str = "", show_all: bool = False, window: DateRange
         "date_window_label": _window_label(window),
         "totals": totals,
         "manual_source": MANUAL_SALE_SOURCE,
-        "documents": documents,
-        "documents_found": documents_found,
-        "documents_hidden": max(documents_found - len(documents), 0),
+        "sales_search_fields": hidden_fields.get("sales", []),
+        "period_fields": hidden_fields.get("period", []),
+        # « Factures de vente »: its list, counted over the window and its
+        # search before the cut, and its read card.
+        "documents": documents.documents,
+        "documents_found": documents.found,
+        "documents_hidden": documents.hidden,
+        "documents_page_size": DOCUMENTS_PAGE_SIZE,
+        "document_query": document_query.strip(),
+        "show_all_documents": show_all_documents,
+        "document_search_fields": hidden_fields.get("documents", []),
+        "no_final_invoice": NO_FINAL_INVOICE_PILL,
+        "sale_card": SALE_CARD,
+        "card_messages": card_messages,
+        "read_url": f"{reverse('recipes:sale_document_read')}{kept}",
+        "create_url": f"{reverse('recipes:sale_document_create')}{kept}",
+        # One page drawn, one submission (recipes.views, `jeton`).
+        "jeton": secrets.token_urlsafe(16),
+        "today": timezone.localdate().isoformat(),
+        "read_date": read_date,
+        "einvoice_accept": ",".join(EINVOICE_EXTENSIONS),
+        "counting_choices": [
+            {
+                "value": value,
+                "label": label,
+                "help": COUNTING_HELP[value],
+                "checked": value == (read_counting or SaleDocument.Counting.COUNTED),
+            }
+            for value, label in SaleDocument.Counting.choices
+        ],
         # The import from the till - offered only where the server's account
         # may be used (recipes/integration.py); elsewhere « à configurer ».
         "till_allowed": till_allowed(),

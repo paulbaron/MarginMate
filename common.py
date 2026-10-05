@@ -4,6 +4,7 @@ Project-level rather than per-app because the problem below has now bitten
 three different formsets across three different apps.
 """
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -124,6 +125,26 @@ def read_amount(text, places: int = 2, *, digits: int = 12) -> Decimal | None:
 AMBIGUOUS_THOUSANDS = re.compile(r"-?[0-9]+[.,][0-9]{3}")
 
 
+def fits_column(model, field_name: str, value) -> bool:
+    """Whether `value` fits the DecimalField `model.field_name` - None does.
+
+    Asked the way Django's converter asks it on every READ: quantized to the
+    column's places in the column's context. SQLite stores a wider figure
+    without a word, and every read of the row then raises InvalidOperation -
+    the page, the list and a delete answer 500 until raw SQL takes it out
+    (CLAUDE.md « A figure wider than the column behind it is refused, at the
+    door »). Achats' lines (invoices.importing._fitting) and the sales
+    e-invoice reader (recipes/sale_einvoice.py) both ask it here."""
+    if value is None:
+        return True
+    field = model._meta.get_field(field_name)
+    try:
+        Decimal(value).quantize(Decimal(1).scaleb(-field.decimal_places), context=field.context)
+    except InvalidOperation:
+        return False
+    return True
+
+
 def is_id(value) -> bool:
     """Whether `value`, read from a request, is an id: ASCII digits only.
     str.isdigit() also says yes to "²" or "٣" - and "²" is no int, so the
@@ -238,6 +259,32 @@ def selection_too_big(uploads, limit: int | None = None) -> str:
     if total <= limit:
         return ""
     return SELECTION_TOO_BIG.format(size=weight(total), limit=weight(limit))
+
+
+def posted_digest(request) -> str:
+    """What a page sent, but for the values that differ each time it is
+    sent - its CSRF value and its one-time `jeton`: every field, every value,
+    and each file's name and size. Kept beside a page's `jeton` once it made
+    something (a hand-typed invoice, a sale document): the same page posted
+    again as it was - a double tap, a phone resending after a slow answer -
+    is the same submission; another invoice typed on it is not."""
+    fields = sorted(
+        (key, request.POST.getlist(key)) for key in request.POST if key not in ("csrfmiddlewaretoken", "jeton")
+    )
+    files = sorted((key, upload.name, upload.size) for key, upload in request.FILES.items())
+    return hashlib.sha256(repr((fields, files)).encode()).hexdigest()
+
+
+def delete_stored_files(files) -> None:
+    """Delete each (storage, name) pair - once a transaction that dropped
+    their rows has committed (`transaction.on_commit`). One already gone, or
+    held by another program on Windows, is left: the row is gone either way,
+    and a stray file costs nothing."""
+    for storage, name in files:
+        try:
+            storage.delete(name)
+        except OSError:
+            continue
 
 
 # -- What a page may say of an error (security audit LB-3) --------------------------------------------------------

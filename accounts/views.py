@@ -31,6 +31,11 @@ INLINE_TYPES = frozenset(
     {"application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/tiff"}
 )
 
+#: `?telecharger=1` on a document's own file route (a purchase's,
+#: invoices:invoice_file; a sale's, recipes:sale_document_file): saved
+#: rather than shown. One spelling for every door out.
+DOWNLOAD_PARAM = "telecharger"
+
 
 @require_safe
 @xframe_options_sameorigin
@@ -52,7 +57,8 @@ def open_stored(name: str, root: Path | None = None):
     it is not there, is not a file, or lies outside the tenant's media folder
     (a name climbing out with « ../ », a link pointing out of it). Every door
     serving a stored file opens it here: this view, a document's own file
-    (invoices.views.invoice_file) and Banque's zip (bank/invoice_files.py).
+    (invoices.views.invoice_file, recipes.views.sale_document_file) and
+    Banque's zip (bank/invoice_files.py).
 
     `root` is `media_folder()` found once by a caller opening many files in
     the same request (the zip) - never anything a request typed."""
@@ -74,9 +80,9 @@ def file_response(handle, filename: str, *, download: bool = False) -> FileRespo
     a photo and no download was asked, saved otherwise - and sandboxed, since
     a file a user put there must not run script on this site's origin.
 
-    Shared with a document's own file route (invoices.views.invoice_file),
-    which serves the same files under the name they are downloaded as, and
-    with Banque's zip."""
+    Shared with a document's own file routes (invoices.views.invoice_file,
+    recipes.views.sale_document_file), which serve the same files under the
+    name they are downloaded as, and with Banque's zip."""
     content_type, encoding = mimetypes.guess_type(filename)
     inline = not download and content_type in INLINE_TYPES and encoding is None
     response = FileResponse(handle, as_attachment=not inline, filename=filename)

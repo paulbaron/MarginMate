@@ -2562,6 +2562,40 @@ def einvoice_supplier(text: str) -> tuple[Supplier | None, list[str]]:
     return Supplier.objects.filter(code=parser.supplier_code).first(), found
 
 
+#: Achats' refusal of an electronic invoice the bar ISSUED (einvoice.OwnSalesInvoiceError).
+OWN_SALES_INVOICE = (
+    "Facture émise par votre établissement (SIREN {siren}, celui de votre facture de vente {sale}) : "
+    "ajoutez-la dans « Recettes & ventes · Ventes », ce n'est pas un achat."
+)
+
+
+def own_sales_invoice(facts) -> str:
+    """The refusal of an electronic invoice whose SELLER is the bar itself, as
+    its own sales e-invoices state it (recipes.SaleDocument.seller_siren) -
+    "" for any other. Filed as a purchase, its seller would be named a
+    supplier of the bar and the sale filed as money spent: silently wrong
+    money. A SIREN a supplier retains (identified_supplier) is that
+    supplier's, not the bar's: then nothing is refused here - the sales side
+    refuses such an invoice (recipes/sale_files.py), so the two never
+    disagree for long. One query at most for any other invoice."""
+    from recipes.models import SaleDocument  # here: recipes reads this module
+
+    siren = einvoice.party_siren(facts.seller_siren, facts.seller_vat)
+    if not siren:
+        return ""
+    # The latest names the sale document that taught the number - the way to
+    # undo one stored by mistake.
+    sale = SaleDocument.objects.filter(seller_siren=siren).order_by("-sold_on", "-pk").first()
+    if sale is None:
+        return ""
+    if identified_supplier(f"SIREN {siren}")[0] is not None:
+        return ""
+    day = sale.sold_on
+    named = f"n° {sale.reference}" if sale.reference else "sans numéro"
+    named += f" du {day.day:02d}/{day.month:02d}/{day.year:04d}"
+    return OWN_SALES_INVOICE.format(siren=f"{siren[:3]} {siren[3:6]} {siren[6:]}", sale=named)
+
+
 EINVOICE_NO_DATE = "Date absente de la facture électronique : saisissez-la dans « Corriger les lignes »."
 # Around the date it names (einvoice_date_problem).
 _BAD_DATE_BEFORE = "Date invraisemblable sur la facture électronique ("
@@ -2661,7 +2695,8 @@ def import_einvoice(
 
     The file kept is the one received: it is the legal invoice, and a
     rendering of it is not. Raises EInvoiceError (a ValueError, reported per
-    file by the folder import) when the XML is not one this can read, and
+    file by the folder import) when the XML is not one this can read - its
+    OwnSalesInvoiceError when the bar issued it (own_sales_invoice) - and
     UnrecognisedShopError when nothing known answers to the seller it names -
     a document waits for a person exactly as a PDF of nobody known does,
     because filing it under a guess would put a whole invoice's lines under
@@ -2676,6 +2711,11 @@ def import_einvoice(
 
     parsed = einvoice.read(data)
     facts = parsed.einvoice
+    # The bar's own sales invoice is no purchase: refused before a supplier
+    # is named (or taught the bar's number) and before anything is stored.
+    refusal = own_sales_invoice(facts)
+    if refusal:
+        raise einvoice.OwnSalesInvoiceError(refusal)
     kind = einvoice_format(path, facts)
     named_by_hand = supplier is not None
     if supplier is None:

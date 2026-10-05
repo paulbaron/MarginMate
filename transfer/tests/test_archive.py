@@ -199,6 +199,40 @@ class WritingTests(TestCase):
             self.assertEqual(written.getinfo("factures.json").compress_type, zipfile.ZIP_DEFLATED)
             self.assertEqual(written.getinfo("manifest.json").compress_type, zipfile.ZIP_DEFLATED)
 
+    def test_a_sale_file_is_stored_never_deflated(self):
+        """A sales invoice's file is any file a bar was sent: a BMP scan of a
+        white page deflates past MAX_RATIO, and the reader refused the WHOLE
+        archive - every later export, the safety archives of « Effacer » and
+        « Remplacer » included (transfer critique 1). Under ventes/ a file
+        is written as it is, whatever its suffix."""
+        data = b"BM" + b"\x00" * (64 * 1024)
+        scan = stored("ventes/2026/10/scan-essai.bmp", data)
+        self.addCleanup(default_storage.delete, scan)
+        path, _manifest, refs = self.build(**{scan: None})
+        with zipfile.ZipFile(path) as written:
+            self.assertEqual(written.getinfo(f"files/{scan}").compress_type, zipfile.ZIP_STORED)
+        with (
+            mock.patch.object(archive, "RATIO_MIN_BYTES", 1024),
+            ArchiveReader(path) as reader,
+            reader.open_file(refs[0]) as stream,
+        ):
+            self.assertEqual(stream.read(), data)
+
+    def test_an_office_container_is_stored(self):
+        """.docx, .odt and .ods are zip containers, compressed already:
+        stored as they are, wherever they are."""
+        names = [
+            stored(f"invoices/2026/10/document-essai{suffix}", b"PK\x03\x04" + b"x" * 300)
+            for suffix in (".docx", ".odt", ".ods")
+        ]
+        for name in names:
+            self.addCleanup(default_storage.delete, name)
+        path, _manifest, _refs = self.build(**dict.fromkeys(names))
+        with zipfile.ZipFile(path) as written:
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertEqual(written.getinfo(f"files/{name}").compress_type, zipfile.ZIP_STORED)
+
     def test_a_file_named_twice_is_stored_once_and_a_missing_one_is_said(self):
         name = stored("invoices/2026/09/deux-fois.pdf", b"%PDF deux")
         path = new_archive_path("twice")
@@ -810,7 +844,7 @@ class DamagedArchiveTests(TestCase):
 
 class StorageNameTests(TestCase):
     """The name an import writes a file under comes from the archive's
-    record: it may not leave the two folders documents live in."""
+    record: it may not leave the folders documents live in."""
 
     def test_names_that_are_refused(self):
         for name in (
@@ -847,8 +881,16 @@ class StorageNameTests(TestCase):
                 self.assertIsNotNone(storage_name_problem(name))
         self.assertEqual(
             storage_name_problem("media/x.pdf"),
-            "fichier hors des dossiers des factures, des tickets et des consignes (« media/x.pdf »)",
+            "fichier hors des dossiers des factures, des tickets, des consignes et des ventes (« media/x.pdf »)",
         )
+
+    def test_a_sales_invoice_file_name_is_accepted(self):
+        """« Ventes » stores under ventes/ (recipes.models.SALE_FILES_FOLDER):
+        refused here, every sales invoice's file was exported as missing."""
+        self.assertIsNone(storage_name_problem("ventes/2026/10/x.pdf"))
+        for name in ("ventes/../config/x.pdf", "ventes/" + "a" * 100 + ".pdf", "ventesx/a.pdf"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(storage_name_problem(name))
 
 
 class AppRevisionTests(SimpleTestCase):

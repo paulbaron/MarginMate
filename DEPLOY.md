@@ -1086,6 +1086,31 @@ seul document par fournisseur parmi ceux saisis à la main sans numéro ni fichi
 complet après la mise en ligne si vous gardez ces archives comme sauvegarde (les sauvegardes de la
 section 8 ne sont pas concernées).
 
+## 16. Les factures de vente
+
+**Recettes & ventes › Ventes › « Factures de vente »** reçoit maintenant vos factures de vente : une
+facture électronique (Factur-X, CII ou UBL) avec « Lire la facture », ou n'importe quel autre fichier
+(PDF, photo, Word, Excel…) avec « + Facture de vente ». Sur chaque facture, reliez les lignes vendues
+à vos recettes ou à vos articles, et rattachez le virement qui la règle (ou laissez Banque le faire
+seul quand il est sûr).
+
+- Cette version ajoute la migration **recipes 0019** : `deploy.cmd` l'applique lui-même (son étape
+  `migrate_tenants`, après sa sauvegarde). Rien à faire à la main en production.
+- **Dans le dossier de développement**, `runserver` arrêté, lancez une fois
+  `.venv\Scripts\python.exe manage.py migrate_tenants` (jamais dans `C:\MarginMate`). Sans cela,
+  l'onglet Ventes, Marges, Banque, Entrées d'argent, les pages du stock et l'import des factures
+  électroniques ne s'affichent plus sur `data-dev`.
+- Une facture qui documente des ventes déjà tapées en caisse (une note réglée par virement) se marque
+  « Déjà comptée par la caisse », dès « Lire la facture » : elle ne compte alors ni dans les marges ni
+  dans le stock.
+- Une fois vos factures de vente électroniques ajoutées, « Factures » refuse d'importer une facture
+  émise par votre établissement (le même SIREN de vendeur) : elle se range dans « Ventes ».
+- Les archives « Données » d'avant cette version s'importent toujours ; une archive de cette version
+  importée dans une version plus ancienne perd des factures de vente et leurs quantités consommées :
+  importez-la dans cette version.
+- Sur l'iPhone, vérifiez qu'une photo de facture ajoutée avec « + Facture de vente » arrive en JPEG
+  (elle s'affiche alors sur la page de la facture).
+
 ## Limites connues
 
 - **Taille des envois.** Cloudflare, dans son offre gratuite, refuse les envois de plus de 100 Mo,

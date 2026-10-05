@@ -11,9 +11,12 @@ of which says the period it is showing, because all-time totals above a
 windowed list are read as the window's own figures.
 
 Every action drawn here is posted to the address the reader is on (the
-querystring tag) and its view comes back to it (menu.sales_list_url): posted
-to the bare address, one « Supprimer » put all 8 099 sales back on screen with
-nothing saying the period had been dropped.
+querystring tag, or an address the view built with `menu.kept_query`) and its
+view comes back to it (menu.sales_list_url): posted to the bare address, one
+« Supprimer » put all 8 099 sales back on screen with nothing saying the
+period had been dropped. Every GET form carries the tab's other parameters as
+hidden fields (`menu.kept_fields`): a GET form submits what it holds and
+nothing else.
 {% endcomment %}
 <div class="card">
     <div class="section-head">
@@ -109,62 +112,7 @@ nothing saying the period had been dropped.
 </div>
 {% endif %}
 
-<div class="card">
-    <div class="section-head">
-        <div>
-            <h3>Factures de vente</h3>
-            <p class="muted">Ventes hors caisse : recettes ou articles vendus tels quels.</p>
-        </div>
-        <a class="btn btn-secondary" href="{% url 'recipes:sale_document_create' %}{% querystring %}">+ Facture de vente</a>
-    </div>
-    {% comment %}
-    The count is the window's own, and is taken before the list is cut down to
-    its most recent: « 3 factures » above a list of none is how a reader
-    concludes the page is broken rather than the period empty.
-    {% endcomment %}
-    {% if date_window %}
-        <p class="muted date-range-note">
-            {{ date_window_label }} : {{ documents_found }} facture{{ documents_found|pluralize }} de vente
-            (période choisie dans « Dernières ventes »).
-            {% if documents_hidden %}Seules les {{ documents|length }} plus récentes sont affichées.{% endif %}
-        </p>
-    {% elif documents_hidden %}
-        <p class="muted">Les {{ documents|length }} plus récentes ; {{ documents_hidden }} de plus, plus anciennes.</p>
-    {% endif %}
-    {% if documents %}
-    <div class="table-wrap">
-    <table class="sub-table" data-table data-table-label="factures">
-        <thead>
-            <tr><th>Date</th><th>Référence</th><th>Lignes</th><th class="num">Total TTC</th><th></th></tr>
-        </thead>
-        <tbody>
-            {% for document in documents %}
-            <tr>
-                <td data-sort="{{ document.sold_on|date:'Y-m-d' }}">{{ document.sold_on|date:"d/m/Y" }}</td>
-                <td>{{ document.reference|default:"—" }}{% if document.note %}<br><span class="muted small">{{ document.note }}</span>{% endif %}</td>
-                <td class="muted small">
-                    {% for line in document.lines.all %}
-                        {{ line.quantity|floatformat:"-2" }} × {{ line.source_name }}{% if not forloop.last %}<br>{% endif %}
-                    {% endfor %}
-                </td>
-                <td class="num">{{ document.total_ttc|money }} €</td>
-                <td class="num row-actions">
-                    <a class="btn btn-small btn-secondary" href="{% url 'recipes:sale_document_update' document.pk %}{% querystring %}">Modifier</a>
-                    <form method="post" action="{% url 'recipes:sale_document_delete' document.pk %}{% querystring %}"
-                          onsubmit="return confirm('Supprimer cette vente ?');">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-        <div class="empty-state">{% if date_window %}Aucune facture de vente sur cette période.{% else %}Aucune facture de vente.{% endif %}</div>
-    {% endif %}
-</div>
+{% include "recipes/_sale_documents_card.html" %}
 
 <div class="card">
     <h3>Dernières ventes</h3>
@@ -177,7 +125,7 @@ nothing saying the period had been dropped.
     the reader's period vanishes on the next click without anything saying so.
     {% endcomment %}
     <form method="get" class="search-row">
-        {% for name, value in date_window.parameters.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        {% for name, value in sales_search_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         <span class="table-search">
             <input type="search" name="vente" value="{{ sales_query }}" autocomplete="off"
                    aria-label="Rechercher une vente"
@@ -187,8 +135,7 @@ nothing saying the period had been dropped.
         {% if sales_query %}<a class="btn btn-small btn-secondary" href="{% querystring vente=None %}">Effacer la recherche</a>{% endif %}
     </form>
     <form method="get" class="date-range">
-        {% if sales_query %}<input type="hidden" name="vente" value="{{ sales_query }}">{% endif %}
-        {% if show_all %}<input type="hidden" name="ventes" value="toutes">{% endif %}
+        {% for name, value in period_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
         {# Named, because the card at the top of the page has a « Du … au … » too. #}
         <span class="muted">Période affichée :</span>
         <label class="inline-label">Du <input type="date" name="du" value="{{ date_window.start_value }}"></label>
@@ -229,7 +176,7 @@ nothing saying the period had been dropped.
                 <td class="num">
                     {% if sale.source == manual_source %}
                     <form method="post" action="{% url 'recipes:sales_delete' sale.pk %}{% querystring %}"
-                          onsubmit="return confirm('Supprimer cette vente ?');">
+                          data-confirm="Supprimer cette vente ?">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
                     </form>

@@ -18,8 +18,10 @@ import itertools
 from datetime import date, datetime
 from decimal import Decimal
 
+from django.db import models
 from django.utils import timezone
 
+from bank.models import BankTransaction
 from inventory.models import (
     Product,
     StockMovement,
@@ -29,7 +31,7 @@ from inventory.models import (
     UnitChoices,
 )
 from invoices.models import EmailInvoiceSource, Invoice, InvoiceLine, InvoiceType, Supplier
-from recipes.models import Recipe, RecipeIngredient
+from recipes.models import Recipe, RecipeIngredient, SaleDocument, SaleDocumentLine, SaleDocumentPayment
 
 _counter = itertools.count(1)
 
@@ -38,6 +40,16 @@ def _d(value) -> Decimal:
     """Decimal("0.7") from either a string or a Decimal - never from a float,
     which would silently introduce binary rounding into money maths."""
     return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _decimals(model, fields: dict) -> dict:
+    """`fields` with every value meant for one of `model`'s DecimalFields
+    read by `_d`, so "7.50" may be passed; a name the model does not have
+    raises FieldDoesNotExist rather than being dropped."""
+    return {
+        name: _d(value) if value is not None and isinstance(model._meta.get_field(name), models.DecimalField) else value
+        for name, value in fields.items()
+    }
 
 
 def make_supplier(code: str = "", name: str = "", parser_key: str = "", **kwargs) -> Supplier:
@@ -222,6 +234,45 @@ def make_ingredient(
         quantity=_d(quantity),
         group=group,
     )
+
+
+def make_sale_document(**fields) -> SaleDocument:
+    """A sale document (« facture de vente »), sold on 05/03/2026 unless
+    `sold_on` says otherwise; everything else at its default unless given -
+    « Compte dans les marges et le stock », no file, nothing stated: what a
+    document typed by hand was before the sales invoices."""
+    fields.setdefault("sold_on", date(2026, 3, 5))
+    return SaleDocument.objects.create(**_decimals(SaleDocument, fields))
+
+
+def make_sale_line(document: SaleDocument, **fields) -> SaleDocumentLine:
+    """One line of `document`: a quantity of 1 unless given, of the `recipe`
+    or `stock_type` given - else tied to nothing, which needs a label of its
+    own (« Ligne N » unless one is given, an empty one included)."""
+    fields.setdefault("quantity", "1")
+    if fields.get("recipe") is None and fields.get("stock_type") is None:
+        fields.setdefault("label", f"Ligne {next(_counter)}")
+    return SaleDocumentLine.objects.create(document=document, **_decimals(SaleDocumentLine, fields))
+
+
+def make_credit(
+    amount, day: date, counterparty: str = "", label: str = "VIR SEPA EXEMPLE", **fields
+) -> BankTransaction:
+    """A credit of the statement - money in - of `amount` on `day`, from
+    `counterparty` (blank: the payer is then read off the label's words), a
+    received transfer unless `fields` say otherwise. A fingerprint of its
+    own, so two credits of one shape are two lines."""
+    fields.setdefault("bank_type", "VIREMENT")
+    fields.setdefault("kind", BankTransaction.Kind.TRANSFER)
+    fields.setdefault("fingerprint", f"credit-exemple-{next(_counter)}")
+    return BankTransaction.objects.create(
+        operation_date=day, counterparty=counterparty, label=label, amount=_d(amount), **fields
+    )
+
+
+def make_sale_payment(document: SaleDocument, credit: BankTransaction, method: str = "MANUAL") -> SaleDocumentPayment:
+    """`credit` paying `document` - linked by hand unless `method` says AUTO."""
+    return SaleDocumentPayment.objects.create(document=document, transaction=credit, method=method)
 
 
 def make_priced_stock_type(name: str = "", unit_cost_ht="10", quantity="1", **kwargs) -> StockType:

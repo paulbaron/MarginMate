@@ -1,5 +1,8 @@
 import json
+import logging
 import math
+import posixpath
+import secrets
 
 # Not used here any more: the tests patch the import's thread as
 # `recipes.views.threading.Thread`, which is the threading module's own
@@ -7,38 +10,84 @@ import math
 import threading  # noqa: F401
 from datetime import date
 from decimal import Decimal
+from pathlib import PurePosixPath
+from urllib.parse import urlencode
 
 from django.contrib import messages
+from django.contrib.messages import get_messages
 from django.db import transaction
 from django.db.models import ProtectedError, Sum
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.html import escape
+from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_safe
 
-from common import PIE_COLORS, format_money, is_id
+from accounts.access import access_of
+from accounts.views import DOWNLOAD_PARAM, file_response, open_stored
+from common import PIE_COLORS, error_for_page, format_money, is_id, plain_number, posted_digest
+from invoices.einvoice import EInvoiceError
+from invoices.filenames import sale_download_name
 
 from .forms import (
+    CONSUMED_CLEARED,
+    CONSUMED_ZERO,
+    FILE_AGAIN,
+    KNOWN_CUSTOMERS_LIST,
     MANUAL_SALE_SOURCE,
+    NOTHING_SOLD,
     ManualSaleForm,
     RecipeForm,
     RecipeIngredientFormSet,
     SaleDocumentForm,
     SaleDocumentLineFormSet,
+    SaleDocumentLineFormSetNew,
+    SaleEInvoiceHeaderForm,
+    SaleTiesForm,
     ingredient_categories,
     ingredient_unit_map,
 )
 from .importing import active_import, start_sales_import
 from .integration import refusal, till_allowed
 from .links import LinkError, link, set_aside
-from .menu import pending_count, render_menu, sales_list_url, with_suggestion
+from .menu import (
+    SALE_CARD,
+    kept_fields,
+    kept_query,
+    pending_count,
+    render_menu,
+    sales_list_url,
+    url_for_each,
+    with_suggestion,
+)
 from .models import (
+    SALE_FILES_FOLDER,
     PosProduct,
     Recipe,
     RecipeSale,
     SaleDocument,
     SaleDocumentLine,
     SalesImportJob,
+    read_unit_costs,
     variation_scope,
 )
+from .sale_documents import DELETE_QUESTION, counted_twice, deposit_doubts, known_customers
+from .sale_einvoice import MAX_SALE_LINES
+from .sale_files import (
+    DocumentGone,
+    SaleFileRefused,
+    delete_document,
+    read_einvoice_upload,
+    save_typed,
+    siren_text,
+    staged,
+    typed_file_problem,
+)
+from .sale_lines import proposals
+from .sale_payments import payment_context, read_links
+
+logger = logging.getLogger(__name__)
 
 #: Said when a sales import is already running (by hand or automatic).
 ALREADY_RUNNING = "Une récupération est déjà en cours."
@@ -494,41 +543,624 @@ def pos_products_bulk(request):
     return redirect("recipes:pos_product_list")
 
 
+# --- « Factures de vente » (recipes/sale_files.py) -------------------------------------------------------------------
+
+#: Said on a sale document's page and on the tab's card.
+DOCUMENT_GONE = "Cette facture de vente n'existe plus."
+ALREADY_SAVED_CREATE = "Facture de vente déjà enregistrée : la voici."
+ALREADY_SAVED_UPDATE = "Facture de vente déjà enregistrée."
+LINE_ADDED = "Ligne ajoutée : rien n'est enregistré avant « Enregistrer »."
+#: What static/js/sale_document.js asks before a form beside the document's
+#: own leaves what was typed (`data-leaves-lines`).
+LEAVE_WARNING = "Les modifications de la facture n'ont pas été enregistrées et seront perdues. Continuer ?"
+READ_DONE = (
+    "Facture électronique ({kind}) {number} du {day} ajoutée{customer}. Reliez ses lignes à vos recettes ou "
+    "articles, puis enregistrez."
+)
+CHECKS_FAILED = "Ses propres totaux ne tombent pas juste : voyez « Contrôles de la facture »."
+FILE_DELETED_TOO = "Son fichier est supprimé aussi."
+NOT_COUNTED_LINES = (
+    "Cette facture ne compte ni dans les marges ni dans le stock : relier ses lignes ne change aucun chiffre."
+)
+CREDIT_NOTE_LINES = "Un avoir ne remet rien en stock sauf si vous reliez la ligne : un retour de marchandise seulement."
+FILE_IS_THE_INVOICE = "Le fichier est la facture : il ne se remplace pas. Pour une autre facture, supprimez celle-ci."
+#: The lines of a typed document against the total it states.
+REST_FREE = "{amount} € n'ont pas de ligne : ils comptent sans recette ni article."
+REST_DISCOUNT = "{amount} € de remise sur les lignes : réparti sur elles dans les marges."
+
+#: The sale documents this login made, by the one-time value of the page that
+#: made each (`jeton`), with what was posted: that page posted again - a
+#: double tap, a phone resending after a slow answer - opens the document it
+#: made rather than making it twice (invoices.views.create_manual_invoice's
+#: rule). In the session, the last few.
+SALE_DOCUMENTS_MADE = "sale_documents_made"
+SALE_DOCUMENTS_KEPT = 20
+JETON = "jeton"
+#: « + Ajouter une ligne » without JavaScript: a submit button of its own.
+ADD_ROW = "ajouter_ligne"
+#: Where an electronic invoice's ties saved come back to on its page: what
+#: follows tying is its « Règlement ».
+PAYMENTS = "reglements"
+#: « Règlement »'s search of a credit to link (`entree`): a GET of the
+#: page, ignored without « Banque ».
+CREDIT_SEARCH = "entree"
+#: Above « Règlement », for a reader without JavaScript: its forms leave the
+#: page, and what was typed on the document with it (static/js/sale_document.js
+#: hides it, and asks instead).
+SAVE_BEFORE_PAYMENTS = "Enregistrez la facture avant de rattacher une entrée : ce qui n'est pas enregistré est perdu."
+NO_CREDIT_PROPOSED = "Aucune entrée proposée à ces dates."
+#: What the bank's automatic pass did after a read or a save (spec §3.7),
+#: worded from who reads it: « Recettes & ventes » alone is told no bank
+#: date, amount or payer (bank critique 7).
+LINKED_TO_CREDIT = "Rattachée automatiquement à l'entrée du {day} ({amount} €)."
+LINKED_WITHOUT_DETAIL = "Réglée par une entrée de « Banque », rattachée automatiquement."
+BANK_PASS_FAILED = (
+    "Le rapprochement bancaire n'a pas pu se faire : « Rapprocher automatiquement » sur Banque le refera."
+)
+#: The stored file's kind as its page shows it: a PDF framed, a photo drawn,
+#: anything else to download.
+FRAMED = (".pdf",)
+DRAWN = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return f"{count} {plural if count > 1 else singular}"
+
+
+def _tab_url(request, **extra) -> str:
+    """The « Ventes » tab as the reader had it, on its « Factures de vente »
+    card - and `extra` (the card's `date` given back)."""
+    url = sales_list_url(request)
+    extra = {name: value for name, value in extra.items() if value}
+    if extra:
+        url = f"{url}{'&' if '?' in url else '?'}{urlencode(extra)}"
+    return f"{url}#{SALE_CARD}"
+
+
+def _document_url(request, pk) -> str:
+    """A sale document's page, the tab's parameters kept."""
+    return f"{reverse('recipes:sale_document_update', args=[pk])}{kept_query(request)}"
+
+
+def _made(request) -> tuple[str, str, int | None]:
+    """(the page's `jeton`, what it posted, the document that page already
+    made with that very post - None for a new submission)."""
+    token = request.POST.get(JETON, "")[:64]
+    digest = posted_digest(request)
+    made_pk, made_from = request.session.get(SALE_DOCUMENTS_MADE, {}).get(token, (None, ""))
+    if not token or made_from != digest or made_pk is None:
+        return token, digest, None
+    return token, digest, made_pk if SaleDocument.objects.filter(pk=made_pk).exists() else None
+
+
+def _remember(request, token: str, digest: str, document: SaleDocument) -> None:
+    if not token:
+        return
+    made = request.session.get(SALE_DOCUMENTS_MADE, {})
+    made[token] = (document.pk, digest)
+    request.session[SALE_DOCUMENTS_MADE] = dict(list(made.items())[-SALE_DOCUMENTS_KEPT:])
+
+
 def sale_document_form(request, pk=None):
-    """Create or edit a hand-written sale document.
+    """A « facture de vente »: a new one typed (`pk` None), or one saved -
+    typed (its header, its file, a formset of lines) or an electronic
+    invoice (its figures printed, its lines tied in a grid by pk).
 
-    Lines can be recipes or stock items sold as themselves; both feed the
-    variance report, a recipe through its ingredients and a stock item
-    directly.
-    """
-    document = get_object_or_404(SaleDocument, pk=pk) if pk else SaleDocument()
-
-    if request.method == "POST":
-        form = SaleDocumentForm(request.POST, instance=document)
-        formset = SaleDocumentLineFormSet(request.POST, instance=document)
-        if form.is_valid() and formset.is_valid():
-            with transaction.atomic():
-                document = form.save()
-                formset.instance = document
-                formset.save()
-            messages.success(request, f"{document} enregistrée.")
-            return redirect(sales_list_url(request))
+    Each page is one submission (`jeton`): posted again as it was, it opens
+    what it made. « + Ajouter une ligne » without JavaScript draws the page
+    again with one more row, nothing saved, nothing refused. A document
+    deleted meanwhile (another tab) is said, never a 404 on a POST."""
+    if pk is None:
+        document = SaleDocument()
     else:
-        form = SaleDocumentForm(instance=document)
-        formset = SaleDocumentLineFormSet(instance=document)
+        document = SaleDocument.objects.filter(pk=pk).first()
+        if document is None:
+            if request.method != "POST":
+                raise Http404
+            messages.info(request, DOCUMENT_GONE, extra_tags=SALE_CARD)
+            return redirect(_tab_url(request))
+    if request.method == "POST" and not document.is_einvoice and ADD_ROW in request.POST:
+        return _add_a_row(request, document)
+    token = digest = ""
+    if request.method == "POST":
+        token, digest, made = _made(request)
+        if made is not None and (pk is None or made == document.pk):
+            if pk is None:
+                messages.info(request, ALREADY_SAVED_CREATE)
+                return redirect(_document_url(request, made))
+            messages.info(request, ALREADY_SAVED_UPDATE, extra_tags="" if document.is_einvoice else SALE_CARD)
+            if document.is_einvoice:
+                return redirect(f"{_document_url(request, document.pk)}#{PAYMENTS}")
+            return redirect(_tab_url(request))
+    if document.is_einvoice:
+        return _einvoice_page(request, document, token, digest)
+    return _typed_page(request, document, token, digest)
 
-    return render(
+
+def _line_formset_class(document):
+    """A new document opens with one row to type, a saved one with its lines
+    only (CLAUDE.md « Formsets: no spare row on a saved record »)."""
+    return SaleDocumentLineFormSet if document.pk else SaleDocumentLineFormSetNew
+
+
+def _add_a_row(request, document):
+    """« + Ajouter une ligne » without JavaScript: the page drawn again from
+    what was posted, one row more, NOTHING validated - reading a form's
+    errors validates it, and the half-typed rows would say « Quantité :
+    tapez un nombre. » on a click that only asked for a row - and nothing
+    saved. A browser never sends a file back: it is asked again."""
+    data = request.POST.copy()
+    total = data.get("lines-TOTAL_FORMS", "")
+    count = int(total) if is_id(total) else 0
+    data["lines-TOTAL_FORMS"] = str(min(count + 1, MAX_SALE_LINES))
+    form = SaleDocumentForm(data, instance=document)
+    formset = _line_formset_class(document)(data, instance=document)
+    messages.info(request, LINE_ADDED)
+    if request.FILES:
+        messages.info(request, FILE_AGAIN)
+    return _draw_typed(request, document, form, formset, hide_errors=True)
+
+
+def _sells_something(form, formset) -> bool:
+    """A total typed, or a line kept: a typed document holds one or the other."""
+    if form.cleaned_data.get("stated_total_ttc") is not None:
+        return True
+    return any(line_form.cleaned_data and not line_form.cleaned_data.get("DELETE") for line_form in formset.forms)
+
+
+def _typed_page(request, document, token: str, digest: str):
+    """A typed document: its header and file (SaleDocumentForm), its lines
+    (the formset). Saved, back to the tab's card; refused, the page again,
+    everything typed kept - but the file, which a browser never sends back."""
+    formset_class = _line_formset_class(document)
+    if request.method != "POST":
+        return _draw_typed(request, document, SaleDocumentForm(instance=document), formset_class(instance=document))
+    form = SaleDocumentForm(request.POST, request.FILES, instance=document)
+    formset = formset_class(request.POST, instance=document)
+    outcome = None
+    if form.is_valid() and formset.is_valid():
+        if not _sells_something(form, formset):
+            form.add_error(None, NOTHING_SOLD)
+        else:
+            outcome = _save_typed(form, formset)
+    if outcome is GONE:
+        messages.info(request, DOCUMENT_GONE, extra_tags=SALE_CARD)
+        return redirect(_tab_url(request))
+    if outcome is None:
+        if request.FILES.get("source_file") and "source_file" not in form.errors:
+            form.add_error("source_file", FILE_AGAIN)
+        return _draw_typed(request, document, form, formset)
+    _remember(request, token, digest, outcome.document)
+    messages.success(request, f"{outcome.document} enregistrée.", extra_tags=SALE_CARD)
+    if outcome.prices_written:
+        messages.info(
+            request,
+            f"Prix de la carte écrit sur {_plural(outcome.prices_written, 'ligne', 'lignes')}.",
+            extra_tags=SALE_CARD,
+        )
+    for line_form in formset.forms:
+        if line_form.cleared and line_form.instance.pk:
+            messages.info(request, CONSUMED_CLEARED.format(label=line_form.instance.shown_name), extra_tags=SALE_CARD)
+    _say_bank_pass(request, outcome, SALE_CARD)
+    return redirect(_tab_url(request))
+
+
+#: `_save_typed`'s answer for a document deleted in another tab while this
+#: save ran (sale_files.DocumentGone): said as on a document already gone.
+GONE = object()
+
+
+def _save_typed(form, formset):
+    """The typed document saved with its file, or None and the refusal on
+    the file's field: an electronic invoice, a file another document holds,
+    a purchase's file (recipes/sale_files.py) - or GONE, the document
+    deleted meanwhile."""
+    upload = form.cleaned_data.get("source_file")
+    try:
+        if not upload:
+            return save_typed(form, formset, remove_file=bool(form.cleaned_data.get("retirer_fichier")))
+        with staged(upload) as path:
+            refusal = typed_file_problem(path, upload.name, form.instance)
+            if refusal:
+                form.add_error("source_file", refusal)
+                return None
+            return save_typed(form, formset, staged_path=path, upload_name=upload.name)
+    except SaleFileRefused as refused:
+        form.add_error("source_file", str(refused))
+        return None
+    except DocumentGone:
+        return GONE
+
+
+def _einvoice_page(request, document, token: str, digest: str):
+    """An electronic invoice: its date of sale, how it counts and a note
+    typed (SaleEInvoiceHeaderForm); its lines tied (SaleTiesForm), proposed
+    on a GET (recipes/sale_lines.py). Saved, back to its own page - its
+    « Règlement » is what follows."""
+    lines = list(document.lines.select_related("recipe", "stock_type").order_by("id"))
+    articles = {line.stock_type_id for line in lines if line.stock_type_id}
+    unit_costs = read_unit_costs(articles) if articles else {}
+    if request.method == "POST":
+        header = SaleEInvoiceHeaderForm(request.POST, instance=document)
+        ties = SaleTiesForm(document, lines, data=request.POST, unit_costs=unit_costs)
+        if header.is_valid() and ties.is_valid():
+            with transaction.atomic():
+                document = header.save()
+                saved = ties.save()
+            _remember(request, token, digest, document)
+            messages.success(request, f"{document} enregistrée.")
+            if saved.tied:
+                messages.info(
+                    request, f"{_plural(saved.tied, 'ligne reliée', 'lignes reliées')} à une recette ou un article."
+                )
+            for label in saved.cleared:
+                messages.info(request, CONSUMED_CLEARED.format(label=label))
+            return redirect(f"{_document_url(request, document.pk)}#{PAYMENTS}")
+    else:
+        header = SaleEInvoiceHeaderForm(instance=document)
+        ties = SaleTiesForm(document, lines, proposals=proposals(document, lines), unit_costs=unit_costs)
+    return _draw(
         request,
-        "recipes/sale_document_form.html",
-        {"form": form, "formset": formset, "document": document if document.pk else None},
+        document,
+        lines,
+        {
+            "form": header,
+            "ties": ties,
+            "facts": _facts(document, lines, kept_query(request)),
+            "checks": document.einvoice_checks,
+            "failed_checks": sum(1 for check in document.einvoice_checks if not check.get("passed")),
+            "lines_said": NOT_COUNTED_LINES
+            if not document.counts
+            else (CREDIT_NOTE_LINES if document.total_ttc_of(lines) < 0 else ""),
+            "file_is_the_invoice": FILE_IS_THE_INVOICE,
+            "totals": _totals(document, lines),
+            "consumed_zero": CONSUMED_ZERO,
+        },
     )
 
 
-def sale_document_delete(request, pk):
+def _draw_typed(request, document, form, formset, *, hide_errors=False):
+    lines = list(document.lines.select_related("recipe")) if document.pk else []
+    return _draw(
+        request,
+        document,
+        lines,
+        {
+            "form": form,
+            "formset": formset,
+            "hide_errors": hide_errors,
+            "known_customers": known_customers(),
+            "known_customers_list": KNOWN_CUSTOMERS_LIST,
+            "totals": _totals(document, lines) if document.pk else None,
+        },
+    )
+
+
+def _draw(request, document, lines, context: dict):
+    """The page of `document` (new or saved), its `lines` read, with
+    `context`: what both kinds draw - its title, its ways back, its file,
+    its doubts, and once saved its « Règlement » with the messages said
+    there."""
+    saved = document.pk is not None
+    if not saved:
+        title = "Nouvelle facture de vente"
+    elif document.reference:
+        title = f"Facture de vente n° {document.reference}"
+    else:
+        title = f"Facture de vente du {document.sold_on:%d/%m/%Y}"
+    here = (
+        reverse("recipes:sale_document_update", args=[document.pk])
+        if saved
+        else reverse("recipes:sale_document_create")
+    )
+    stored = document.source_file.name if saved and document.source_file else ""
+    extension = PurePosixPath(stored).suffix.lower()
+    doubts = []
+    if saved:
+        doubts = counted_twice(document)
+        no_final = deposit_doubts([document]).get(document.pk)
+        if no_final:
+            doubts.append(no_final)
+    here_url = f"{here}{kept_query(request)}"
+    top_messages, payment_messages = _messages_by_place(request, saved)
+    return render(
+        request,
+        "recipes/sale_document_form.html",
+        {
+            "document": document,
+            "saved": saved,
+            # A page drawn in answer to a POST holds what was typed and not
+            # saved (a successful save always redirects): its form says so,
+            # and sale_document.js asks before any form leaves it.
+            "unsaved": request.method == "POST",
+            "page_title": title,
+            "back_url": _tab_url(request),
+            "here_url": here_url,
+            JETON: secrets.token_urlsafe(16),
+            "file_url": reverse("recipes:sale_document_file", args=[document.pk]) if stored else "",
+            "file_name": PurePosixPath(stored).name,
+            "file_framed": extension in FRAMED,
+            "file_drawn": extension in DRAWN,
+            "download_param": DOWNLOAD_PARAM,
+            "delete_url": f"{reverse('recipes:sale_document_delete', args=[document.pk])}{kept_query(request)}"
+            if saved
+            else "",
+            "delete_question": DELETE_QUESTION.format(label=document.label) if saved else "",
+            "leave_warning": LEAVE_WARNING,
+            "doubts": doubts,
+            "kind_label": document.kind_label if saved else "",
+            "payments": _payments(request, document, lines, here, here_url) if saved else None,
+            "save_before_payments": SAVE_BEFORE_PAYMENTS,
+            "no_credit_proposed": NO_CREDIT_PROPOSED,
+            "top_messages": top_messages,
+            "payment_messages": payment_messages,
+            **context,
+        },
+    )
+
+
+def _messages_by_place(request, saved: bool) -> tuple[list, list]:
+    """(the page's messages said at the top, those said in « Règlement »)
+    - the latter tagged PAYMENTS by Banque's action its forms post to
+    (bank.views.SALE_MESSAGE_PLACES), said where their redirect lands
+    (`#reglements`). Read once, which also marks them said."""
+    top, payments = [], []
+    for message in get_messages(request):
+        tags = (message.extra_tags or "").split()
+        (payments if saved and PAYMENTS in tags else top).append(message)
+    return top, payments
+
+
+def _payments(request, document, lines, here: str, here_url: str) -> dict:
+    """« Règlement » (spec §5.5): what the bank has paid of `document` -
+    the allocation's state, for whoever opens the page - and, with
+    « Banque » (`access_of`: hiding a form is never the boundary, Banque's
+    action is), the credits paying it with their shares, those that could
+    (sale_reconcile.credits_for) and the credit search (`entree`, ignored
+    without it). Every form posts to Banque's `bank_line_action`, coming
+    back here (`#reglements`)."""
+    allocation = read_links()
+    payments = payment_context(document, allocation, access_of(request), lines)
+    if not payments["sees_bank"]:
+        return payments
+    # here: bank reads this module
+    from bank import sale_reconcile
+
+    action = url_for_each("bank:bank_line_action")
+    payments["links"] = [{"link": link, "action": action(link.fact.credit_pk)} for link in payments["links"]]
+    # One form per option `credits_for` keeps (each holds this document),
+    # each naming every invoice it posts with what it still asks: a sum's
+    # reason names none, and posting the first option alone linked an
+    # invoice the page never showed and left the other sums out of reach.
+    payments["proposals"] = [
+        {
+            "offer": offer,
+            "action": action(offer.line.pk),
+            "options": [list(option) for option in offer.match.options],
+        }
+        for offer in sale_reconcile.credits_for(document, allocation)
+    ]
+    query = request.GET.get(CREDIT_SEARCH, "").strip()
+    payments["query"] = query
+    payments["search_action"] = f"{here}#{PAYMENTS}"
+    payments["kept_fields"] = kept_fields(request)
+    payments["back"] = f"{here_url}#{PAYMENTS}"
+    if query:
+        found, more = sale_reconcile.credits_found_for(document, query, allocation)
+        payments["found"] = [{"found": one, "action": action(one.line.pk)} for one in found]
+        payments["more_found"] = more
+    return payments
+
+
+def _totals(document, lines) -> dict:
+    """What the page says of a document's money: its lines' total, the total
+    it states, what its lines miss of it (spec §2.2), what was already paid
+    and what is left to pay."""
+    lines_ttc = SaleDocument.lines_ttc_of(lines)
+    rest = ""
+    if not document.is_einvoice and document.lines_differ_of(lines):
+        gap = document.stated_total_ttc - lines_ttc
+        sentence = REST_FREE if gap > 0 else REST_DISCOUNT
+        rest = sentence.format(amount=format_money(abs(gap)))
+    return {
+        "lines": lines_ttc,
+        "stated": document.stated_total_ttc,
+        "rest": rest,
+        "prepaid": document.prepaid_ttc,
+        "to_pay": document.to_pay_of(lines),
+    }
+
+
+def _facts(document, lines, kept: str = "") -> list[dict]:
+    """« Ce que dit la facture »: an electronic invoice's own figures,
+    printed - never typed (spec §5.3). `kept` is the tab's parameters
+    (`kept_query`), which the corrected invoice's address carries like every
+    other address of the tab."""
+
+    def euros(value) -> str:
+        return f"{format_money(value)} €"
+
+    facts = [
+        {"label": "Numéro", "value": document.reference or "sans numéro"},
+        {
+            "label": "Date de la facture",
+            "value": f"{document.einvoice_issued_on:%d/%m/%Y}" if document.einvoice_issued_on else "—",
+        },
+    ]
+    if document.einvoice_delivered_on:
+        facts.append({"label": "Livraison", "value": f"{document.einvoice_delivered_on:%d/%m/%Y}"})
+    customer = document.customer or "—"
+    if document.customer_identifier:
+        customer = f"{customer} ({document.customer_identifier})"
+    facts.append({"label": "Client", "value": customer})
+    seller = document.seller_name or "—"
+    if document.seller_siren:
+        seller = f"{seller} (SIREN {siren_text(document.seller_siren)})"
+    facts.append({"label": "Vendeur", "value": seller})
+    facts.append({"label": "Type", "value": document.kind_label_of(document.total_ttc_of(lines))})
+    if document.einvoice_preceding_number:
+        corrected = (
+            SaleDocument.objects.filter(reference__iexact=document.einvoice_preceding_number)
+            .exclude(pk=document.pk)
+            .order_by("-sold_on", "-pk")
+            .first()
+        )
+        facts.append(
+            {
+                "label": "Facture corrigée",
+                "value": document.einvoice_preceding_number,
+                "url": f"{reverse('recipes:sale_document_update', args=[corrected.pk])}{kept}" if corrected else "",
+            }
+        )
+    if document.stated_total_ht is not None:
+        facts.append({"label": "Total HT", "value": euros(document.stated_total_ht)})
+        if document.stated_total_ttc is not None:
+            facts.append({"label": "TVA", "value": euros(document.stated_total_ttc - document.stated_total_ht)})
+    if document.stated_total_ttc is not None:
+        facts.append({"label": "Total TTC", "value": euros(document.stated_total_ttc)})
+    if document.prepaid_ttc is not None:
+        facts.append({"label": "Déjà réglé", "value": euros(document.prepaid_ttc)})
+    if document.payable_ttc is not None:
+        facts.append({"label": "Reste à payer", "value": euros(document.payable_ttc)})
+    if document.adjustment_ht:
+        rate = (
+            f" (TVA {plain_number(document.adjustment_vat_rate * 100)} %)"
+            if document.adjustment_vat_rate is not None
+            else ""
+        )
+        facts.append({"label": "Frais et remises", "value": f"{euros(document.adjustment_ht)} HT{rate}"})
+    return facts
+
+
+def sale_document_read(request):
+    """« Lire la facture », the « Ventes » tab's card: the bar's electronic
+    invoice read and created at once, with its lines, its file and how it
+    counts as chosen on the card (recipes/sale_files.read_einvoice_upload) -
+    then its page, where its lines are tied. Refused, back to the card with
+    the reason, as it is: einvoice's own sentences included (a UTF-16 file, a
+    DOCTYPE, no EN 16931 invoice), anything else a fixed sentence and the
+    detail to the log - never a library's words (CLAUDE.md « What a page may
+    say about an error »). A date the person typed that was refused comes
+    back in the card's box, and the « Compte » chosen with it."""
     if request.method != "POST":
-        return redirect(sales_list_url(request))
-    document = get_object_or_404(SaleDocument, pk=pk)
-    label = str(document)
-    document.delete()
-    messages.success(request, f"{label} supprimée.")
-    return redirect(sales_list_url(request))
+        return redirect(_tab_url(request))
+    token, digest, made = _made(request)
+    if made is not None:
+        messages.info(request, ALREADY_SAVED_CREATE)
+        return redirect(_document_url(request, made))
+    try:
+        outcome = read_einvoice_upload(
+            request.FILES.get("fichier"),
+            typed_date_text=request.POST.get("date", ""),
+            counting=request.POST.get("compte", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - said in the card, never a 500 (the detail is logged)
+        said = error_for_page(
+            exc, said=(EInvoiceError, SaleFileRefused), log=logger, what="Lecture d'une facture de vente électronique"
+        )
+        messages.error(request, said, extra_tags=SALE_CARD)
+        typed = getattr(exc, "typed_date", None)
+        # « Compte » given back with the date (the default needs no word):
+        # drawn again on its default, a « Déjà comptée par la caisse »
+        # refused was counted by the next file sent without a second look.
+        counting = request.POST.get("compte", "")
+        if counting not in SaleDocument.Counting.values or counting == SaleDocument.Counting.COUNTED:
+            counting = ""
+        return redirect(_tab_url(request, date=typed.isoformat() if typed else "", compte=counting))
+    _remember(request, token, digest, outcome.document)
+    _say_read(request, outcome)
+    return redirect(_document_url(request, outcome.document.pk))
+
+
+def _say_read(request, outcome) -> None:
+    """What « Lire la facture » made, said on the document's page (spec §3.7)."""
+    document = outcome.document
+    messages.success(
+        request,
+        READ_DONE.format(
+            kind=document.einvoice_format,
+            number=f"n° {document.reference}" if document.reference else "sans numéro",
+            day=f"{document.sold_on:%d/%m/%Y}",
+            customer=f" (client « {document.customer} »)" if document.customer else "",
+        ),
+    )
+    if outcome.date_said:
+        messages.info(request, outcome.date_said)
+    for said in outcome.said:
+        messages.add_message(request, messages.WARNING if said.level == "warning" else messages.INFO, said.text)
+    if outcome.proposals:
+        messages.info(
+            request,
+            f"{_plural(outcome.proposals, 'ligne proposée', 'lignes proposées')} : vérifiez-"
+            f"{'les' if outcome.proposals > 1 else 'la'} avant d'enregistrer.",
+        )
+    if outcome.failed_checks:
+        messages.warning(request, CHECKS_FAILED)
+    _say_bank_pass(request, outcome)
+
+
+def _say_bank_pass(request, outcome, tags: str = "") -> None:
+    """What the bank's automatic pass did once a document was read or saved
+    (`linked`, `bank_failed`, spec §3.7), worded from who reads it: with
+    « Banque » the credit's day and amount; without, that a credit of
+    « Banque » pays it - no date, no amount, no payer. A failure is said:
+    the document is saved, Banque's « Rapprocher automatiquement » runs it
+    again."""
+    if outcome.linked:
+        if access_of(request).allows("bank"):
+            for line in outcome.linked:
+                messages.success(
+                    request,
+                    LINKED_TO_CREDIT.format(day=f"{line.operation_date:%d/%m/%Y}", amount=format_money(line.amount)),
+                    extra_tags=tags,
+                )
+        else:
+            messages.success(request, LINKED_WITHOUT_DETAIL, extra_tags=tags)
+    if outcome.bank_failed:
+        messages.warning(request, BANK_PASS_FAILED, extra_tags=tags)
+
+
+@require_safe
+@xframe_options_sameorigin
+def sale_document_file(request, pk):
+    """A sale document's own file, under its download name
+    (invoices/filenames.py::sale_download_name): a PDF or a photo inline -
+    the document's page frames it -, anything else a sandboxed download
+    (accounts.views.file_response), `?telecharger=1` to save. Pages link
+    here, never to `source_file.url`. Only a file under `ventes/`: a row
+    naming another folder (an older archive, a hand edit) would give a
+    purchase's PDF to an employee given « Recettes & ventes » through this
+    route."""
+    document = get_object_or_404(SaleDocument.objects.prefetch_related("lines__recipe"), pk=pk)
+    name = document.source_file.name if document.source_file else ""
+    # Judged on the name resolved, as /fichiers/ judges it
+    # (accounts.access.areas_of_file): « ventes/../invoices/… » stays inside
+    # the media folder, so open_stored alone would serve a purchase's file.
+    if not posixpath.normpath(name.replace("\\", "/")).startswith(SALE_FILES_FOLDER):
+        raise Http404
+    handle = open_stored(name)
+    if handle is None:
+        raise Http404
+    return file_response(handle, sale_download_name(document), download=request.GET.get(DOWNLOAD_PARAM) == "1")
+
+
+def sale_document_delete(request, pk):
+    """A sale document deleted - its lines, its file once that commits, its
+    bank links (the credits stay on Banque): recipes/sale_files.py. A
+    document gone already (a double tap, another tab) is said, never a 404
+    (CLAUDE.md « … n'existe plus. »)."""
+    if request.method != "POST":
+        return redirect(_tab_url(request))
+    document = SaleDocument.objects.filter(pk=pk).first()
+    deleted = delete_document(document) if document is not None else None
+    if deleted is None:
+        messages.info(request, DOCUMENT_GONE, extra_tags=SALE_CARD)
+        return redirect(_tab_url(request))
+    said = [f"{deleted.label} supprimée."]
+    if deleted.had_file:
+        said.append(FILE_DELETED_TOO)
+    if deleted.links:
+        detached = _plural(deleted.links, "règlement bancaire détaché", "règlements bancaires détachés")
+        said.append(f"{detached} : les entrées restent sur Banque.")
+    messages.success(request, " ".join(said), extra_tags=SALE_CARD)
+    return redirect(_tab_url(request))

@@ -104,7 +104,11 @@ class SalesTabTests(TestCase):
 
         response = self.client.get(reverse("recipes:sales_list"))
 
-        self.assertContains(response, f'<td class="num">2{NBSP}500.00 €</td>')
+        # Its sort key is the figure itself, never grouped; its label is the
+        # column's header (a card on a phone).
+        self.assertContains(
+            response, f'<td class="num" data-label="Total TTC" data-sort="2500.00">2{NBSP}500.00 €</td>'
+        )
 
     def test_the_import_log_shown_on_the_page_is_grouped(self):
         """The job's log is French read on this page: « Recettes lues »

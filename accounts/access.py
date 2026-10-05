@@ -119,16 +119,22 @@ AREAS = (
         "Les articles achetés et leurs prix, les charges et leurs documents, les produits à classer.",
         "inventory:stock_list",
     ),
+    # Each help says what the area shows that an owner may not want shown -
+    # the sales invoices on both sides (« Factures de vente »): « Recettes &
+    # ventes » sees what each invoice received, never the bank's detail;
+    # « Banque » lists the invoices its credits pay, never their page.
     Area(
         "recipes",
         "Recettes & ventes",
-        "Les recettes avec leur coût et leur marge, la caisse et les ventes.",
+        "Les recettes avec leur coût et leur marge, la caisse et les ventes, et les factures de vente avec leur "
+        "fichier et ce qui en est réglé (sans le détail de la banque).",
         "recipes:recipe_list",
     ),
     Area(
         "bank",
         "Banque",
-        "Les relevés, toutes les opérations du compte, la trésorerie et les fichiers des factures payées.",
+        "Les relevés, toutes les opérations du compte, la trésorerie, les fichiers des factures payées, et la liste "
+        "des factures de vente (numéro, client, montant) pour les rattacher aux entrées.",
         "bank:bank_home",
     ),
     Area("margins", "Marges", "Les marges du bar.", "margins:margins_home"),
@@ -298,13 +304,16 @@ VIEW_AREAS = {
 }
 
 #: A stored file's areas, by the top folder its model files it under
-#: (invoices.models, returnables.models): an employee given Consignes sees
-#: a pickup's photos, never an invoice's PDF. A folder named nowhere is the
-#: owner's.
+#: (invoices.models, returnables.models, recipes.models): an employee given
+#: Consignes sees a pickup's photos, never an invoice's PDF; one given
+#: « Recettes & ventes » the sales invoices' files (`ventes/`,
+#: recipes.models.SALE_FILES_FOLDER), never a purchase's. A folder named
+#: nowhere is the owner's.
 MEDIA_AREAS = {
     "invoices": frozenset({"invoices"}),
     "receipts": frozenset({"invoices"}),
     "consignes": frozenset({"returnables"}),
+    "ventes": frozenset({"recipes"}),
 }
 
 

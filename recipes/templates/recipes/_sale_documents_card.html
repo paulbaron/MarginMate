@@ -1,0 +1,131 @@
+{% load assets %}
+{% comment %}
+« Factures de vente » on « Recettes & ventes · Ventes » (recipes/menu.py::_sales,
+recipes/sale_documents.py::listed): the read card, the search, the list.
+
+« Lire la facture » creates the document at once from the bar's electronic
+invoice (recipes/views.py::sale_document_read), with how it counts chosen
+HERE, before the document exists: ten invoices documenting tabs already rung
+on the till must never count in the meantime. « + Facture de vente » types
+one, with any plain file. The card's messages are said in it (`card_messages`:
+where its actions land, #factures-vente).
+
+The search asks the database (`facture`, and « tout afficher »: `factures`):
+the list draws its most recent only, and a box filtering what is drawn could
+not find an older one - so the table is sort-only. Every address here is
+built by the view with the tab's parameters (`kept_query`), and the GET form
+carries the others as hidden fields.
+
+« Règlement » says what the bank has paid of each invoice
+(recipes/sale_payments.py: the amounts the allocation gives IT) - never a bank
+date, a payer or another invoice's money: « Recettes & ventes » alone sees this
+much of the bank, and no more.
+
+On a phone each row is a card: the date its title, every other cell under its
+header's words (data-label); the actions across its foot.
+{% endcomment %}
+<div class="card" id="{{ sale_card }}">
+    <div class="section-head">
+        <div>
+            <h3>Factures de vente</h3>
+            <p class="muted">Ventes hors caisse et factures émises : leur fichier, leurs lignes, leur règlement.</p>
+        </div>
+        <a class="btn btn-secondary" href="{{ create_url }}">+ Facture de vente</a>
+    </div>
+    {% if card_messages %}
+        <ul class="messages">
+            {% for message in card_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data" action="{{ read_url }}" class="inline-form sale-einvoice-form">
+        {% csrf_token %}
+        <input type="hidden" name="jeton" value="{{ jeton }}">
+        <label class="stacked-label"><span class="muted">Facture électronique (Factur-X, CII ou UBL)</span><input type="file" name="fichier" accept="{{ einvoice_accept }}" required></label>
+        <fieldset class="sale-counting">
+            <legend class="muted">Compte</legend>
+            {% for choice in counting_choices %}
+                <label class="sale-counting-choice"><input type="radio" name="compte" value="{{ choice.value }}" required{% if choice.checked %} checked{% endif %}> {{ choice.label }}<span class="muted small counting-help">{{ choice.help }}</span></label>
+            {% endfor %}
+        </fieldset>
+        <label class="stacked-label"><span class="muted">Date, si la facture n'en donne pas</span><input type="date" name="date" min="2000-01-01" max="{{ today }}" value="{{ read_date }}"></label>
+        <button class="btn" type="submit" data-busy-label="Lecture…">Lire la facture</button>
+    </form>
+    <p class="muted small">Ses lignes, son client et ses totaux sont repris tels quels. Un PDF ordinaire, une photo : « + Facture de vente ».</p>
+
+    <form method="get" class="search-row">
+        {% for name, value in document_search_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <span class="table-search">
+            <input type="search" name="facture" value="{{ document_query }}" autocomplete="off"
+                   placeholder="Numéro, client, date (12/07/2026), montant…" aria-label="Rechercher une facture de vente">
+        </span>
+        <button class="btn btn-small btn-secondary" type="submit">Rechercher</button>
+        {% if document_query %}<a class="btn btn-small btn-secondary" href="{% querystring facture=None %}">Effacer la recherche</a>{% endif %}
+    </form>
+    {% comment %}
+    The count is the window's and the search's own, taken before the list is
+    cut down to its most recent: « 3 factures » above a list of none is how a
+    reader concludes the page is broken rather than the period empty.
+    {% endcomment %}
+    {% if date_window %}
+        <p class="muted date-range-note">
+            {{ date_window_label }} : {{ documents_found }} facture{{ documents_found|pluralize }} de vente{% if document_query %} pour « {{ document_query }} »{% endif %}
+            (période choisie dans « Dernières ventes »).
+        </p>
+    {% elif document_query %}
+        <p class="muted">{{ documents_found }} facture{{ documents_found|pluralize }} de vente pour « {{ document_query }} ».</p>
+    {% endif %}
+    {% if documents_hidden %}
+        <p class="muted">
+            Les {{ documents_page_size }} plus récentes. {{ documents_hidden }} de plus :
+            <a href="{% querystring factures='toutes' %}">tout afficher</a>.
+        </p>
+    {% endif %}
+    {% if documents %}
+    <div class="table-wrap">
+    <table class="sub-table phone-cards" data-table data-table-sort-only data-table-label="factures de vente">
+        <thead>
+            <tr><th>Date</th><th>Facture</th><th>Lignes</th><th class="num">Total TTC</th><th>Règlement</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for document in documents %}
+            <tr>
+                <td data-sort="{{ document.sold_on|date:'Y-m-d' }}">{{ document.sold_on|date:"d/m/Y" }}</td>
+                <td data-label="Facture">
+                    <a href="{{ document.url }}">{% if document.reference %}n° {{ document.reference }}{% else %}sans numéro{% endif %}</a>
+                    {% if document.customer %}<br>{{ document.customer }}{% endif %}
+                    {% if document.note %}<br><span class="muted small">{{ document.note }}</span>{% endif %}
+                    <span class="sale-document-pills">
+                        {% if document.einvoice_format %}<span class="status-pill status-IMPORTED">Facture électronique</span>{% endif %}
+                        {% if document.kind == "Avoir" %}<span class="status-pill status-NEEDS_REVIEW">Avoir</span>{% endif %}
+                        {% if document.counting == "till" %}<span class="status-pill status-ignored">Déjà comptée par la caisse</span>{% elif document.counting == "deposit" %}<span class="status-pill status-ignored">Acompte</span>{% endif %}
+                        {% if document.doubt %}<span class="status-pill status-NEEDS_REVIEW" title="{{ document.doubt }}">{{ no_final_invoice }}</span>{% endif %}
+                        {% if document.file_url %}<a class="status-pill status-linked" href="{{ document.file_url }}" target="_blank" rel="noopener">Fichier</a>{% endif %}
+                    </span>
+                </td>
+                <td class="muted small" data-label="Lignes">
+                    {% for line in document.named_lines %}
+                        {{ line.quantity|quantity }} × {{ line.shown_name }}{% if line.is_tied and line.label and line.label != line.source_name %} → {% if line.recipe_id %}recette{% else %}article{% endif %} {{ line.source_name }}{% endif %}{% if not forloop.last %}<br>{% endif %}
+                    {% endfor %}
+                    {% if document.more_lines %}<br>… et {{ document.more_lines }} autre{{ document.more_lines|pluralize }}{% endif %}
+                </td>
+                <td class="num" data-label="Total TTC" data-sort="{{ document.total|stringformat:'s' }}">{{ document.total|money }} €</td>
+                <td data-label="Règlement">
+                    {% if document.payment.css %}<span class="status-pill {{ document.payment.css }}">{{ document.payment.pill }}</span>{% else %}<span class="muted">{{ document.payment.pill }}</span>{% endif %}
+                    {% if document.payment.received %}<br><span class="muted small">{{ document.payment.paid|money }} € reçus</span>{% endif %}
+                </td>
+                <td class="row-actions">
+                    <a class="btn btn-small btn-secondary" href="{{ document.url }}">Ouvrir</a>
+                    <form method="post" action="{{ document.delete_url }}" data-confirm="{{ document.delete_question }}">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-small btn-secondary">Supprimer</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+        <div class="empty-state">{% if date_window %}Aucune facture de vente sur cette période.{% elif document_query %}Aucune facture de vente pour cette recherche.{% else %}Aucune facture de vente.{% endif %}</div>
+    {% endif %}
+</div>

@@ -130,6 +130,37 @@ class EInvoiceFacts:
     # 1 175,00 € invoice that is 14,50 € the bank will debit and the invoice
     # will not show, with every check green.
     adjustment_vat_rate: Decimal | None = None
+    # Everything below is read for the sales side (recipes/sale_einvoice.py),
+    # and nothing else in invoices/ reads it but Achats' guard (the seller's
+    # numbers) - every one defaulted, so a caller building facts without them
+    # is unchanged.
+    # BT-30 / BT-31, as stated (cut to 40): the seller's legal and VAT numbers.
+    # Read by the sales side and by Achats' guard against the bar's own sales
+    # invoices (receipts.own_sales_invoice), both through einvoice.party_siren;
+    # the supplier is still named through source_text and
+    # invoices/identifiers.py, nowhere else.
+    seller_siren: str = ""
+    seller_vat: str = ""
+    # BT-44 / BT-47 / BT-48: the BUYER - on a sales invoice, the bar's customer.
+    # Never written into source_text: on a purchase it is the bar itself, the
+    # one company number that must name nobody (CLAUDE.md « The seller is named
+    # through invoices/identifiers.py »).
+    buyer_name: str = ""
+    buyer_siren: str = ""
+    buyer_vat: str = ""
+    # BT-109, BT-113, BT-114, BT-115 exactly as stated, signed like everything
+    # else (a credit note's are negative), unrounded: the sales side rounds and
+    # bounds them to its own columns. Achats keeps saying them in source_text.
+    taxable_total: Decimal | None = None
+    prepaid: Decimal | None = None
+    rounding: Decimal | None = None
+    payable: Decimal | None = None
+    # BT-25 (the invoice a credit note corrects, cut to 100), BT-72 (the
+    # delivery date) and BG-14's start (the billing period): read for the
+    # sales side, never checked - an unreadable date is None.
+    preceding_number: str = ""
+    delivered: date | None = None
+    period_start: date | None = None
 
 
 @dataclass

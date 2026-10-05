@@ -48,6 +48,8 @@ from tests.factories import (
     make_product,
     make_purchase_history,
     make_recipe,
+    make_sale_document,
+    make_sale_line,
     make_stock_take,
     make_stock_take_line,
     make_stock_type,
@@ -1336,6 +1338,188 @@ class EmptyDatabasePageSmokeTests(TestCase):
         self.assertEqual(self.client.get(reverse("bank:invoice_search", args=[999999])).status_code, 404)
 
 
+class SaleDocumentSmokeTests(TestCase):
+    """« Factures de vente » (recipes/views.py): every route of a sale
+    document - the typed form, new and saved; an electronic invoice's page
+    on every kind of document (a free line, a credit note, a line rebuilt
+    from a VAT table, a check failing); the file; the read card's and the
+    deletion's POST-only routes - and the « Ventes » tab listing them all.
+    Invented data."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from recipes.models import SaleDocument
+
+        cocktail = make_recipe(name="Formule cocktail exemple", selling_price_ttc="9.00")
+        keg = make_stock_type(name="Fût exemple", unit=UnitChoices.LITRE)
+        cls.typed = make_sale_document(reference="FV-SMOKE-1", customer="Mariage Exemple", note="Salle du haut")
+        make_sale_line(cls.typed, recipe=cocktail, quantity="30")
+        make_sale_line(cls.typed, stock_type=keg, quantity="1", unit_price_ttc="150", consumed_quantity="30")
+        make_sale_line(cls.typed, label="Location de salle", unit_price_ttc="200")
+        failed = [{"label": "Total de la facture électronique", "passed": False, "detail": "écart 0,02 €"}]
+        cls.einvoice = make_sale_document(
+            reference="FV-SMOKE-2",
+            sold_on=date(2026, 9, 3),
+            customer="Exemple Événements SARL",
+            customer_identifier="700000003",
+            counting=SaleDocument.Counting.TILL,
+            stated_total_ttc="230.52",
+            stated_total_ht="194.20",
+            einvoice_format="Factur-X",
+            einvoice_type_code="380",
+            einvoice_issued_on=date(2026, 9, 3),
+            einvoice_delivered_on=date(2026, 8, 31),
+            einvoice_checks=failed,
+            seller_name="Bar des tests",
+            seller_siren="800000002",
+        )
+        make_sale_line(cls.einvoice, label="Formule cocktail", quantity="2", total_ht="169.00", vat_rate="0.20")
+        make_sale_line(cls.einvoice, label="Planche", quantity="6", total_ht="25.20", vat_rate="0.10", recipe=cocktail)
+        cls.credit_note = make_sale_document(
+            reference="AV-SMOKE-3",
+            stated_total_ttc="-24.00",
+            einvoice_format="CII",
+            einvoice_type_code="381",
+            einvoice_preceding_number="FV-SMOKE-2",
+            prepaid_ttc="-4.00",
+        )
+        make_sale_line(cls.credit_note, label="Formule cocktail", quantity="-1", total_ht="-20.00", vat_rate="0.20")
+        cls.rebuilt = make_sale_document(
+            reference="FV-SMOKE-4",
+            stated_total_ttc="120.00",
+            einvoice_format="CII",
+            einvoice_type_code="386",
+            counting=SaleDocument.Counting.DEPOSIT,
+        )
+        make_sale_line(
+            cls.rebuilt,
+            label="Total au taux de 20,00 % (facture sans lignes)",
+            quantity="1",
+            total_ht="100.00",
+            vat_rate="0.20",
+            rebuilt=True,
+        )
+        cls.total_only = make_sale_document(reference="", stated_total_ttc="80.00", prepaid_ttc="30.00")
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+
+        self.with_file = make_sale_document(reference="FV-SMOKE-5", stated_total_ttc="10.00")
+        self.with_file.source_file.save("vente-exemple.pdf", ContentFile(b"%PDF-1.4 vente"), save=True)
+        self.addCleanup(self.with_file.source_file.storage.delete, self.with_file.source_file.name)
+
+    def assertPageOK(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, url)
+        assertNoUnrenderedTemplateSyntax(self, response, url)
+        return response
+
+    def documents(self):
+        return (self.typed, self.einvoice, self.credit_note, self.rebuilt, self.total_only, self.with_file)
+
+    def test_the_typed_form(self):
+        self.assertPageOK(reverse("recipes:sale_document_create"))
+        self.assertPageOK(f"{reverse('recipes:sale_document_create')}?du=2026-02-01&facture=mariage")
+
+    def test_every_kind_of_document(self):
+        for document in self.documents():
+            with self.subTest(reference=document.reference):
+                self.assertPageOK(reverse("recipes:sale_document_update", args=[document.pk]))
+
+    def test_the_file(self):
+        url = reverse("recipes:sale_document_file", args=[self.with_file.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b"".join(response.streaming_content), b"%PDF-1.4 vente")
+        response.close()
+        self.assertEqual(self.client.get(reverse("recipes:sale_document_file", args=[self.typed.pk])).status_code, 404)
+
+    def test_the_post_only_routes_redirect_on_get(self):
+        for url in (
+            reverse("recipes:sale_document_read"),
+            reverse("recipes:sale_document_delete", args=[self.typed.pk]),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 302)
+
+    def test_the_tab_lists_every_kind(self):
+        response = self.assertPageOK(reverse("recipes:sales_list"))
+        for document in self.documents():
+            with self.subTest(reference=document.reference):
+                self.assertContains(response, reverse("recipes:sale_document_update", args=[document.pk]))
+        for query in ({"facture": "mariage"}, {"factures": "toutes"}, {"facture": "2026", "du": "2026-09-01"}):
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get(reverse("recipes:sales_list"), query).status_code, 200)
+
+    def credits(self):
+        """A credit paying the typed document and the e-invoice, one paying
+        the credit note's invoice in part, one paying nothing - every shape
+        « Règlement » and Banque draw."""
+        from recipes.models import SaleDocumentPayment
+
+        def credit(number, day, amount, counterparty="EXEMPLE EVENEMENTS SARL", **fields):
+            return BankTransaction.objects.create(
+                operation_date=day,
+                bank_type="VIREMENT",
+                kind=BankTransaction.Kind.TRANSFER,
+                label=f"VIR SEPA RECU /FRM {counterparty} /REF {number}",
+                counterparty=counterparty,
+                amount=Decimal(amount),
+                fingerprint=f"smoke-vente-{number}",
+                **fields,
+            )
+
+        both = credit(1, date(2026, 9, 10), "500.00")
+        for document in (self.typed, self.einvoice):
+            SaleDocumentPayment.objects.create(document=document, transaction=both, method="AUTO")
+        part = credit(2, date(2026, 9, 12), "60.00", settled_by_hand=True)
+        SaleDocumentPayment.objects.create(document=self.rebuilt, transaction=part, method="MANUAL")
+        credit(3, date(2026, 9, 14), "230.52")
+        credit(4, date(2026, 9, 15), "80.00", income_source="credit")
+        return both
+
+    def test_every_page_with_its_payments(self):
+        self.credits()
+        for document in self.documents():
+            with self.subTest(reference=document.reference):
+                url = reverse("recipes:sale_document_update", args=[document.pk])
+                self.assertPageOK(url)
+                self.assertPageOK(f"{url}?entree=exemple")
+        self.assertPageOK(reverse("recipes:sales_list"))
+
+    def test_banque_s_entries_and_entrees_d_argent_with_sale_links(self):
+        both = self.credits()
+        for params in ({"vue": "entrees"}, {"vue": "entrees", "rattacher": str(both.pk)}):
+            with self.subTest(params=params):
+                response = self.client.get(reverse("bank:bank_home"), params)
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"Banque {params}")
+        response = self.client.get(reverse("bank:bank_home"), {"vue": "entrees", "ligne": both.pk, "recherche": "FV"})
+        self.assertContains(response, "FV-SMOKE-1")
+        response = self.client.get(reverse("bank:income_home"), {"tout": "1"})
+        self.assertEqual(response.status_code, 200)
+        assertNoUnrenderedTemplateSyntax(self, response, "Entrées d'argent")
+        self.assertContains(response, "Factures de vente")
+
+    def test_banque_s_search_of_the_sale_documents(self):
+        """A fragment: it answers on a credit, an empty list on a debit or
+        with no words, a 404 on a line that is not there."""
+        credit = BankTransaction.objects.create(
+            operation_date=date(2026, 3, 9),
+            amount=Decimal("80.00"),
+            label="VIR SEPA EXEMPLE",
+            fingerprint="smoke-vente-0",
+        )
+        url = reverse("bank:sale_document_search", args=[credit.pk])
+        for params in ({}, {"recherche": "FV-SMOKE"}, {"recherche": "rien"}):
+            with self.subTest(params=params):
+                response = self.client.get(url, params)
+                self.assertEqual(response.status_code, 200)
+                assertNoUnrenderedTemplateSyntax(self, response, f"la recherche de factures de vente {params}")
+        self.assertContains(self.client.get(url, {"recherche": "FV-SMOKE"}), "FV-SMOKE-1")
+        self.assertEqual(self.client.get(reverse("bank:sale_document_search", args=[999999])).status_code, 404)
+
+
 class RecipeEdgeCaseRenderingTests(TestCase):
     """Recipes whose numbers can't be computed - the pages still have to
     render rather than 500 on a division or a None."""
@@ -1463,7 +1647,7 @@ class DateWindowSmokeTests(TestCase):
         beside = {
             "inventory:stock_list": "inventaire=999999",
             "invoices:invoice_list": "filtre=tickets&q=exemple",
-            "recipes:sales_list": "vente=moscow&ventes=toutes",
+            "recipes:sales_list": "vente=moscow&ventes=toutes&facture=mariage&factures=toutes",
             "bank:bank_home": "vue=toutes&mois=2026-02",
             "bank:spending_home": "tout=1",
             "bank:income_home": "tout=1",

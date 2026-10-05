@@ -241,7 +241,7 @@ class OneSellingDayTests(TestCase):
         self.assertIn("78.0 % de l'encaissé", text_of(stat))
 
     def test_the_cost_of_the_recipes_sold_is_shown_on_its_own(self):
-        self.assertEqual(value_of(stat_of(self.html(), "Coût des recettes vendues (HT)")), "20.00 €")
+        self.assertEqual(value_of(stat_of(self.html(), "Coût de ce qui a été vendu (HT)")), "20.00 €")
 
     def test_the_flagged_articles_say_where_they_went(self):
         html = self.html()
@@ -253,7 +253,7 @@ class OneSellingDayTests(TestCase):
 
     def test_it_says_in_a_sentence_what_the_products_margin_counts(self):
         text = text_of(self.html())
-        self.assertIn("ce que les recettes vendues ont consommé", text)
+        self.assertIn("ce que les recettes et les articles vendus ont consommé", text)
         self.assertIn("plus les achats des articles cochés", text)
 
     def test_the_products_margin_has_no_ttc_because_a_recipe_cost_has_none(self):
@@ -384,9 +384,7 @@ class NothingCostedTests(TestCase):
         self.assertNotIn("36.36", stat)
 
     def test_and_the_page_says_why(self):
-        self.assertContains(
-            self.client.get(reverse(PAGE)), "aucun produit vendu sur cette période n'a de recette chiffrée"
-        )
+        self.assertContains(self.client.get(reverse(PAGE)), "aucun produit vendu sur cette période n'a de coût connu")
 
 
 class CostRangeTests(TestCase):
@@ -939,7 +937,7 @@ class RefundOnlyWindowTests(TestCase):
 
 
 class TheCostNoteTests(TestCase):
-    """« Coût des recettes vendues » counts the servings sold off the till
+    """« Coût de ce qui a été vendu » counts the servings sold off the till
     too, and `costed_units` does not - so the note under it divided the cost
     by a tenth of the servings it was made of."""
 
@@ -957,14 +955,14 @@ class TheCostNoteTests(TestCase):
         document = SaleDocument.objects.create(sold_on=self.day, reference="Événement")
         SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity="40")
 
-        stat = stat_of(self.client.get(reverse(PAGE)).content.decode(), "Coût des recettes vendues (HT)")
+        stat = stat_of(self.client.get(reverse(PAGE)).content.decode(), "Coût de ce qui a été vendu (HT)")
 
         self.assertEqual(value_of(stat), "50.00 €")
         self.assertIn("10 unités de caisse", text_of(stat))
         self.assertIn("40 hors caisse", text_of(stat))
 
     def test_with_no_sale_document_only_the_till_is_named(self):
-        stat = stat_of(self.client.get(reverse(PAGE)).content.decode(), "Coût des recettes vendues (HT)")
+        stat = stat_of(self.client.get(reverse(PAGE)).content.decode(), "Coût de ce qui a été vendu (HT)")
 
         self.assertIn("10 unités de caisse", text_of(stat))
         self.assertNotIn("hors caisse", text_of(stat))

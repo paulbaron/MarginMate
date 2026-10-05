@@ -235,7 +235,8 @@ class PickerTests(FakeSectionsMixin, TestCase):
         returnable types and the UBA slip format - goes with the part that
         holds it now, and is said there, no longer under « Banque » and
         « Consignes ». « Banque » says only what is still its own: the
-        treasury's points and adjustments."""
+        treasury's points and adjustments, and the sales invoices' links its
+        lines take with them - « règlements », a word, never a rule."""
         clear = self.client.get(reverse("transfer:data_clear"))
         self.assertIn(
             "à savoir : les formats et les règles installés d'office partent aussi", row_text(clear, "regles_banque")
@@ -250,7 +251,7 @@ class PickerTests(FakeSectionsMixin, TestCase):
         self.assertIn("à savoir : les points et les ajustements de trésorerie partent aussi", bank)
         for word in ("règle", "format"):
             with self.subTest(word=word):
-                self.assertNotIn(word, bank)
+                self.assertIsNone(re.search(rf"\b{word}s?\b", bank))
 
     def test_the_tick_parameter_pre_ticks_with_what_it_needs(self):
         response = self.client.get(reverse("transfer:data_home") + "?cocher=associations&cocher=inconnu")

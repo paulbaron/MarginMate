@@ -1,6 +1,8 @@
 """The name a document's file is downloaded under (invoices/filenames.py),
 and the route that serves it under that name (`invoices:invoice_file`):
-« Darty 11€55 01_10_2026.pdf », wherever it is saved from."""
+« Darty 11€55 01_10_2026.pdf », wherever it is saved from - a purchase's
+file, and a « facture de vente »'s (« Vente Exemple SARL 1500€00
+05_03_2026.pdf », `named_download`, the one shape of both)."""
 
 from datetime import date
 from decimal import Decimal
@@ -10,7 +12,15 @@ from django.core.files.base import ContentFile
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
-from invoices.filenames import UniqueNames, amount_words, clean, download_name
+from invoices.filenames import (
+    SALE_CUSTOMER_CHARS,
+    UniqueNames,
+    amount_words,
+    clean,
+    download_name,
+    named_download,
+    sale_download_name,
+)
 from tests.factories import make_invoice, make_invoice_line, make_supplier
 
 
@@ -54,6 +64,60 @@ class DownloadNameTests(SimpleTestCase):
 
     def test_a_supplier_whose_name_is_nothing_but_forbidden_characters(self):
         self.assertEqual(download_name(document(name="///")), "Fournisseur 11€55 01_10_2026.pdf")
+
+
+class NamedDownloadTests(SimpleTestCase):
+    """The one shape of every door out, whose party is a supplier or a sale."""
+
+    def test_an_invoice_s_name_is_unchanged(self):
+        for shown in (
+            document(),
+            document("Metro", "115.26", date(2026, 8, 25)),
+            document(day=None),
+            document(file_name="invoices/2026/10/IMG_01.JPG"),
+            document(name="Leroy/Merlin"),
+            document(name="///"),
+        ):
+            with self.subTest(name=shown.supplier.name, day=shown.invoice_date):
+                self.assertEqual(
+                    named_download(shown.supplier.name, shown.total_ttc, shown.invoice_date, shown.source_file.name),
+                    download_name(shown),
+                )
+
+
+def sale(customer="Exemple Événements SARL", total="1500.00", day=date(2026, 3, 5), file_name="ventes/2026/03/x.pdf"):
+    """What `sale_download_name` reads of a sale document, without a database."""
+    return SimpleNamespace(
+        customer=customer, total_ttc=Decimal(total), sold_on=day, source_file=SimpleNamespace(name=file_name)
+    )
+
+
+class SaleDownloadNameTests(SimpleTestCase):
+    def test_the_customer_its_total_and_its_day_of_sale(self):
+        self.assertEqual(sale_download_name(sale()), "Vente Exemple Événements SARL 1500€00 05_03_2026.pdf")
+
+    def test_no_customer_is_vente_alone(self):
+        self.assertEqual(sale_download_name(sale(customer="")), "Vente 1500€00 05_03_2026.pdf")
+        self.assertEqual(sale_download_name(sale(customer="///")), "Vente 1500€00 05_03_2026.pdf")
+
+    def test_a_long_customer_is_cut(self):
+        long = "Comité des fêtes du quartier exemple et de ses environs immédiats, association"
+        name = sale_download_name(sale(customer=long))
+        self.assertEqual(name, f"Vente {long[:SALE_CUSTOMER_CHARS].rstrip()} 1500€00 05_03_2026.pdf")
+        self.assertEqual(SALE_CUSTOMER_CHARS, 60)
+
+    def test_a_credit_note_a_photo_and_a_file_with_no_extension(self):
+        self.assertEqual(
+            sale_download_name(sale(total="-120.5")), "Vente Exemple Événements SARL -120€50 05_03_2026.pdf"
+        )
+        self.assertEqual(
+            sale_download_name(sale(file_name="ventes/2026/03/IMG_7.JPEG")),
+            "Vente Exemple Événements SARL 1500€00 05_03_2026.jpeg",
+        )
+        self.assertEqual(
+            sale_download_name(sale(file_name="ventes/2026/03/facture")),
+            "Vente Exemple Événements SARL 1500€00 05_03_2026",
+        )
 
 
 class UniqueNamesTests(SimpleTestCase):

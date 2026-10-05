@@ -222,6 +222,7 @@
                             <td class="num">{% if row.bank is not None %}{{ row.bank_count }}{% else %}—{% endif %}</td>
                             <td class="num" data-sort="{{ row.difference|default_if_none:''|stringformat:'s' }}">
                                 {% if row.difference is not None %}{{ row.difference|money }} €{% else %}—{% endif %}
+                                {% if row.sales_inside %}<span class="read-as">dont {{ row.sales_inside|money }} € de factures de vente hors caisse</span>{% endif %}
                             </td>
                             <td class="num" data-sort="{{ row.commission|default_if_none:''|stringformat:'s' }}">
                                 {% if row.commission is not None %}{{ row.commission|money }} €{% if row.from_amount %}<span class="read-as">hors {{ row.from_amount }} au montant reçu</span>{% endif %}{% elif row.from_amount %}<span class="muted">inconnue</span>{% else %}—{% endif %}
@@ -455,6 +456,7 @@
                                             <button class="btn btn-small" type="submit">Classer</button>
                                         </form>
                                         <span class="read-as">{% if entry.unnamed %}{{ no_category }}{% else %}« {{ entry.category }} »{% endif %}</span>
+                                        {% include "bank/_sale_refs.html" %}
                                     </td>
                                     <td data-sort="{{ entry.how_label }}">{% include "bank/_income_source.html" %}</td>
                                 </tr>
@@ -473,10 +475,12 @@
         {% endif %}
 
         {% comment %}
-        Cash and cheques deposited, « Avoir » and meal vouchers: counted in
-        the comparison above, and listed here so that each one's « En caisse »
-        can be seen and changed - every credit of the window is in exactly
-        one of the three lists.
+        Cash and cheques deposited, « Avoir », meal vouchers and the credits
+        paying a sales invoice (« Facture de vente », compared with nothing):
+        counted in the comparison above, and listed here so that each one's
+        « En caisse » can be seen and changed - every credit of the window is
+        in exactly one of the three lists, each saying the sales invoices it
+        pays whatever it reads as.
         {% endcomment %}
         {% if report.other_means %}
             <h2 id="autres-moyens">Dépôts et autres moyens de paiement</h2>
@@ -501,7 +505,7 @@
                                         <span class="read-as">{{ line.label|truncatechars:90 }}</span>
                                     </td>
                                     <td class="num" data-sort="{{ line.amount|stringformat:'s' }}">{{ line.amount|money }} €</td>
-                                    <td>{{ entry.name }}</td>
+                                    <td>{{ entry.name }}{% include "bank/_sale_refs.html" %}</td>
                                     <td data-sort="{{ entry.how_label }}">{% include "bank/_income_source.html" %}</td>
                                 </tr>
                             {% endwith %}
@@ -581,6 +585,7 @@
                                             {{ entry.how_label }}
                                             <a class="income-change" href="{{ change_url }}{{ entry.line.pk }}#entree-{{ entry.line.pk }}">changer</a>
                                         {% endif %}
+                                        {% include "bank/_sale_refs.html" %}
                                     </td>
                                 </tr>
                             {% endwith %}

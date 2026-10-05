@@ -35,11 +35,13 @@ tightens with the templates:
 * inline scripts (`<script>` with no src, not a JSON island): base.html,
   inventory/stock_list.html, stock_take_detail.html, stock_take_form.html,
   invoices/document_review.html, manual_invoice_form.html, purchases.html,
-  recipes/recipe_detail.html, recipe_form.html, sale_document_form.html;
+  recipes/recipe_detail.html, recipe_form.html (a sale document's page has
+  none since 05/10/2026: static/js/sale_document.js);
 * inline event handlers (`onsubmit="return confirm(…)"`, `onchange`,
   `onclick`) in inventory/stock_list.html, stock_take_detail.html,
   stock_type_form.html, _catalogue.html, _stock_type_movements.html,
-  recipes/recipe_detail.html, _tab_link.html, _tab_sales.html;
+  recipes/recipe_detail.html, _tab_link.html (the sales tab's are
+  `data-confirm`, asked by static/js/ui.js);
 * `style="…"` attributes (75 in the templates, 29/09/2026), a `<style>` block
   (transfer/page.html) and the one htmx inserts for its indicators;
 * 'unsafe-eval': htmx turns a trigger's filter into code with `Function()` -

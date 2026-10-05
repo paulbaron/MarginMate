@@ -1,5 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Recettes & ventes - MarginMate{% endblock %}
+{% comment %}
+The messages of « Factures de vente »'s actions are said in its card, where
+they land (`card_messages`, recipes/menu.py::_said_where); the others here,
+at the top - and every one of them on the tabs that draw no card.
+{% endcomment %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>

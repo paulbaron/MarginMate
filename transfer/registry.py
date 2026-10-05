@@ -198,26 +198,42 @@ INFO: dict[str, SectionInfo] = {
                 ),
             },
             # The treasury's points and adjustments go too: no statement
-            # brings them back (sections/bank.py, TREASURY_CLEAR_NOTE).
+            # brings them back (sections/bank.py, TREASURY_CLEAR_NOTE). And
+            # the lines take the sales invoices' links with them (CASCADE,
+            # counted into « Ventes »' report, bank.SALE_LINKS_NOTE).
             clear_note=(
-                "les points et les ajustements de trésorerie partent aussi ; la sauvegarde prise avant l'effacement "
-                "les ramène"
+                "les points et les ajustements de trésorerie partent aussi, et les règlements des factures de vente "
+                "rattachés aux entrées ; la sauvegarde prise avant l'effacement les ramène"
             ),
         ),
+        # A sale document's bank links name « Banque »'s credits, which
+        # applies before it: recommended, never required - clearing one never
+        # clears the other (sections/sales.py).
         _info(
             "ventes",
             "Ventes",
             Group.DATA,
             80,
             requires=["recettes"],
-            recommends=["liens_ventes"],
+            recommends=["liens_ventes", "banque"],
             description=(
-                "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de "
-                "vente. Les ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, "
-                "moyens de paiement) ne voyagent pas : ils se relisent des exports déjà téléchargés "
-                "(manage.py laddition_backfill_revenue, puis laddition_backfill_payments)."
+                "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, factures de vente "
+                "(bons de vente) avec leurs lignes, leur fichier et les entrées d'argent qui les règlent. Les ventes "
+                "par recette sont recalculées. Les montants de la caisse (recettes du jour, moyens de paiement) ne "
+                "voyagent pas : ils se relisent des exports déjà téléchargés (manage.py laddition_backfill_revenue, "
+                "puis laddition_backfill_payments)."
             ),
-            reasons={"liens_ventes": "Liens recettes ↔ ventes — sinon aucune vente par recette n'est recalculée"},
+            reasons={
+                "liens_ventes": "Liens recettes ↔ ventes — sinon aucune vente par recette n'est recalculée",
+                "banque": (
+                    "Banque — un règlement vers une entrée absente est ignoré ; importées ensemble, les entrées "
+                    "reviennent avec leurs règlements"
+                ),
+            },
+            clear_note=(
+                "les fichiers des factures de vente et leurs règlements bancaires partent aussi ; la sauvegarde prise "
+                "avant l'effacement les ramène"
+            ),
         ),
         _info(
             "inventaires",
@@ -259,9 +275,10 @@ DESCRIPTIONS_TO_CONFIGURE = {
         f"Recherches dans la boîte mail et portails clients : {TO_CONFIGURE}. Un portail importé arrive inactif."
     ),
     "ventes": (
-        "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, bons de vente. Les "
-        "ventes par recette sont recalculées. Les montants de la caisse (recettes du jour, moyens de paiement) ne "
-        f"voyagent pas, et {TILL_TO_CONFIGURE}."
+        "Quantités vendues par produit de la caisse et par jour, ventes saisies à la main, factures de vente (bons "
+        "de vente) avec leurs lignes, leur fichier et les entrées d'argent qui les règlent. Les ventes par recette "
+        "sont recalculées. Les montants de la caisse (recettes du jour, moyens de paiement) ne voyagent pas, et "
+        f"{TILL_TO_CONFIGURE}."
     ),
 }
 

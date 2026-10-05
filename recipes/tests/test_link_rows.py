@@ -192,6 +192,8 @@ class UrlForEachTests(SimpleTestCase):
         "recipes:pos_product_assign",
         "recipes:sales_delete",
         "recipes:sale_document_update",
+        "recipes:sale_document_file",
+        "recipes:sale_document_delete",
     )
     PKS = (0, 1, 7, 42, 1234, 9_876_543_210_123, 10**18)
 

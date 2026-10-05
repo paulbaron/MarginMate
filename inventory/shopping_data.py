@@ -17,7 +17,8 @@ inventory/tests/test_shopping_data.py):
   one sales table is read and the engine never runs - the till
   (`read_till`): the espace's night (`last_complete_day`), the till's
   coverage (`covered_until`), the window's daily recipe sales and
-  sale-document lines, the till's first day (two), and `variance.read_sales`
+  sale-document lines (of the documents that count, by what each line
+  consumed), the till's first day (two), and `variance.read_sales`
   inside one `variation_scope` with every sold recipe's terms filled there,
   so that the attribution and the daily spread cost no query.
 
@@ -296,7 +297,7 @@ def read_till(purchases: Iterable[shopping.PurchaseRow], now: datetime) -> TillR
     `purchases` are `purchase_rows`: they give the attribution its capacity
     (the window's purchases, floored at 0) and its costs, with no query."""
     from recipes import auto_sales, sales_sources
-    from recipes.models import RecipeSale, SaleDocumentLine, variation_scope
+    from recipes.models import RecipeSale, SaleDocument, SaleDocumentLine, line_consumption, variation_scope
 
     from .variance import attribute_sales, read_sales
 
@@ -318,11 +319,20 @@ def read_till(purchases: Iterable[shopping.PurchaseRow], now: datetime) -> TillR
             return None
         until = max(sold_days)
         recipe_rows = [row for row in recipe_rows if row[1] <= until]
-    document_rows = list(
-        SaleDocumentLine.objects.filter(document__sold_on__gt=after, document__sold_on__lte=until)
+    # The lines of the documents that count, tied to a recipe or an article,
+    # by what each consumed: a document « Déjà comptée par la caisse » or
+    # « Acompte », and a line tied to nothing, sold nothing here.
+    document_rows = [
+        (recipe_id, stock_type_id, day, line_consumption(consumed, quantity))
+        for recipe_id, stock_type_id, day, consumed, quantity in SaleDocumentLine.objects.filter(
+            document__counting=SaleDocument.Counting.COUNTED,
+            document__sold_on__gt=after,
+            document__sold_on__lte=until,
+        )
+        .filter(Q(recipe__isnull=False) | Q(stock_type__isnull=False))
         .order_by()
-        .values_list("recipe_id", "stock_type_id", "document__sold_on", "quantity")
-    )
+        .values_list("recipe_id", "stock_type_id", "document__sold_on", "consumed_quantity", "quantity")
+    ]
     if not any(row[2] for row in recipe_rows) and not any(row[3] for row in document_rows):
         return None
 

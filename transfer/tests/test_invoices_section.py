@@ -56,8 +56,8 @@ from tests.factories import (
 from transfer import archive, keys, registry
 from transfer.archive import ArchiveError, ArchiveReader
 from transfer.runner import run_clear, run_import
+from transfer.sections import base, stock_takes
 from transfer.sections import invoices as section
-from transfer.sections import stock_takes
 from transfer.sections.base import Strategy
 from transfer.tests.support import (
     db_fingerprint,
@@ -84,24 +84,27 @@ def store(name: str, data: bytes) -> str:
 
 def media_names() -> set[str]:
     """Every file under the folders an import writes to - « Consignes »'
-    photos and slips included, so MediaMixin removes them after a test too."""
+    photos and slips, and the sales invoices' files, included, so
+    MediaMixin removes them after a test too."""
     root = paths.media_root()
     return {
         path.relative_to(root).as_posix()
-        for folder in ("invoices", "receipts", "consignes")
+        for folder in ("invoices", "receipts", "consignes", "ventes")
         for path in (root / folder).rglob("*")
         if path.is_file()
     }
 
 
 def named_files() -> set[str]:
-    """The files the documents and « Consignes » name - not whatever else
-    other tests left in the shared temp media folder."""
+    """The files the documents, « Consignes » and the sales invoices name -
+    not whatever else other tests left in the shared temp media folder."""
+    from recipes.models import SaleDocument
     from returnables.models import PickupPhoto, Slip
 
     names = {name for pair in Invoice.objects.values_list("source_file", "preview_image") for name in pair if name}
     names |= {name for pair in PickupPhoto.objects.values_list("image", "thumb") for name in pair if name}
     names |= {name for name in Slip.objects.values_list("file", flat=True) if name}
+    names |= {name for name in SaleDocument.objects.values_list("source_file", flat=True) if name}
     return names
 
 
@@ -326,7 +329,7 @@ class GuardTests(MediaMixin, TestCase):
 
     def test_count(self):
         build_invoices()
-        section._SIZES.clear()
+        base._SIZES.clear()
         count = registry.get("factures").count()
         self.assertEqual(
             {name: count[name] for name in ("documents", "lignes", "fichiers")},
@@ -1227,6 +1230,23 @@ class RefusalTests(MediaMixin, TestCase):
             "Facture Eau Essai n° E-2026-07 : nom de fichier refusé (« ../../config/essai.pdf »)", report.skipped
         )
         self.assertFalse(Invoice.objects.filter(invoice_number="E-2026-07").exists())
+
+    def test_a_file_outside_the_invoices_folders_skips_the_document(self):
+        """The archive takes every folder documents live in - « Consignes »'
+        and the sales invoices' too: an invoice's record naming one of their
+        files would take it over."""
+        for name in ("ventes/2026/09/facture-vente-essai.pdf", "consignes/bons/2026/09/bon-essai.pdf"):
+            with self.subTest(name=name):
+
+                def edit(record, name=name):
+                    record["source_file"]["name"] = name
+
+                report = self._import(self._edit("E-2026-07", edit))
+                self.assertIn(
+                    f"Facture Eau Essai n° E-2026-07 : fichier hors des dossiers des factures et des tickets (« {name} »)",
+                    report.skipped,
+                )
+                self.assertFalse(Invoice.objects.filter(invoice_number="E-2026-07").exists())
 
     def test_a_file_the_archive_does_not_declare_skips_the_document(self):
         def edit(record):

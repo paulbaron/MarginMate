@@ -1272,7 +1272,11 @@ class BankHomeTests(Page, TestCase):
         """Payouts, payers retained and credits chosen one by one: the payers
         are one query (`income.known_payers`), whatever their number, and
         every row is read against them in Python. Both counts hold a payer
-        and a chosen credit, so the payers' query is in each."""
+        and a chosen credit, so the payers' query is in each - and neither
+        holds a sale document: the sale links, the documents near the
+        credits (whose lines Django does not prefetch for none) and the
+        bar's own names cost the same on both sides
+        (bank/tests/test_page_cost.py measures them with documents)."""
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 

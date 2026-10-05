@@ -218,10 +218,11 @@ def _import_downloaded_file(
     figures were thrown away, and a document the reader finds no number on
     was filed again at every gather.
 
-    True imported, False refused for what it is (a duplicate, a file its
-    reader cannot read), None not imported NOW - the database locked past its
-    timeout, PDFium busy drawing another document (ocr.PdfiumBusy): fetched
-    again next time (_gather_email records no coverage)."""
+    True imported, False refused for what it is (a duplicate, the bar's own
+    sales invoice, a file its reader cannot read), None not imported NOW -
+    the database locked past its timeout, PDFium busy drawing another
+    document (ocr.PdfiumBusy): fetched again next time (_gather_email
+    records no coverage)."""
     from . import einvoice
     from .receipts import file_sha256, import_einvoice
 
@@ -246,6 +247,11 @@ def _import_downloaded_file(
         return True
     except DuplicateInvoiceError:
         job.append_log(f"Skipped {pdf_path} (already imported)")
+        return False
+    except einvoice.OwnSalesInvoiceError as exc:
+        # The bar's own sales invoice (receipts.own_sales_invoice): refused for
+        # what it is, in its sentence - no traceback.
+        job.append_log(f"{os.path.basename(pdf_path)} : {exc}")
         return False
     except (OperationalError, PdfiumBusy) as exc:
         job.append_log(f"Not imported now, fetched again next time: {pdf_path}: {exc}")
@@ -946,12 +952,12 @@ def _import_document_file(
     OCR at a time (receipts.OCR_LOCK). `by_type`: the type that fetched it -
     a document printing what names another supplier teaches nothing.
 
-    True imported, False refused for what it is (a duplicate, a slip, a file
-    nothing can read), None not imported NOW - the OCR held too long by
-    another document, PDFium busy drawing one (ocr.PdfiumBusy), the database
-    locked past its timeout: fetched again next time (_gather_email records
-    no coverage)."""
-    from . import supplier_changes
+    True imported, False refused for what it is (a duplicate, a slip, the
+    bar's own sales invoice, a file nothing can read), None not imported
+    NOW - the OCR held too long by another document, PDFium busy drawing one
+    (ocr.PdfiumBusy), the database locked past its timeout: fetched again
+    next time (_gather_email records no coverage)."""
+    from . import einvoice, supplier_changes
     from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
@@ -979,6 +985,11 @@ def _import_document_file(
         return False
     except DuplicateInvoiceError:
         job.append_log(f"Skipped {path} (already imported)")
+        return False
+    except einvoice.OwnSalesInvoiceError as exc:
+        # The bar's own sales invoice (receipts.own_sales_invoice), as a slip
+        # is said: refused for what it is, no traceback.
+        job.append_log(f"{os.path.basename(path)} : {exc}")
         return False
     except (OperationalError, PdfiumBusy) as exc:
         job.append_log(f"Not imported now, fetched again next time: {path}: {exc}")

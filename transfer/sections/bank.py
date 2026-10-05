@@ -50,11 +50,14 @@ balance and resolves no gap: « Trésorerie » reads what it wrote.
 It requires nothing (§2.1): a hard link to the invoices would make
 « Effacer les factures » wipe the bank too. The invoices section counts the
 payments its deletions cascade into this section's report, and the lines
-keep their `settled_by_hand`. Importing this section with the invoices, in
-one run (« Fusionner »), puts their links back: an invoice that run creates
-was not here, so no person here can have undone a link to it. Imported on
-its own once the invoices are back, it cannot tell, and says so
-(`UNDONE_NOTE`).
+keep their `settled_by_hand`. The other way round, a line this section's
+prune or clear deletes takes with it the sales invoices it pays
+(recipes.SaleDocumentPayment, CASCADE): « Ventes »' links, counted into
+« Ventes »' report - which is what puts « Ventes » in the safety archive.
+Importing this section with the invoices, in one run (« Fusionner »), puts
+their links back: an invoice that run creates was not here, so no person
+here can have undone a link to it. Imported on its own once the invoices
+are back, it cannot tell, and says so (`UNDONE_NOTE`).
 """
 
 from __future__ import annotations
@@ -81,9 +84,10 @@ from bank.reconcile import invoice_label
 from bank.statements import FIRST_DAY
 from common import format_money
 from invoices.models import Invoice, Supplier
+from recipes.models import SaleDocumentPayment
 from transfer import codec, keys, registry
 from transfer.archive import ArchiveError
-from transfer.sections.base import Section
+from transfer.sections.base import SALE_LINKS, Section, delete_ids, restore_moments
 
 KEY = "banque"
 
@@ -224,8 +228,19 @@ UNDONE_NOTE = (
     "importez-la en « Remplacer ». Des factures effacées reviennent avec leurs liens quand « Factures et "
     "tickets » et « Banque » sont importées ensemble."
 )
-
-DELETE_BATCH = 500
+#: « Ventes »: a credit may pay a sales invoice there, and the bank's
+#: deletes take those links with it - said in its report, by its key (no
+#: section module imports another, sections/base.py).
+SALES = "ventes"
+#: Worded as the invoices' BANK_NOTE, a participle so the preview and the
+#: confirm read the same: imported together, both sections bring the links
+#: back; « Ventes » alone finds no credit to link to.
+SALE_LINKS_NOTE = {
+    False: "1 règlement de facture de vente supprimé avec son entrée ; réimportez ensemble « Banque » et « Ventes » "
+    "de la sauvegarde pour le retrouver",
+    True: "{count} règlements de factures de vente supprimés avec leurs entrées ; réimportez ensemble « Banque » "
+    "et « Ventes » de la sauvegarde pour les retrouver",
+}
 
 
 def named_fields(names, labels: dict[str, str]) -> str:
@@ -346,28 +361,16 @@ def sentence(message: str, label: str) -> str:
     return text
 
 
-def restore_moments(objects_and_moments, field_name: str) -> None:
-    """auto_now_add overwrites the value on insert - bulk_create included -
-    and bulk_update does not call pre_save: the archive's moment goes back
-    after the insert (§4.3). Shared with « Règles de la banque »."""
-    restored = []
-    for obj, moment in objects_and_moments:
-        if moment is not None:
-            setattr(obj, field_name, moment)
-            restored.append(obj)
-    if restored:
-        type(restored[0]).objects.bulk_update(restored, [field_name])
-
-
-def delete_ids(model, ids) -> int:
-    """By batches: a replace of a few thousand lines must not meet SQLite's
-    limit on query parameters. Shared with « Règles de la banque »."""
-    ids = list(ids)
-    deleted = 0
-    for start in range(0, len(ids), DELETE_BATCH):
-        _total, per_model = model.objects.filter(pk__in=ids[start : start + DELETE_BATCH]).delete()
-        deleted += per_model.get(model._meta.label, 0)
-    return deleted
+def _sale_links_taken(ctx, deleted: dict[str, int]) -> None:
+    """The sales invoices' links the lines just deleted took with them,
+    read off the per-model counts the delete returned (never a count taken
+    before it), counted into « Ventes »' report - even when « Ventes » is
+    not in the run - and said there with how to get them back."""
+    count = deleted.get(SaleDocumentPayment._meta.label, 0)
+    if count:
+        sales = ctx.report(SALES)
+        sales.deleted(SALE_LINKS, count)
+        sales.note(SALE_LINKS_NOTE[count > 1].format(count=count))
 
 
 @registry.register
@@ -1065,16 +1068,20 @@ class BankSection(Section):
         report.created(PAYMENTS, len(created))
 
     def prune(self, ctx, report) -> None:
-        # Nothing in any other section points at a bank line or a payee name:
-        # what the archive does not hold goes. The lines' links went in apply
-        # (above), before the archive's were made.
+        # What the archive does not hold goes. The lines' links to invoices
+        # went in apply (above), before the archive's were made. « Ventes »'
+        # règlements point at a bank line (recipes.SaleDocumentPayment,
+        # CASCADE): counted into « Ventes »' report. Nothing else in any
+        # other section points at a bank line or a payee name.
         lines = [
             pk
             for pk, fingerprint in BankTransaction.objects.values_list("pk", "fingerprint")
             if fingerprint not in self._fingerprints
         ]
         if lines:
-            report.deleted(OPERATIONS, delete_ids(BankTransaction, lines))
+            cascaded: dict[str, int] = {}
+            report.deleted(OPERATIONS, delete_ids(BankTransaction, lines, cascaded))
+            _sale_links_taken(ctx, cascaded)
         aliases = [
             pk
             for pk, supplier_id, name in CounterpartyAlias.objects.values_list("pk", "supplier_id", "name")
@@ -1108,9 +1115,13 @@ class BankSection(Section):
     # -- clear -----------------------------------------------------------------
     def clear(self, ctx, report) -> None:
         # The formats and the rules are « Règles de la banque »'s: they stay.
+        # The lines take « Ventes »' règlements with them (CASCADE).
+        payments = InvoicePayment.objects.all().delete()[1]
+        operations = BankTransaction.objects.all().delete()[1]
+        _sale_links_taken(ctx, operations)
         counts = {
-            PAYMENTS: InvoicePayment.objects.all().delete()[1].get(InvoicePayment._meta.label, 0),
-            OPERATIONS: BankTransaction.objects.all().delete()[1].get(BankTransaction._meta.label, 0),
+            PAYMENTS: payments.get(InvoicePayment._meta.label, 0),
+            OPERATIONS: operations.get(BankTransaction._meta.label, 0),
             ALIASES: CounterpartyAlias.objects.all().delete()[1].get(CounterpartyAlias._meta.label, 0),
             PAYERS: IncomePayer.objects.all().delete()[1].get(IncomePayer._meta.label, 0),
             ADJUSTMENTS: TreasuryAdjustment.objects.all().delete()[1].get(TreasuryAdjustment._meta.label, 0),

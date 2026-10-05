@@ -1,0 +1,139 @@
+{% load assets %}
+{% comment %}
+« Règlement » on a saved « facture de vente »'s page (recipes/views.py::_payments,
+recipes/sale_payments.py::payment_context): what the bank has paid of it.
+
+Its state for whoever opens the page - the amounts the allocation gives THIS
+invoice, oldest first, never beyond what it asks. With « Banque » only: the
+credits paying it with their shares, those that could - one form per option
+holding this invoice, each naming every invoice it posts with what it still
+asks (a sum linked as one invoice would leave the other out in silence, and a
+sum's reason names none) -, and a search of the credits. Every form posts to Banque's own
+action (bank:bank_line_action, the « Banque » gate) and comes back here,
+its message said in this section (`lieu`). Each carries `data-leaves-lines`:
+it leaves what was typed on the document, and static/js/sale_document.js
+asks first. The search is a GET form: it carries the tab's parameters as
+hidden fields, a browser dropping the action's own query string.
+{% endcomment %}
+<section class="card sale-payments" id="reglements">
+    <h2>Règlement</h2>
+    {% if payment_messages %}
+        <ul class="messages">
+            {% for message in payment_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+    <p class="sale-payment-state">
+        {% if payments.state.css %}<span class="status-pill {{ payments.state.css }}">{{ payments.state.pill }}</span>{% endif %}
+        {{ payments.state.sentence }}
+    </p>
+    {% if payments.sees_bank %}
+        {% if payments.links %}
+            <h3>Entrées rattachées</h3>
+            <div class="table-wrap">
+                <table class="sub-table phone-cards" data-table-label="entrées rattachées">
+                    <thead>
+                        <tr><th>Date</th><th>Payeur</th><th>Pour cette facture</th><th>Rattachée</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        {% for row in payments.links %}
+                            {% with fact=row.link.fact %}
+                                <tr>
+                                    <td>{{ fact.credit_day|date:"d/m/Y" }}</td>
+                                    <td data-label="Payeur">
+                                        <strong>{{ fact.counterparty|default:fact.bank_type }}</strong>
+                                        <span class="read-as">{{ fact.label|truncatechars:60 }}</span>
+                                    </td>
+                                    <td data-label="Pour cette facture">
+                                        {{ row.link.share|money }} € sur une entrée de {{ fact.credit_amount|money }} €
+                                        {% for other in row.link.others %}<span class="read-as">aussi pour la facture de vente {{ other.number }}</span>{% endfor %}
+                                    </td>
+                                    <td data-label="Rattachée"><span class="status-pill status-linked">{{ fact.method_label }}</span></td>
+                                    <td class="row-actions">
+                                        <form method="post" action="{{ row.action }}" data-leaves-lines="{{ leave_warning }}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="sale_unlink_document">
+                                            <input type="hidden" name="document" value="{{ document.pk }}">
+                                            <input type="hidden" name="next" value="{{ payments.back }}">
+                                            <input type="hidden" name="lieu" value="reglements">
+                                            <button class="btn btn-small btn-secondary" type="submit">Délier</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% endwith %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+
+        <h3>Entrées possibles</h3>
+        {% if payments.proposals %}
+            <ul class="sale-credit-list">
+                {% for row in payments.proposals %}
+                    {% with line=row.offer.line %}
+                        <li>
+                            Entrée du {{ line.operation_date|date:"d/m/Y" }} · {{ line.counterparty|default:line.bank_type }} · {{ row.offer.amount|money }} €
+                            <span class="status-pill status-tier-{{ row.offer.match.tier }}">{{ row.offer.match.tier_label }}</span>
+                            <span class="read-as">{{ row.offer.match.reason }}{% if row.offer.match.tier_reason %} {{ row.offer.match.tier_reason }}{% endif %}</span>
+                            {% for option in row.options %}
+                                <form method="post" action="{{ row.action }}" class="inline-form" data-leaves-lines="{{ leave_warning }}">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="sale_link">
+                                    {% for candidate in option %}<input type="hidden" name="document" value="{{ candidate.pk }}">{% endfor %}
+                                    <input type="hidden" name="next" value="{{ payments.back }}">
+                                    <input type="hidden" name="lieu" value="reglements">
+                                    <span>{% for candidate in option %}{{ candidate.label }} · {{ candidate.due|money }} €{% if not forloop.last %} + {% endif %}{% endfor %}</span>
+                                    <button class="btn btn-small" type="submit">Rattacher</button>
+                                </form>
+                            {% endfor %}
+                        </li>
+                    {% endwith %}
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="muted">{{ no_credit_proposed }}</p>
+        {% endif %}
+
+        <form method="get" action="{{ payments.search_action }}" class="search-row" data-leaves-lines="{{ leave_warning }}">
+            {% for name, value in payments.kept_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+            <span class="table-search">
+                <input type="search" name="entree" value="{{ payments.query }}" autocomplete="off"
+                       placeholder="Payeur, montant, date (12/07/2026)" aria-label="Chercher une entrée d'argent à rattacher">
+            </span>
+            <button class="btn btn-small btn-secondary" type="submit">Chercher une entrée</button>
+        </form>
+        {% if payments.query %}
+            {% if payments.found %}
+                <ul class="sale-credit-list">
+                    {% for row in payments.found %}
+                        {% with line=row.found.line %}
+                            <li>
+                                Entrée du {{ line.operation_date|date:"d/m/Y" }} · {{ line.counterparty|default:line.bank_type }} · {{ line.amount|money }} €
+                                {% if row.found.here %}
+                                    <span class="muted">déjà rattachée ici</span>
+                                {% else %}
+                                    <form method="post" action="{{ row.action }}" class="inline-form" data-leaves-lines="{{ leave_warning }}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="sale_link">
+                                        <input type="hidden" name="document" value="{{ document.pk }}">
+                                        <input type="hidden" name="next" value="{{ payments.back }}">
+                                        <input type="hidden" name="lieu" value="reglements">
+                                        <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>
+                                    </form>
+                                {% endif %}
+                                {% for other in row.found.elsewhere %}<span class="read-as">rattachée aussi à la facture de vente {{ other.number }}</span>{% endfor %}
+                                {% if row.found.chosen %}<span class="read-as">choisie « {{ row.found.chosen }} » en caisse</span>{% endif %}
+                            </li>
+                        {% endwith %}
+                    {% endfor %}
+                </ul>
+                {% if payments.more_found %}
+                    {# A list cut in silence reads as « the credit is not there ». #}
+                    <p class="read-as">{{ payments.more_found }} de plus : précisez la recherche.</p>
+                {% endif %}
+            {% else %}
+                <p class="muted">Aucune entrée d'argent ne répond à « {{ payments.query }} ».</p>
+            {% endif %}
+        {% endif %}
+    {% endif %}
+</section>

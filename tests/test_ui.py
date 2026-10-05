@@ -1029,6 +1029,7 @@ class FormRenderingTests(TestCase):
         ("invoices:invoice_type_create", {}),
         ("recipes:recipe_create", {}),
         ("recipes:auto_sales", {}),
+        ("recipes:sale_document_create", {}),
     ]
 
     def test_every_form_page_uses_the_shared_layout(self):
@@ -2005,6 +2006,58 @@ class PhoneCardsLabelTests(TestCase):
         table = self.cards(reverse("invoices:receipt_batch", args=[batch.pk]), "class", "phone-cards")
         self.assertLabelled(table, 5)
 
+    def test_the_sale_invoices_and_an_invoice_s_lines(self):
+        """« Factures de vente » on « Ventes » - every kind of row: typed,
+        electronic, a credit note, a total alone - and an electronic
+        invoice's lines to tie, a rebuilt one across its last two columns."""
+        from recipes.models import SaleDocument
+        from tests.factories import make_sale_document, make_sale_line
+
+        typed = make_sale_document(reference="FV-UI-1", customer="Mariage Exemple")
+        make_sale_line(typed, label="Location de salle exemple", unit_price_ttc="150")
+        einvoice = make_sale_document(
+            reference="FV-UI-2",
+            einvoice_format="CII",
+            einvoice_type_code="380",
+            stated_total_ttc="230.52",
+            stated_total_ht="194.20",
+            counting=SaleDocument.Counting.TILL,
+        )
+        make_sale_line(einvoice, label="Formule cocktail exemple", quantity="2", total_ht="169.00", vat_rate="0.20")
+        make_sale_line(
+            einvoice, label="Total au taux de 10,00 %", quantity="1", total_ht="25.20", vat_rate="0.10", rebuilt=True
+        )
+        make_sale_document(reference="AV-UI-3", stated_total_ttc="-20.00")
+        make_sale_document(reference="", stated_total_ttc="80.00")
+        self.assertLabelled(self.cards(reverse("recipes:sales_list"), "data-table-label", "factures de vente"), 4)
+        lines = self.cards(reverse("recipes:sale_document_update", args=[einvoice.pk]), "data-table-label", "lignes")
+        self.assertEqual(
+            [" ".join(cell["text"].split()) for cell in lines["head"]],
+            ["Libellé", "Quantité", "Prix unitaire HT", "Montant HT", "TVA", "Correspond à", "Quantité consommée"],
+        )
+        self.assertLabelled(lines, 2)
+
+    def test_the_credits_paying_a_sale_invoice(self):
+        """« Règlement »: each credit paying it, one paying another invoice
+        too, its action across the card's foot."""
+        from recipes.models import SaleDocumentPayment
+        from tests.factories import make_credit, make_sale_document
+
+        document = make_sale_document(reference="FV-UI-4", stated_total_ttc="300.00")
+        other = make_sale_document(reference="FV-UI-5", stated_total_ttc="50.00")
+        for number, amount in enumerate(("100.00", "250.00")):
+            credit = make_credit(amount, date(2026, 3, 9 + number), counterparty="PAYEUR EXEMPLE")
+            SaleDocumentPayment.objects.create(document=document, transaction=credit, method="MANUAL")
+        SaleDocumentPayment.objects.create(document=other, transaction=credit, method="AUTO")
+        table = self.cards(
+            reverse("recipes:sale_document_update", args=[document.pk]), "data-table-label", "entrées rattachées"
+        )
+        self.assertEqual(
+            [" ".join(cell["text"].split()) for cell in table["head"]],
+            ["Date", "Payeur", "Pour cette facture", "Rattachée", ""],
+        )
+        self.assertLabelled(table, 2)
+
     def test_the_recipes_and_their_article_s_column(self):
         rum = make_priced_stock_type(name="Rhum exemple", unit_cost_ht="20", quantity="1")
         make_ingredient(make_recipe(name="Punch exemple", selling_price_ttc="7.50"), stock_type=rum, quantity="0.04")
@@ -2668,6 +2721,74 @@ class NotificationScriptsTests(SimpleTestCase):
             for pattern in MARKUP_WRITERS:
                 with self.subTest(script=relative, pattern=pattern):
                     self.assertIsNone(re.search(pattern, source))
+
+
+class SaleDocumentScriptTests(SimpleTestCase):
+    """static/js/sale_document.js, a « facture de vente »'s page (spec §5.8):
+    ES5 in a strict function like every script here, nodes and text only -
+    a row is cloned from its <template>, never written as markup - and the
+    forms beside the document's own (`data-leaves-lines`) ask before
+    leaving what was typed."""
+
+    SCRIPT = "static/js/sale_document.js"
+
+    def code(self) -> str:
+        """The script's statements, its comments taken out."""
+        return re.sub(r"(?m)^\s*//.*$", "", _blank_comments(_source(self.SCRIPT)))
+
+    def test_es5_in_a_strict_function(self):
+        code = self.code()
+        self.assertTrue(code.lstrip().startswith("(function () {"))
+        self.assertIn('"use strict";', code)
+        self.assertTrue(code.rstrip().endswith("})();"))
+        for pattern in NotificationScriptsTests.NOT_ES5:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, code))
+
+    def test_it_never_writes_markup(self):
+        source = _source(self.SCRIPT)
+        for pattern in MARKUP_WRITERS:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, source))
+
+    def test_what_it_answers_to(self):
+        """The empty row it clones and the index it puts in, the button it
+        catches, the forms it asks for, and the sentence for a reader
+        without it."""
+        code = self.code()
+        for words in (
+            "empty-sale-line",
+            "__prefix__",
+            "importNode",
+            "ajouter_ligne",
+            "TOTAL_FORMS",
+            "data-leaves-lines",
+            "data-confirm",
+            "no-js-only",
+        ):
+            with self.subTest(words=words):
+                self.assertIn(words, code)
+
+    def test_a_page_drawn_from_a_refused_save_starts_edited(self):
+        """`data-unsaved` (a page drawn in answer to a POST) starts `edited`
+        true: every value on it is typed and unsaved."""
+        self.assertIn('edited = form.hasAttribute("data-unsaved")', self.code())
+
+
+class DefaultSubmitTests(SimpleTestCase):
+    """static/js/ui.js: a form's hidden default button (`data-default-submit`,
+    the one Enter presses) goes busy with the visible `data-busy-label` one -
+    left live, a second Enter sent the form again while the first save ran
+    (a « facture de vente » made twice) - and comes back on a page the
+    browser kept (`pageshow`, `data-idle-label`)."""
+
+    def test_ui_js_disables_the_default_button_too(self):
+        code = re.sub(r"(?m)^\s*//.*$", "", _blank_comments(_source("static/js/ui.js")))
+        start = code.index("button[data-busy-label]")
+        handler = code[start : code.index("pageshow", start)]
+        self.assertIn("button[data-default-submit]", handler)
+        self.assertIn("data-idle-label", handler)
+        self.assertIn(".disabled = true", handler)
 
 
 class TouchStylesheetTests(StylesheetTestCase):

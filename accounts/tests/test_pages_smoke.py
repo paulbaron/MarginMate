@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.urls import reverse
 
 from accounts.tenancy import bound_tenant
@@ -25,6 +26,8 @@ from tests.factories import (
     make_invoice_line,
     make_product,
     make_recipe,
+    make_sale_document,
+    make_sale_line,
     make_stock_take,
     make_stock_take_line,
     make_stock_type,
@@ -124,6 +127,10 @@ class EveryPageSmokeTests(TwoTenantsTestCase):
             ShoppingListItem.objects.create(
                 shopping_list=shopping_list, label=f"Serviettes {word}", quantity=Decimal("1")
             )
+            # A « facture de vente » of the bar's customer, its file with it.
+            sale = make_sale_document(reference=f"FV-{word}", customer=f"Client {word}", stated_total_ttc="120.00")
+            make_sale_line(sale, label=f"Location {word}", unit_price_ttc="120")
+            sale.source_file.save("vente.pdf", ContentFile(f"%PDF-1.4 vente {word}".encode()), save=True)
         lists = reverse("inventory:shopping_list_page")
         return [
             reverse("invoices:invoice_detail", args=[invoice.pk]),
@@ -137,6 +144,9 @@ class EveryPageSmokeTests(TwoTenantsTestCase):
             # The store's list, to prepare and to tick in the store.
             f"{lists}?fournisseur={supplier.pk}",
             f"{lists}?fournisseur={supplier.pk}&mode=courses",
+            # The sale document's page and its file.
+            reverse("recipes:sale_document_update", args=[sale.pk]),
+            reverse("recipes:sale_document_file", args=[sale.pk]),
         ]
 
     def test_every_plain_route_and_one_page_per_app_is_its_own_bar_s(self):
