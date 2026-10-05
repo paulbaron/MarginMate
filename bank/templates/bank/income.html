@@ -59,11 +59,11 @@
                 de caisse {{ report.days_without_payments|length|pluralize:"a,ont" }} des ventes mais
                 aucun moyen de paiement lu (du {{ report.days_without_payments.0|date:"d/m/Y" }} au
                 {{ report.days_without_payments|last|date:"d/m/Y" }}) : « Encaissé en caisse » est trop bas.
-                {% if till_allowed %}
+                {% if till_commands %}
                 Pour le combler : <code>manage.py laddition_backfill_payments</code> (relit les exports déjà
                 téléchargés).
                 {% else %}
-                Pour le combler : {{ till_to_configure }}.
+                Pour le combler : {{ till_reimport }}.
                 {% endif %}
             </div>
         {% endif %}
@@ -77,11 +77,11 @@
             <div class="message message-warning">
                 Les ventes de <strong>{{ report.unread_revenue_days|length }} jour{{ report.unread_revenue_days|length|pluralize }}</strong>
                 n'ont pas encore de prix : « Vendu en caisse » ne les compte pas.
-                {% if till_allowed %}
+                {% if till_commands %}
                 Pour le combler : <code>manage.py laddition_backfill_revenue</code> (relit les exports déjà
                 téléchargés).
                 {% else %}
-                Pour le combler : {{ till_to_configure }}.
+                Pour le combler : {{ till_reimport }}.
                 {% endif %}
             </div>
         {% endif %}

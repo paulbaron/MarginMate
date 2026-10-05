@@ -24,7 +24,6 @@ from django.utils import timezone
 
 from invoices import workspace
 from invoices.models import InvoiceType, ScrapeJob, Supplier, SupplierChange
-from invoices.parsers import LLM_PARSER_KEY
 from tests.factories import (
     make_invoice,
     make_invoice_line,
@@ -78,8 +77,8 @@ class SuppliersTabTests(TestCase):
         )
         self.assertEqual([tab["active"] for tab in tabs], [False, False, False, True])
         self.assertEqual(tabs[3]["url"], SUPPLIERS)
-        # Both tables together: every supplier but the AI pseudo-supplier.
-        self.assertEqual(tabs[3]["count"], Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count())
+        # Both tables together: every supplier.
+        self.assertEqual(tabs[3]["count"], Supplier.objects.count())
         # The import card stays above it, as on every tab.
         self.assertContains(response, f'action="{reverse("invoices:receipt_upload")}"')
 
@@ -136,7 +135,7 @@ class SuppliersTabTests(TestCase):
         change to see are an amber « N à voir » beside it, saying so. One
         number meant both - 29 grey, then 1 amber - with no word or title,
         and the owner could not tell why there was « 1 » (19/09)."""
-        everyone = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).count()
+        everyone = Supplier.objects.count()
         page = self.client.get(reverse("invoices:invoice_list"))
         tab = page.context["tabs"][3]
         self.assertEqual((tab["attention"], tab["to_see"], tab["count"]), (False, 0, everyone))
@@ -217,6 +216,18 @@ class SourcesTabTests(TestCase):
         self.assertNotContains(response, "Fournisseurs avec leur propre lecteur")
         self.assertNotContains(response, reverse("invoices:supplier_create"))
 
+    def test_its_reader_is_named_as_the_source_form_names_it(self):
+        """By its label, not the registry key (« CECINA »); a key no reader
+        answers to any more is shown as saved."""
+        shop = make_supplier(code="CAVE_X", name="Cave Exemple", parser_key="")
+        make_invoice_type(supplier=shop, name="Cave - générique")
+        make_invoice_type(supplier=shop, name="Cave - Cecina", parser_key="CECINA")
+        make_invoice_type(supplier=shop, name="Cave - ancien", parser_key="ANCIEN_LECTEUR")
+        response = self.client.get(SOURCES)
+        for reader in ("Lecteur générique", "Cecina (Vignerons de Cessenon)", "ANCIEN_LECTEUR"):
+            with self.subTest(reader=reader):
+                self.assertContains(response, f'<td class="muted">{reader}</td>', html=True)
+
     def test_an_old_bookmark_of_its_suppliers_lands_on_the_way_there(self):
         """/invoices/types/#fournisseurs: a fragment never reaches the
         server, so nothing can redirect it - the anchor still exists."""
@@ -286,8 +297,6 @@ class SupplierPagesTests(TestCase):
         back = f'<a href="{SUPPLIERS}">← Factures · Enseignes et fournisseurs</a>'
         self.assertContains(self.client.get(self.supplier_page), back, html=True)
         self.assertContains(self.client.get(reverse("invoices:supplier_create")), back, html=True)
-        ai = self.client.get(reverse("invoices:supplier_detail", args=[Supplier.objects.get(code="OTHER").pk]))
-        self.assertRedirects(ai, SUPPLIERS)
         deleted = self.client.post(reverse("invoices:supplier_delete", args=[self.shop.pk]), {"confirme": "1"})
         self.assertRedirects(deleted, SUPPLIERS)
 

@@ -1,8 +1,8 @@
 """« Consignes » with one database per bar (multi mode, accounts/tenancy.py).
 
 Two real tenants in temporary files (accounts.tests.support.TwoTenantsTestCase):
-Bar Alpha is the owner's tenant (the server's mailbox is his), Bar Beta is
-not. Both databases number their rows from 1, so A's pickup and B's are
+Bar Alpha is the platform owner's tenant, Bar Beta another bar - each
+fetches its slips from its own mailbox (its « Identifiants »). Both databases number their rows from 1, so A's pickup and B's are
 both pk 1, their slips and photos too - exactly what a page reading the wrong
 database, or a photo served from the wrong folder, would mix up without a
 word. Every name, number and count INVENTED; no mail server, no SMTP: the
@@ -24,7 +24,15 @@ from invoices import integrations
 from invoices.models import ScrapeJob
 from invoices.tasks import gather_invoices_task
 from returnables.models import Pickup, PickupPhoto, Slip
-from returnables.tests.support import make_pickup, make_slip, make_supplier, seeded_format, tiny_jpeg
+from returnables.tests.support import (
+    SEEDED_FORMAT_NAME,
+    make_format,
+    make_pickup,
+    make_slip,
+    make_supplier,
+    seeded_format,
+    tiny_jpeg,
+)
 from staff.tests.page_forms import as_post, form_posting_to, forms_of
 from tests.support import _Forbidden
 
@@ -144,33 +152,41 @@ class PhotosThroughThePageTests(TenantsCase):
 
 
 class GatherPerTenantTests(TenantsCase):
-    """« Récupérer les bons » is the owner's mailbox: offered and bound to his
-    tenant in A, refused in B - by the page (no form, the sentence) and by
-    the gather itself (no job, no thread) when posted all the same."""
+    """« Récupérer les bons » searches each bar's own mailbox: offered and
+    bound to its own tenant in A and in B once B's mailbox is typed on its
+    « Identifiants »."""
 
     def setUp(self):
         super().setUp()
         for tenant in (self.bar_a, self.bar_b):
             with bound_tenant(tenant):
                 make_pickup()
+                if tenant == self.bar_b:
+                    # A new hosted espace starts without UBA's format
+                    # (invoices.seeds): Beta is given it under Alpha's pk.
+                    make_format(name=SEEDED_FORMAT_NAME, pk=self.format_pk)
                 self.format_pk = seeded_format().pk
 
-    def test_bar_b_is_told_and_refused(self):
-        self.client.force_login(self.user_b)
-        page = self.client.get(HOME)
-        self.assertContains(page, integrations.SLIPS)
-        self.assertEqual(
-            [form for form in forms_of(page.content.decode()) if form.action == reverse("invoices:gather")], []
-        )
-        with mock.patch("invoices.views.threading.Thread") as thread:
-            response = self.client.post(
-                reverse("invoices:gather"),
-                {"sources": [f"bons-{self.format_pk}"], "retour": HOME, "end_date": "2026-02-10"},
-                follow=True,
-            )
-        thread.assert_not_called()
-        self.assertContains(response, integrations.GATHER)
+    def test_bar_b_s_gather_runs_in_a_thread_bound_to_bar_b(self):
+        from accounts import vault
+
         with bound_tenant(self.bar_b):
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
+        self.client.force_login(self.user_b)
+        html = self.client.get(HOME).content.decode()
+        self.assertNotIn(integrations.SLIPS, html)
+        form = next(form for form in forms_of(html) if form.action == reverse("invoices:gather"))
+        with mock.patch("invoices.views.threading.Thread") as thread:
+            self.client.post(form.action, as_post(form.submission()))
+        target = thread.call_args.kwargs["target"]
+        self.assertIs(target.__wrapped__, gather_invoices_task)
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        with bound_tenant(self.bar_b):
+            self.assertEqual(ScrapeJob.objects.count(), 1)
+        with bound_tenant(self.bar_a):
             self.assertFalse(ScrapeJob.objects.exists())
 
     def test_bar_a_s_gather_runs_in_a_thread_bound_to_bar_a(self):

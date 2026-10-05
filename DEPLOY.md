@@ -455,7 +455,7 @@ Jusqu'ici le site tournait depuis le dossier de développement, sur
    ```
 
    Puis **videz les identifiants** : `METRO_EMAIL`, `METRO_PASSWORD`, `INVOICE_EMAIL_ADDRESS`,
-   `INVOICE_EMAIL_APP_PASSWORD`, `LADDITION_EMAIL`, `LADDITION_PASSWORD`, `ANTHROPIC_API_KEY`,
+   `INVOICE_EMAIL_APP_PASSWORD`, `LADDITION_EMAIL`, `LADDITION_PASSWORD`,
    `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, et les variables des espaces clients
    (leurs noms sont dans Factures > Sources). Sans eux, une récupération lancée depuis la copie
    refuse ; avec eux, elle se connecterait pour de vrai à Metro et aux portails. Donnez aussi à la
@@ -825,8 +825,9 @@ récupérations lisent d'abord la page : rien ne change pour elles. Les lignes c
 - chaque espace client : ses deux variables, dont les noms sont sur la fiche de sa source (Achats >
   Sources).
 
-Le reste du `.env` reste en place : la clé secrète, la phrase de passe, les lignes de la section 5,
-`ANTHROPIC_API_KEY` et le serveur d'e-mails (`EMAIL_HOST`…), que la page ne prend pas.
+Le reste du `.env` reste en place : la clé secrète, la phrase de passe, les lignes de la section 5
+et le serveur d'e-mails (`EMAIL_HOST`…), que la page ne prend pas. Une ligne `ANTHROPIC_API_KEY`
+ne sert plus à rien (l'analyse IA est retirée, section 16) : supprimez-la.
 
 Puis relancez le serveur (Ctrl+C dans sa fenêtre, puis `schtasks /run /tn MarginMate`) : tant qu'il
 n'a pas redémarré, la page continue de signaler ces mots de passe « encore en clair » dans le
@@ -1002,7 +1003,8 @@ réglages »** (aussi depuis Données › Notifications).
 - La période va de la dernière journée importée sans trou, moins 3 jours, jusqu'à la dernière
   nuit terminée : avant l'heure « La nuit se termine à » (Notifications › Rappels, 06:00 par
   défaut), la veille n'est pas encore finie et s'arrête l'avant-veille. Jamais plus de 400 jours en
-  arrière. Les imports faits à la main depuis l'onglet Ventes comptent aussi.
+  arrière. Les récupérations faites à la main depuis l'onglet Ventes comptent aussi ; un fichier
+  de caisse importé, non.
 - Quand les ventes sont déjà à jour, la règle dit « à jour : ventes importées jusqu'au JJ/MM » et
   ne se connecte pas à L'Addition : même avec plusieurs heures dans la journée, L'Addition reçoit
   environ une connexion par jour.
@@ -1086,7 +1088,49 @@ seul document par fournisseur parmi ceux saisis à la main sans numéro ni fichi
 complet après la mise en ligne si vous gardez ces archives comme sauvegarde (les sauvegardes de la
 section 8 ne sont pas concernées).
 
-## 16. Les factures de vente
+## 16. Les autres bars
+
+Un bar invité dans son propre espace n'a plus seulement l'import à la main :
+
+- **Ses propres comptes**, saisis par son patron sur sa page **Identifiants** : sa boîte mail des
+  factures et son compte L'Addition. Il ne voit jamais les comptes de votre `.env`, et ses
+  récupérations ne s'en servent jamais.
+- **Restent à votre espace seul** : Metro (toutes les connexions partiraient de l'adresse IP de
+  votre box, que le pare-feu de Metro a déjà bloquée) et les espaces clients des fournisseurs (le
+  navigateur du serveur irait sur votre réseau domestique). Ses factures Metro en PDF, déposées à
+  la main, sont lues comme chez vous.
+- **Une autre caisse** : Recettes & ventes → Ventes → « Importer un fichier de la caisse », après
+  avoir décrit les colonnes de son export sur « Formats des fichiers de caisse ».
+- **Une autre banque** : ses relevés en CSV, OFX ou CAMT.053 ; un nouvel espace a déjà les formats
+  OFX et CAMT.053, et « Partir d'un modèle » sur « Format du relevé ».
+- **Ses fournisseurs** : un nouvel espace ne reçoit plus UBA, Sabbh Oriental ni Wing Seng ; votre
+  espace les garde.
+- **Ses récupérations et imports automatiques** (section 14) : avec ses propres comptes, une fois
+  renseignés sur sa page Identifiants. Tant que sa boîte mail n'y est pas, sa récupération
+  automatique dit « sautée : boîte mail à renseigner sur la page Identifiants » ; tant que son
+  compte L'Addition n'y est pas, sa page « Import automatique des ventes » le demande et rien ne
+  part ; ses règles déjà là restent affichées, pour les désactiver ou les supprimer. Metro et les
+  espaces clients ne sont jamais les siens. Un import de fichier de caisse et un import automatique
+  des ventes ne tournent jamais en même temps.
+- **Deux navigateurs pour tous les autres bars** : quand ils sont pris, l'import automatique des
+  ventes d'un bar attend (« en attente : navigateurs du serveur occupés ») et repart dès qu'un se
+  libère, dans les 12 h, sans alerte d'échec. Votre espace n'attend jamais.
+
+**L'analyse IA est retirée** : elle n'avait jamais servi. L'import d'un PDF ne propose plus
+« Autre (analyse IA) », et la page Identifiants n'a plus de carte « Analyse IA (Anthropic) ». Le
+fournisseur « Autre (analyse IA) » disparaît de chaque espace où rien n'y est rangé ; là où un
+document, un produit ou un autre enregistrement y est rangé, il reste, comme un fournisseur ordinaire.
+Si la page Identifiants avait une clé d'analyse IA enregistrée, elle la propose maintenant à effacer
+(« Effacer ANTHROPIC_API_KEY »). Si votre `.env` contient encore `ANTHROPIC_API_KEY`, supprimez la
+ligne.
+
+Cette version ajoute quatre migrations (`bank` 0009, `recipes` 0019, `invoices` 0038 et `accounts`
+0006) : `deploy.cmd` les applique lui-même (étape `migrate_tenants`, après la sauvegarde). Rien de ce
+qui est déjà dans votre espace ne change de sens ; `invoices` 0038 retire le fournisseur de l'analyse
+IA comme dit ci-dessus, et `accounts` 0006 ne change que le texte d'aide d'une case de
+l'administration.
+
+## 17. Les factures de vente
 
 **Recettes & ventes › Ventes › « Factures de vente »** reçoit maintenant vos factures de vente : une
 facture électronique (Factur-X, CII ou UBL) avec « Lire la facture », ou n'importe quel autre fichier
@@ -1094,12 +1138,15 @@ facture électronique (Factur-X, CII ou UBL) avec « Lire la facture », ou n'im
 à vos recettes ou à vos articles, et rattachez le virement qui la règle (ou laissez Banque le faire
 seul quand il est sûr).
 
-- Cette version ajoute la migration **recipes 0019** : `deploy.cmd` l'applique lui-même (son étape
-  `migrate_tenants`, après sa sauvegarde). Rien à faire à la main en production.
+- Cette version ajoute la migration **recipes 0020** (elle suit la `recipes` 0019 de la section 16) :
+  `deploy.cmd` l'applique lui-même (son étape `migrate_tenants`, après sa sauvegarde). Rien à faire
+  à la main en production.
 - **Dans le dossier de développement**, `runserver` arrêté, lancez une fois
   `.venv\Scripts\python.exe manage.py migrate_tenants` (jamais dans `C:\MarginMate`). Sans cela,
   l'onglet Ventes, Marges, Banque, Entrées d'argent, les pages du stock et l'import des factures
-  électroniques ne s'affichent plus sur `data-dev`.
+  électroniques ne s'affichent plus sur `data-dev`. Si `data-dev` a déjà reçu cette migration sous son
+  ancien nom (`0019_sale_invoices`), rafraîchissez-le d'abord depuis une sauvegarde
+  (`refresh_dev_data.cmd`, section 10.5), puis relancez `migrate_tenants`.
 - Une facture qui documente des ventes déjà tapées en caisse (une note réglée par virement) se marque
   « Déjà comptée par la caisse », dès « Lire la facture » : elle ne compte alors ni dans les marges ni
   dans le stock.

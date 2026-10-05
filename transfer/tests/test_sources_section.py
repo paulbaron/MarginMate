@@ -299,7 +299,7 @@ class PortalTrustTests(TestCase):
     """Where a portal signs in and which .env variables it types there come
     from the archive; the next gather reads those variables and types them
     into that page. An archive naming the application's own secrets (Metro's,
-    the mailbox's, the till's, the AI's) had them typed into a site nobody
+    the mailbox's, the till's) had them typed into a site nobody
     chose."""
 
     def _import(self, reader, strategy=MERGE):
@@ -314,9 +314,10 @@ class PortalTrustTests(TestCase):
             [
                 (
                     "Source « Portail essai » (UBA) : variable de l'identifiant : « METRO_EMAIL » est une variable de "
-                    "l'application elle-même (Metro, la boîte mail, la caisse, l'IA) : jamais celle d'un portail ; "
+                    "l'application elle-même (la boîte mail, la caisse, le module d'un fournisseur) : jamais celle "
+                    "d'un portail ; "
                     "variable du mot de passe : « METRO_PASSWORD » est une variable de l'application elle-même "
-                    "(Metro, la boîte mail, la caisse, l'IA) : jamais celle d'un portail"
+                    "(la boîte mail, la caisse, le module d'un fournisseur) : jamais celle d'un portail"
                 )
             ],
         )
@@ -327,9 +328,10 @@ class PortalTrustTests(TestCase):
             "INVOICE_EMAIL_APP_PASSWORD",
             "UBA_EMAIL_APP_PASSWORD",
             "LADDITION_PASSWORD",
-            "ANTHROPIC_API_KEY",
             "DJANGO_SECRET_KEY",
             "METRO_PASSWORD",
+            # Read by nothing since 04/10/2026, still in an older .env.
+            "ANTHROPIC_API_KEY",
         ):
             with self.subTest(name=name):
                 report = self._import(forged_portal(username_env="PORTAIL_ESSAI_LOGIN", password_env=name))

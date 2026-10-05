@@ -266,7 +266,7 @@ class CallersTests(GuardCase):
         job.refresh_from_db()
         self.assertFalse(brought_in)
         self.assertIn(f"T0000000042.pdf : {ROUTED}", job.log)
-        self.assertNotIn("already imported", job.log)
+        self.assertNotIn("déjà importé", job.log)
         self.assertEqual(Slip.objects.count(), 1)
         self.assertNoInvoice()
 
@@ -335,48 +335,6 @@ class FolderRowTests(GuardCase):
         self.assertTrue(os.path.exists(os.path.join(paths.imports_dir(), before["stored"])))
         self.assertFalse(Slip.objects.exists())
         self.assertNoInvoice()
-
-
-class AiUploadTests(GuardCase):
-    """« Analyse IA » chosen on Achats for a slip: the one supplier choice that
-    went straight to parse_and_import, around the guard - the model asked
-    for « every purchased product line » read the empties as purchases."""
-
-    def test_a_slip_uploaded_for_the_ai_reading_goes_to_returnables(self):
-        from invoices.parsers import LLM_PARSER_KEY
-
-        ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-        with open(self.pdf(slip_text_lines()), "rb") as handle:
-            upload = SimpleUploadedFile("T0000000042.pdf", handle.read(), content_type="application/pdf")
-        with mock.patch(
-            "invoices.parsers.llm_fallback.LLMFallbackParser.parse", side_effect=AssertionError("a bon sent to the AI")
-        ):
-            response = self.client.post(reverse("invoices:invoice_upload"), {"source_file": upload, "supplier": ai.pk})
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual([str(message) for message in get_messages(response.wsgi_request)], [ROUTED])
-        self.assertEqual(Slip.objects.get().original_name, "T0000000042.pdf")
-        self.assertNoInvoice()
-
-    def test_an_invoice_for_the_ai_reading_still_goes_to_it(self):
-        from invoices.parsers import LLM_PARSER_KEY
-
-        ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-        with open(self.pdf(["FACTURE EXEMPLE", "Total 12,00"]), "rb") as handle:
-            upload = SimpleUploadedFile("facture.pdf", handle.read(), content_type="application/pdf")
-        with (
-            mock.patch("invoices.views.parse_and_import", side_effect=RuntimeError("lecture IA essayée")) as read,
-            self.assertLogs("invoices.views", "ERROR") as logged,
-        ):
-            response = self.client.post(reverse("invoices:invoice_upload"), {"source_file": upload, "supplier": ai.pk})
-        read.assert_called_once()
-        # Reached the AI reading (whose failure is said by kind, its words in
-        # the server's log - security audit LB-3).
-        self.assertEqual(
-            [str(message) for message in get_messages(response.wsgi_request)],
-            ["Échec de l'import. Erreur inattendue sur le serveur : elle est notée pour l'administrateur."],
-        )
-        self.assertIn("lecture IA essayée", "\n".join(logged.output))
-        self.assertFalse(Slip.objects.exists())
 
 
 class WithoutPdfTests(GuardCase):

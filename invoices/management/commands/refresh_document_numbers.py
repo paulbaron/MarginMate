@@ -33,7 +33,6 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from invoices.models import Invoice
-from invoices.parsers import LLM_PARSER_KEY
 from invoices.parsers.generic_receipt import DAILY_COUNT_DIGITS, _ticket_number
 from invoices.receipts import has_own_reader
 
@@ -82,9 +81,7 @@ class Command(BaseCommand):
         renumbered: Counter = Counter()
         taken: list[str] = []
         with transaction.atomic():
-            documents = (
-                Invoice.objects.exclude(supplier__parser_key=LLM_PARSER_KEY).select_related("supplier").order_by("pk")
-            )
+            documents = Invoice.objects.select_related("supplier").order_by("pk")
             for invoice in documents:
                 text = invoice.document_text
                 number = invoice.invoice_number

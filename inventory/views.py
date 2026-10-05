@@ -2424,14 +2424,14 @@ def _shopping_url(
 
 def _offered_store(asked: str):
     """The supplier `asked` names, if the page offers it: bought at, neither
-    a supplier of charges nor the AI pseudo-supplier (shopping_data's
+    a supplier of charges nor the removed AI reading's (shopping_data's
     `offered_stores`, for one id). None otherwise."""
     from invoices.models import Supplier
-    from invoices.parsers import LLM_PARSER_KEY
+    from invoices.receipts import RETIRED_CODES
 
     if not is_id(asked):
         return None
-    store = Supplier.objects.filter(pk=int(asked), expenses_only=False).exclude(parser_key=LLM_PARSER_KEY).first()
+    store = Supplier.objects.filter(pk=int(asked), expenses_only=False).exclude(code__in=RETIRED_CODES).first()
     if store is None:
         return None
     bought = StockMovement.objects.filter(

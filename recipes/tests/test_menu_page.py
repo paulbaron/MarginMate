@@ -17,6 +17,7 @@ from django.urls import reverse
 from recipes.links import suggest_recipe
 from recipes.models import PosProduct, PosProductDailyQuantity, Recipe, RecipeSale
 from recipes.sales import record_sales
+from recipes.tests.till_support import LADDITION_ACCOUNT
 from tests.factories import make_recipe
 
 HTMX = {"HTTP_HX_REQUEST": "true"}
@@ -90,6 +91,7 @@ class MenuPageTests(TestCase):
                 self.assertEqual([tab["count"] for tab in tabs], [2, 1, None])
                 self.assertEqual([tab["label"] for tab in tabs if tab["active"]], [active])
 
+    @LADDITION_ACCOUNT
     def test_the_sales_tab_imports_from_the_till(self):
         response = self.client.get(reverse("recipes:sales_list"))
         self.assertContains(response, f'action="{reverse("recipes:trigger_sales_import")}"')

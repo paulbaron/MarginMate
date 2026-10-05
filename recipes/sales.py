@@ -1,10 +1,21 @@
 """The one door sales data comes in through.
 
-Nothing populates this yet - the till isn't connected. When it is, whatever
-does the talking (a CSV upload, a REST poll, a webhook) should end up calling
-`record_sales` with plain tuples and nothing else. Keeping the parsing out of
-here is the point: a new source is then a new function that produces
-(recipe name, date, count), and none of the accounting below has to change.
+Whatever reads the till - L'Addition's export fetched by a browser, a file
+of any till uploaded on « Ventes » (recipes/pos/till_file.py), an API one
+day - ends by calling `record_sales` with plain tuples, through
+`tasks.store_reading`. Keeping the parsing out of here is the point: a new
+till is a new reader producing (till name, date, count), and none of the
+accounting below has to change.
+
+**Two sources, and only two**: the till's (`TILL_SOURCE`) and a sale typed
+by hand (`MANUAL_SALE_SOURCE`). The till's key is « laddition », the
+historic spelling of « the till », for EVERY connector: the per-recipe till
+sales are rebuilt from source-less tables (`PosProductDailyQuantity` by
+`resync_recipe_from_daily_quantities`, « Données »'s restore), Marges reads
+any other source as typed by hand, and a second till key would be counted
+twice after the first link changed and turned back into « laddition » by a
+« Données » round trip. Which connector read a day is the job's log, never
+the row. The key is stored, never shown: a page says `source_label`.
 """
 
 from __future__ import annotations
@@ -15,7 +26,32 @@ from decimal import Decimal
 
 from django.db import transaction
 
+from common import search_key
+
 from .models import Recipe, RecipeSale, line_consumption
+
+#: The till's rows - every connector's (the module's docstring).
+TILL_SOURCE = "laddition"
+#: Sales typed in by hand live under their own source so a till import,
+#: which only ever rewrites its OWN rows, can never clobber them.
+MANUAL_SALE_SOURCE = "manual"
+#: What a page says for a stored source: the keys are never shown.
+SOURCE_LABELS = {TILL_SOURCE: "Caisse", MANUAL_SALE_SOURCE: "Saisie à la main"}
+
+
+def source_label(source: str) -> str:
+    """The French word for a stored source; one nobody named here as it is
+    stored."""
+    return SOURCE_LABELS.get(source, source)
+
+
+def sources_named(query: str) -> list[str]:
+    """The stored sources whose words hold `query`, accents and case aside:
+    « caisse » finds the till's rows."""
+    wanted = search_key(query.strip())
+    if not wanted:
+        return []
+    return [key for key, label in SOURCE_LABELS.items() if wanted in search_key(label)]
 
 
 @dataclass
@@ -62,7 +98,7 @@ def recipe_lookup() -> dict[str, Recipe]:
     return lookup
 
 
-def record_sales(entries, source: str = "manual") -> SalesImportResult:
+def record_sales(entries, source: str = MANUAL_SALE_SOURCE) -> SalesImportResult:
     """Record `(till_name, sold_on, quantity)` triples.
 
     Idempotent per (recipe, day, source): re-running an import corrects the
@@ -149,9 +185,9 @@ def _write_sales(order, totals, recipes, source, result) -> None:
 
 
 def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
-    """Rebuild this recipe's "laddition" RecipeSale rows from the till
-    products already linked to it, using quantities already on file
-    (PosProductDailyQuantity) rather than going back to L'Addition.
+    """Rebuild this recipe's till RecipeSale rows (`TILL_SOURCE`) from the
+    till products already linked to it, using quantities already on file
+    (PosProductDailyQuantity) rather than reading the till again.
 
     That data has been kept locally, per day, since the moment each till
     product was first seen in ANY import - whether or not it had a recipe
@@ -180,7 +216,7 @@ def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
         if totals:
             RecipeSale.objects.bulk_create(
                 [
-                    RecipeSale(recipe=recipe, sold_on=sold_on, source="laddition", quantity=quantity)
+                    RecipeSale(recipe=recipe, sold_on=sold_on, source=TILL_SOURCE, quantity=quantity)
                     for sold_on, quantity in totals.items()
                 ],
                 update_conflicts=True,
@@ -188,11 +224,11 @@ def resync_recipe_from_daily_quantities(recipe: Recipe) -> None:
                 update_fields=["quantity"],
             )
         # A day no PosProduct accounts for anymore (the last one linked to
-        # it was just detached) must not leave a stale "laddition" row
+        # it was just detached) must not leave a stale till row
         # behind - only days no CURRENTLY linked product covers are safe to
         # drop this way, which is exactly what's left once `totals` (this
         # recipe's full day-by-day picture, just rebuilt) is excluded.
-        RecipeSale.objects.filter(recipe=recipe, source="laddition").exclude(sold_on__in=totals.keys()).delete()
+        RecipeSale.objects.filter(recipe=recipe, source=TILL_SOURCE).exclude(sold_on__in=totals.keys()).delete()
 
 
 #: Till products recounted per query: SQLite caps the parameters of one

@@ -24,7 +24,8 @@ from django.utils import timezone
 from django.utils.http import urlencode
 
 import common
-from accounts.tenancy import integrations_allowed
+from accounts import vault
+from accounts.tenancy import integrations_allowed, server_accounts_allowed
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, search_key
 
 from . import coverage, integrations
@@ -86,11 +87,11 @@ OWN_MODULE = Q(code="METRO", is_scrapable=True)
 
 
 def own_module_suppliers():
-    """The suppliers fetched by a module of their own (OWN_MODULE) - none in
-    a tenant that may not use the server's accounts (integrations.py): that
-    module signs in to the owner's Metro account, whatever the tenant's
-    METRO row says (an import can tick `is_scrapable` again)."""
-    if not integrations_allowed():
+    """The suppliers fetched by a module of their own (OWN_MODULE) - none
+    outside the platform owner's espace (integrations.py: Metro is his
+    alone), whatever the tenant's METRO row says (an import can tick
+    `is_scrapable` again)."""
+    if not server_accounts_allowed():
         return Supplier.objects.none()
     return Supplier.objects.filter(OWN_MODULE)
 
@@ -121,8 +122,6 @@ def render_purchases(request, tab, *, status=200, **card):
     """The page, on `tab` ("documents", "a-verifier", "sources",
     "fournisseurs"), with the import card as `card` says (import_tab, batch,
     receipt_form, pdf_form)."""
-    from .parsers import LLM_PARSER_KEY
-
     counts = Invoice.objects.aggregate(
         total=Count("pk"),
         tickets=Count("pk", filter=TICKET_TO_CHECK),
@@ -134,16 +133,15 @@ def render_purchases(request, tab, *, status=200, **card):
     waiting = counts["tickets"] + counts["to_fix"]
     # « Enseignes et fournisseurs » counts every supplier, grey - counted,
     # not listed: the list reads every document's text, and the tabs are on
-    # every page of Achats. Both of its tables are every supplier but the AI
-    # pseudo-supplier. Beside it, amber, « N à voir »: the suppliers with a
+    # every page of Achats. Both of its tables are every supplier. Beside it,
+    # amber, « N à voir »: the suppliers with a
     # change to see, which the tab lists at its top (#a-voir). One number
     # meant both - 29 grey, then an amber 1 - with no word nor title, and the
     # owner could not tell what the « 1 » was (19/09). The fragment stays:
     # the list sits below the import card, 850 px down; the sticky topbar's
     # height is left above it by the stylesheet (--topbar-room), since the
     # list's heading first landed under the bar.
-    suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY)
-    to_see = _changes_to_see().filter(supplier__in=suppliers).values("supplier_id").distinct().count()
+    to_see = _changes_to_see().values("supplier_id").distinct().count()
     suppliers_url = reverse("invoices:supplier_list")
     context = {
         "tab": tab,
@@ -173,7 +171,7 @@ def render_purchases(request, tab, *, status=200, **card):
                 "key": "fournisseurs",
                 "label": "Enseignes et fournisseurs",
                 "url": suppliers_url + ("#a-voir" if to_see else ""),
-                "count": suppliers.count(),
+                "count": Supplier.objects.count(),
                 "attention": False,
                 "to_see": to_see,
             },
@@ -260,7 +258,7 @@ PORTAL_MANUAL_ONLY = (
 )
 
 
-def gather_sources(*, for_auto: bool = False) -> tuple[list[dict], set[int]]:
+def gather_sources(*, for_auto: bool = False, state=None) -> tuple[list[dict], set[int]]:
     """The sources « Récupérer » offers - Metro (with its pause), every
     active invoice source (mailbox or portal), every active slip format with
     a sender - and the ids of the suppliers they gather, which the default
@@ -270,12 +268,25 @@ def gather_sources(*, for_auto: bool = False) -> tuple[list[dict], set[int]]:
     « email », « portal », « slips »). `for_auto` adds `allowed` and
     `reason`: an automatic gather takes the mailbox's sources only.
 
-    Every source a gather searches is one of the server's own accounts: in a
-    tenant that may not use them nothing about them is read - no source."""
+    Unbound nothing about the sources is read - no source. Metro and the
+    customer portals are the platform owner's alone (integrations.py):
+    another espace is offered its mailbox's sources and slips only, and only
+    once its mailbox is filled in on its « Identifiants »
+    (integrations.mailbox_offered) - a source that could only fail is not
+    offered, by hand or automatically. `state`: the store already read for
+    this request (a page reads it once); read here when not handed."""
     allowed = integrations_allowed()
+    server = server_accounts_allowed()
+    if allowed and not server and state is None:
+        state = vault.load()
+    mailbox = allowed and integrations.mailbox_offered(state)
     metro = own_module_suppliers().first()
-    # The mailbox's types and the customer portals': both are gathered.
-    invoice_types = list(InvoiceType.objects.filter(is_active=True).select_related("supplier")) if allowed else []
+    # The mailbox's types and the customer portals': both are gathered - the
+    # portals in the platform owner's espace only.
+    active_types = InvoiceType.objects.filter(is_active=True).select_related("supplier")
+    if not server:
+        active_types = active_types.filter(source_kind=InvoiceType.SourceKind.EMAIL)
+    invoice_types = list(active_types) if mailbox else []
     sources = []
     if metro:
         from .scrapers.metro import metro_pause
@@ -291,7 +302,7 @@ def gather_sources(*, for_auto: bool = False) -> tuple[list[dict], set[int]]:
         }
         for it in invoice_types
     ]
-    if allowed:
+    if mailbox:
         # The drivers' returnables slips, each format fetched by mail: they
         # go to Consignes, never among the invoices (tasks._gather_slips).
         from returnables.models import SlipFormat
@@ -339,11 +350,17 @@ def _name_senders(request, batches) -> bool:
 def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_form=None) -> dict:
     from .receipts import invoice_supplier_choices
 
-    # Every source a gather searches is one of the server's own accounts:
-    # in a tenant that may not use them the panel says « à configurer »
-    # (_import_card.html), and nothing about them is read.
+    # Unbound the panel says « à configurer » (_import_card.html), and
+    # nothing about the sources is read. Metro and the customer portals are
+    # the platform owner's alone (integrations.py): another espace is offered
+    # its mailbox's sources only, and told so.
     allowed = integrations_allowed()
-    sources, gathered = gather_sources()
+    server = server_accounts_allowed()
+    # Another espace's mailbox is offered once filled in on its « Identifiants »
+    # - its store read once for the card (pages are measured).
+    state = None if server or not allowed else vault.load()
+    mailbox = allowed and integrations.mailbox_offered(state)
+    sources, gathered = gather_sources(state=state)
     # The card's entries as they always were: code, label, Metro's pause.
     sources = [{key: value for key, value in source.items() if key != "kind"} for source in sources]
     ScrapeJob.reap_stale()
@@ -436,7 +453,13 @@ def _import_card(request, import_tab=None, batch=None, receipt_form=None, pdf_fo
         "senders_shown": senders_shown,
         "batch": shown,
         "gather_refused": None if allowed else integrations.GATHER,
-        "ai_refused": None if allowed else integrations.AI_READING,
+        # What another espace's gather does not search, said under its sources.
+        "gather_notes": [] if server or not allowed else [integrations.METRO, integrations.PORTALS],
+        # Another espace whose mailbox is not filled in has nothing to gather
+        # (Metro and the portals are the owner's): the sentence in place of
+        # the form, never « Aucune source configurée » and a button answering
+        # « Aucune source cochée ».
+        "gather_to_fill": integrations.MAILBOX_TO_FILL if allowed and not server and not mailbox else None,
         # « Prendre une photo » stops what the form would post short of
         # Cloudflare's limit (photos.js, data-max-bytes). Read at the call,
         # as common's caps are, so a test can patch it.
@@ -950,8 +973,10 @@ def _sources() -> dict:
         invoice_type.channel = CHANNELS.get(invoice_type.source_kind, invoice_type.get_source_kind_display())
     return {
         "invoice_types": invoice_types,
-        # Both channels are the server's own accounts (integrations.py).
+        # Unbound, both channels are refused (integrations.py).
         "sources_refused": None if integrations_allowed() else integrations.SOURCES,
+        # A customer portal is the platform owner's espace's alone.
+        "portals_refused": None if server_accounts_allowed() else integrations.PORTALS,
     }
 
 
@@ -973,16 +998,11 @@ def _suppliers() -> dict:
     Above them, every change to see, oldest first, with why it asks and its
     « Vu »: what lights the tab's « à voir », said where it lights up rather
     than as a pill on one row among thirty."""
-    from .parsers import LLM_PARSER_KEY, is_ticket_shop
+    from .parsers import is_ticket_shop
     from .receipts import has_own_reader, names_shop, prints_header
     from .supplier_changes import why_to_see
 
-    changes_to_see = list(
-        _changes_to_see()
-        .exclude(supplier__parser_key=LLM_PARSER_KEY)
-        .select_related("supplier")
-        .order_by("created_at", "pk")
-    )
+    changes_to_see = list(_changes_to_see().select_related("supplier").order_by("created_at", "pk"))
     for change in changes_to_see:
         change.why = why_to_see(change)
 
@@ -996,7 +1016,7 @@ def _suppliers() -> dict:
     sources: dict[int, list] = {}
     for invoice_type in InvoiceType.objects.order_by("name"):
         sources.setdefault(invoice_type.supplier_id, []).append(invoice_type)
-    suppliers = list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name"))
+    suppliers = list(Supplier.objects.order_by("name"))
     for supplier in suppliers:
         # Each row leads to the supplier's own page (supplier_views).
         supplier.url = reverse("invoices:supplier_detail", args=[supplier.pk])

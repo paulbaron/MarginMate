@@ -29,7 +29,6 @@ from django.utils import timezone
 
 from common import is_id, search_key
 from invoices.models import Supplier
-from invoices.parsers import LLM_PARSER_KEY
 from returnables import patterns
 from returnables.models import MAX_COUNT, ReturnableType, SlipFormat
 from returnables.patterns import PatternError
@@ -83,18 +82,15 @@ def name_key(name: str) -> str:
 
 def supplier_choices(keep=None):
     """The suppliers a pickup or a format can name: those having a slip
-    format first, then the others by name. Not the AI pseudo-supplier, nor
-    a supplier of charges (the rent takes no empties back) - unless it is
-    `keep`, the one already chosen."""
+    format first, then the others by name. Not a supplier of charges (the
+    rent takes no empties back) - unless it is `keep`, the one already
+    chosen."""
     with_format = SlipFormat.objects.filter(supplier=OuterRef("pk"))
     wanted = Q(expenses_only=False)
     if keep is not None:
         wanted |= Q(pk=keep)
     return (
-        Supplier.objects.exclude(parser_key=LLM_PARSER_KEY)
-        .filter(wanted)
-        .annotate(has_format=Exists(with_format))
-        .order_by("-has_format", "name", "pk")
+        Supplier.objects.filter(wanted).annotate(has_format=Exists(with_format)).order_by("-has_format", "name", "pk")
     )
 
 
@@ -386,7 +382,7 @@ class SlipFormatForm(forms.ModelForm):
             **{field.attr: field.label for field in patterns.FORMAT_FIELDS},
         }
         help_texts = {
-            "name": "Ex. « UBA — bon du livreur ».",
+            "name": "Ex. « Grossiste — bon du livreur ».",
             "supplier": "Le fournisseur dont ce format lit les bons : ils sont comparés à ses reprises.",
             "is_active": "Inactif, il ne reconnaît plus aucun document et n'est plus récupéré.",
             **FORMAT_HELP,

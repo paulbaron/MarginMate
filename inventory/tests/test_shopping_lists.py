@@ -39,8 +39,6 @@ from accounts.tests.support import TenancyTestCase
 from inventory import shopping, shopping_lists
 from inventory.models import MovementKind, ShoppingList, ShoppingListItem, StockMovement, UnitChoices
 from inventory.shopping_lists import Figures, Finished
-from invoices.models import Supplier
-from invoices.parsers import LLM_PARSER_KEY
 from tests.factories import make_invoice, make_invoice_line, make_movement, make_product, make_stock_type, make_supplier
 from tests.runner import TEST_TENANT_PK
 
@@ -389,8 +387,12 @@ class ReadQuantityTests(TestCase):
 
 class StoresTests(TestCase):
     """The stores a list is offered for - bought at, neither a supplier of
-    charges nor the AI pseudo-supplier - and `store_of`, which also reaches a
-    store whose open list outlived its purchases."""
+    charges nor the removed AI reading's - and `store_of`, which also reaches
+    a store whose open list outlived its purchases.
+
+    The AI reading is gone (invoices/0038): its supplier, kept as an ordinary
+    one where something named it, has its reader key emptied and is told by
+    its code (receipts.RETIRED_CODES), as « Prévoir les courses » tells it."""
 
     def setUp(self):
         self.beer = make_stock_type(name="Bière exemple", unit=UnitChoices.UNIT)
@@ -398,9 +400,8 @@ class StoresTests(TestCase):
         bought(self.wholesaler, self.beer, "24")
         self.charges = make_supplier(name="Charges exemple", expenses_only=True)
         bought(self.charges, self.beer)
-        self.ai = Supplier.objects.filter(parser_key=LLM_PARSER_KEY).first() or make_supplier(
-            name="IA exemple", parser_key=LLM_PARSER_KEY
-        )
+        # As invoices/0038 leaves it where something names it.
+        self.ai = make_supplier(code="OTHER", name="Autre (analyse IA)")
         bought(self.ai, self.beer)
         self.returns_only = make_supplier(name="Reprise exemple")
         bought(self.returns_only, self.beer, "-1", "-40.00")
@@ -423,6 +424,16 @@ class StoresTests(TestCase):
     def test_store_of(self):
         with self.assertNumQueries(1):
             self.assertEqual(shopping_lists.store_of(str(self.wholesaler.pk)), self.wholesaler)
+
+    def test_the_removed_ai_reading_s_supplier_is_no_store(self):
+        """Bought at (a document filed under it is why 0038 kept it), and
+        still no store: not offered, not reached by its id, so no list is
+        ever started for it."""
+        self.assertEqual(self.ai.parser_key, "")
+        self.assertNotIn(self.ai, shopping_lists.offered_stores())
+        with self.assertNumQueries(1):
+            self.assertIsNone(shopping_lists.store_of(str(self.ai.pk)))
+        self.assertFalse(ShoppingList.objects.filter(supplier=self.ai).exists())
         for store in (self.charges, self.ai, self.returns_only, self.never):
             with self.subTest(store=store.name):
                 self.assertIsNone(shopping_lists.store_of(str(store.pk)))

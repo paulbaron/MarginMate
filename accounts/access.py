@@ -284,6 +284,14 @@ VIEW_AREAS = {
     "staff:signature_file": OWNER_ONLY,
     "staff:signature_delete": OWNER_ONLY,
     "staff:signature_delete_confirm": OWNER_ONLY,
+    # The till's file formats decide what an upload writes into the till's
+    # sales and payments, which « Entrées d'argent » holds against the bank:
+    # an employee could rewrite them (recipes/till_views.py).
+    "recipes:till_formats": OWNER_ONLY,
+    "recipes:till_format": OWNER_ONLY,
+    # An uploaded file writes the till's sales AND payments, which nothing
+    # tells from the till's own: an employee could hide a shortfall.
+    "recipes:upload_sales_file": OWNER_ONLY,
     # A stored file: by the folder it resolves to (`areas_of_file`).
     "accounts:media": EVERYONE,
     # Pages of every login: « Aucune page ouverte », and the password asked

@@ -32,9 +32,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from bank import forms as forms_module
 from bank import recognition, reconcile, statements, views
 from bank.forms import StatementFormatForm
 from bank.models import BankTransaction, StatementFormat
+from bank.tests import ofx_files
 from bank.tests.support import FORMAT_SEED, make_format
 from bank.tests.test_recognition_views import table_of, text_of
 from bank.tests.test_reconcile import card_row, debit_row, statement
@@ -170,7 +172,8 @@ class Page(TestCase):
         return response
 
     def new_form(self, html=None):
-        return form_posting_to(html or self.html(), self.url)
+        # The presets' forms post to the same address, each its own action.
+        return form_posting_to(html or self.html(), self.url, holding=("action", "tester"))
 
     def add(self, *, press=("action", "enregistrer"), file=None, **values):
         """The « Nouveau format » card, filled in and pressed."""
@@ -219,7 +222,8 @@ class ListTests(Page):
         row = text_of(row_of(response.content.decode(), seeded()))
         self.assertEqual(
             row,
-            f"1 ↑ ↓ {SEEDED} par défaut date 1 · libellé 4 · montant 6 · valeur 5 · type 2 Point-virgule ( ; ) "
+            f"1 ↑ ↓ {SEEDED} par défaut CSV (colonnes) date 1 · libellé 4 · montant 6 · valeur 5 · type 2 "
+            "Point-virgule ( ; ) "
             "jj/mm/aaaa Virgule (1 234,56) Modifier Supprimer",
         )
         self.assertNotContains(response, "à corriger")
@@ -231,7 +235,8 @@ class ListTests(Page):
         row = text_of(row_of(html, other))
         self.assertEqual(
             row,
-            "2 ↑ ↓ Banque Exemple (CSV) date 1 · libellé 2, 3 · débits 4 · crédits 5 Virgule ( , ) aaaa-mm-jj "
+            "2 ↑ ↓ Banque Exemple (CSV) CSV (colonnes) date 1 · libellé 2, 3 · débits 4 · crédits 5 Virgule ( , ) "
+            "aaaa-mm-jj "
             "Point (1,234.56) Modifier Supprimer",
         )
         # The first cannot go up, the last cannot go down.
@@ -260,7 +265,8 @@ class ListTests(Page):
         StatementFormat.objects.all().delete()
         response = self.get()
         self.assertIn(
-            "Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous.", text_of(response.content.decode())
+            "Aucun format : aucun relevé ne s'importe. Ajoutez-en un ci-dessous, ou partez d'un modèle",
+            text_of(response.content.decode()),
         )
         self.assertEqual(response.context["rows"], [])
 
@@ -311,7 +317,7 @@ class NewFormatTests(Page):
         self.assertEqual(form.attrs["enctype"], "multipart/form-data")
         self.assertEqual(
             [name for name in form.names if name not in ("csrfmiddlewaretoken", "action")],
-            ["name", *[name for name in OTHER_FORMAT if name != "name"], views.TEST_FILE],
+            ["name", "file_type", *[name for name in OTHER_FORMAT if name != "name"], views.TEST_FILE],
         )
         for name in ("date_column", "amount_column", "debit_column", "credit_column", "value_date_column"):
             with self.subTest(column=name):
@@ -608,9 +614,12 @@ class TesterTests(Page):
         self.assertIn("au plus par fichier", text)
         self.assertNotIn("premières lignes du fichier", response.content.decode())
 
-    def test_a_file_that_is_no_csv_is_refused_unread(self):
+    def test_a_file_that_is_no_statement_file_is_refused_unread(self):
         response = self.edit(seeded(), press=("action", "tester"), file=upload(bnp_file(), "releve.pdf"))
-        self.assertIn("releve.pdf : seuls les fichiers CSV sont acceptés.", text_of(response.content.decode()))
+        self.assertIn(
+            "releve.pdf : seuls les relevés CSV, OFX ou CAMT.053 (XML) sont acceptés.",
+            text_of(response.content.decode()),
+        )
         self.assertEqual(response.context["test"].rows, [])
 
     def test_long_files_are_cut_and_say_how_many_more(self):
@@ -789,3 +798,181 @@ class StateTests(Page):
         response = self.client.post(self.format_url(seeded()), {"action": "supprimer"})
         self.assertEqual(response.status_code, 403)
         self.assertTrue(StatementFormat.objects.filter(name=SEEDED).exists())
+
+
+#: An OFX format as stored: no column, no account pattern, the CSV-only
+#: choices at the model's defaults (forms.CANONICAL).
+OFX_FIELDS = {"file_type": "ofx", "date_column": None, "label_columns": "", "account_pattern": ""}
+
+
+def as_the_script_leaves_it(html: str) -> str:
+    """The page once static/js/statement_format.js has followed the menu to
+    a file that says where each datum is: the CSV's fieldset hidden and
+    disabled (the test client runs no script)."""
+    marker = 'data-file-types="csv"'
+    assert html.count(marker) == 1
+    return html.replace(marker, f"{marker} hidden disabled")
+
+
+class FileTypeTests(Page):
+    """A format of another kind than CSV saved FROM THE PAGE, as a browser
+    sends it: the CSV's fields are in a fieldset the script disables (and
+    the server, for the kind it draws), so none of them is posted - and the
+    form must save all the same, storing nothing in them."""
+
+    CANONICAL_OFX = {
+        "file_type": "ofx",
+        "delimiter": ";",
+        "date_format": "dd/mm/yyyy",
+        "decimal_mark": ",",
+        "date_column": None,
+        "label_columns": "",
+        "amount_column": None,
+        "debit_column": None,
+        "credit_column": None,
+        "value_date_column": None,
+        "bank_type_column": None,
+        "account_pattern": "",
+    }
+
+    def stored_fields(self, name) -> dict:
+        made = StatementFormat.objects.get(name=name)
+        return {field: getattr(made, field) for field in self.CANONICAL_OFX}
+
+    def test_the_kind_of_file_comes_first_and_a_csv_s_fields_are_apart(self):
+        html = self.html()
+        form = self.new_form(html)
+        self.assertEqual(form.control("file_type").options, [("csv", True), ("ofx", False), ("camt053", False)])
+        self.assertIn("Type de fichier", text_of(field_of(html, "file_type")))
+        fieldset = html[html.index('<fieldset class="format-columns" data-file-types="csv">') :]
+        fieldset = fieldset[: fieldset.index("</fieldset>")]
+        for name in ("delimiter", "date_format", "decimal_mark", "date_column", "label_columns", "account_pattern"):
+            with self.subTest(field=name):
+                self.assertIn(f'name="{name}"', fieldset)
+        for name in ("name", "file_type", "encoding", views.TEST_FILE):
+            with self.subTest(field=name):
+                self.assertNotIn(f'name="{name}"', fieldset)
+        # Its own script, never ui.js's.
+        self.assertIn("js/statement_format.js", html)
+
+    def test_a_new_ofx_format_is_saved_from_the_page_its_csv_fields_never_sent(self):
+        form = self.new_form(as_the_script_leaves_it(self.html()))
+        values = {"name": "Relevé OFX", "file_type": "ofx"}
+        sent = form.submission(press=("action", "enregistrer"), values=values)
+        self.assertEqual(
+            sorted({name for name, _value in sent}), ["action", "csrfmiddlewaretoken", "encoding", "file_type", "name"]
+        )
+        response = self.send(form, press=("action", "enregistrer"), values=values)
+        self.assertEqual(self.messages_of(response), ["Format « Relevé OFX » ajouté."])
+        self.assertEqual(self.stored_fields("Relevé OFX"), self.CANONICAL_OFX)
+        row = text_of(row_of(response.content.decode(), StatementFormat.objects.get(name="Relevé OFX")))
+        self.assertIn("Relevé OFX OFX / QFX (Money) lues dans le fichier — — — Modifier", row)
+
+    def test_without_the_script_what_a_csv_s_fields_hold_is_not_read_nor_stored(self):
+        response = self.add(
+            name="Relevé CAMT",
+            file_type="camt053",
+            date_column="x",
+            label_columns="y",
+            debit_column="51",
+            account_pattern="(",
+        )
+        self.assertEqual(self.messages_of(response), ["Format « Relevé CAMT » ajouté."])
+        self.assertEqual(self.stored_fields("Relevé CAMT"), {**self.CANONICAL_OFX, "file_type": "camt053"})
+
+    def test_a_stored_ofx_format_s_page_draws_its_csv_fields_disabled_and_saves(self):
+        fmt = make_format("Relevé OFX", **OFX_FIELDS)
+        html = self.html(self.format_url(fmt))
+        self.assertIn('<fieldset class="format-columns" data-file-types="csv" hidden disabled>', html)
+        form = self.edit_form(fmt)
+        self.assertTrue(form.control("date_column").disabled)
+        self.assertFalse(form.control("encoding").disabled)
+        response = self.edit(fmt, name="Relevé OFX de la banque", encoding="cp1252")
+        self.assertEqual(self.messages_of(response), ["Format « Relevé OFX de la banque » enregistré."])
+        fmt.refresh_from_db()
+        self.assertEqual((fmt.encoding, fmt.file_type, fmt.date_column), ("cp1252", "ofx", None))
+        # « Tester » reads with it too: none of a CSV's fields is asked for.
+        response = self.edit(fmt, press=("action", "tester"))
+        self.assertEqual(response.context["test"].problem, views.NO_TEST_FILE)
+
+    def test_a_stored_format_s_kind_of_file_never_changes(self):
+        """Changed, a CSV's columns were written over with `CANONICAL`, and
+        « Partir d'un modèle » keeps a name that is there: one wrong choice
+        saved on the owner's own format lost his layout for good (review,
+        04/10/2026). The menu is drawn disabled, saying why; a value posted
+        for it all the same is not read."""
+        bnp = seeded()
+        before = self.stored()
+        form = self.edit_form(bnp)
+        self.assertTrue(form.control("file_type").disabled)
+        self.assertIn(forms_module.FILE_TYPE_FIXED, text_of(field_of(self.html(self.format_url(bnp)), "file_type")))
+        # The new format's menu is a choice.
+        self.assertFalse(self.new_form().control("file_type").disabled)
+        # Posted by hand anyway: the format stays a CSV, its columns kept.
+        data = as_post(form.submission(press=("action", "enregistrer")))
+        data["file_type"] = ["ofx"]
+        response = self.client.post(self.format_url(bnp), data, follow=True)
+        self.assertEqual(self.messages_of(response), [f"Format « {SEEDED} » enregistré."])
+        self.assertEqual(self.stored(), before)
+        bnp.refresh_from_db()
+        self.assertEqual((bnp.file_type, bnp.date_column, bnp.label_columns), ("csv", 1, "4"))
+        # An OFX format stays one, its CSV's fields never asked for.
+        ofx_format = make_format("Relevé OFX", **OFX_FIELDS)
+        data = as_post(self.edit_form(ofx_format).submission(press=("action", "enregistrer")))
+        data["file_type"] = ["csv"]
+        response = self.client.post(self.format_url(ofx_format), data, follow=True)
+        self.assertEqual(self.messages_of(response), ["Format « Relevé OFX » enregistré."])
+        ofx_format.refresh_from_db()
+        self.assertEqual((ofx_format.file_type, ofx_format.date_column), ("ofx", None))
+
+    def test_an_unknown_kind_of_file_is_refused_on_its_field(self):
+        form = self.new_form()
+        data = as_post(form.submission(press=("action", "enregistrer"), values=OTHER_FORMAT))
+        data["file_type"] = ["pdf"]
+        response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Type de fichier inconnu.", text_of(field_of(response.content.decode(), "file_type")))
+        self.assertEqual(self.order(), [SEEDED])
+
+    def test_tester_reads_an_ofx_file_with_no_column_to_number(self):
+        fmt = make_format("Relevé OFX", **OFX_FIELDS)
+        response = self.edit(fmt, press=("action", "tester"), file=upload(ofx_files.sgml(), "releve.ofx"))
+        test = response.context["test"]
+        self.assertEqual((test.rows, test.refusal, test.count), ([], "", len(ofx_files.OPERATIONS)))
+        self.assertEqual(test.account, ofx_files.ACCOUNT)
+        html = response.content.decode()
+        self.assertNotIn("Premières lignes, colonnes numérotées", html)
+        self.assertIn("Ce que le format lit", html)
+
+    def test_tester_refuses_a_file_of_another_kind_in_the_import_s_words(self):
+        """Before a row of it is numbered: an OFX file's lines drawn as a
+        CSV's columns above « this is no CSV » said two things at once."""
+        response = self.edit(seeded(), press=("action", "tester"), file=upload(ofx_files.xml(), "releve.csv"))
+        test = response.context["test"]
+        self.assertTrue(test.refusal.startswith("Ce fichier est un relevé OFX / QFX (Money)"))
+        self.assertEqual(test.rows, [])
+        self.assertNotIn("Premières lignes, colonnes numérotées", response.content.decode())
+
+    def test_tester_reads_a_csv_s_text_once_for_its_rows_and_its_operations(self):
+        """Checked whole once (`csv_text`), then handed to both: the rows
+        numbered and the operations read - never split a third time."""
+        with mock.patch.object(statements, "csv_text", wraps=statements.csv_text) as checked:
+            response = self.edit(seeded(), press=("action", "tester"), file=upload(bnp_file()))
+        test = response.context["test"]
+        self.assertEqual((test.refusal, test.count), ("", 2))
+        self.assertTrue(test.rows)
+        self.assertEqual(checked.call_count, 1)
+
+    def test_both_file_inputs_offer_every_kind_of_statement_file(self):
+        for url in (self.url, self.format_url(seeded())):
+            with self.subTest(url=url):
+                self.assertIn(
+                    f'name="fichier_essai" id="id_fichier_essai" accept="{statements.ACCEPT_ATTRIBUTE}"', self.html(url)
+                )
+
+    def test_the_form_s_own_errors_are_said_once(self):
+        refusal = statements.FormatError("ailleurs", "Phrase d'essai.")
+        with mock.patch.object(statements, "check_format", side_effect=refusal):
+            response = self.add()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(text_of(response.content.decode()).count("Phrase d'essai."), 1)

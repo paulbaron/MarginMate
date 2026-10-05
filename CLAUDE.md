@@ -31,8 +31,8 @@ or `uv run python manage.py test --settings=config.settings_test` (the same
 `default` and the central `accounts`, `tests/runner.py`), a temporary
 `TENANTS_ROOT` (every folder is the test espace's, `accounts.paths`), a test
 client logged in as the test espace's owner,
-and **blanks every credential** so no test can reach the real mailbox, the
-real Metro site or the Anthropic API. `tests/support.py::NoNetworkTestCase`
+and **blanks every credential** so no test can reach the real mailbox or
+the real Metro site. `tests/support.py::NoNetworkTestCase`
 additionally makes an accidental outbound connection fail loudly.
 
 Add `--exclude-tag=browser` for the fast loop: the browser tests drive a
@@ -252,8 +252,8 @@ steps (the one-off move included).
 - **DEVELOPMENT**: this folder - one of the copies where the owner and
   coding sessions edit; each pushes its `main` to GitHub.
   Its .env says `DJANGO_DEBUG=True`, local hosts only, no `MARGINMATE_HTTPS`,
-  **no integration credentials** (Metro, the mailbox, L'Addition, the AI,
-  the mail server, the portals' variables: blank, so a gather from here
+  **no integration credentials** (Metro, the mailbox, L'Addition, the mail
+  server, the portals' variables: blank, so a gather from here
   refuses instead of reaching Metro), and points `MARGINMATE_TENANTS_ROOT` /
   `MARGINMATE_ACCOUNTS_DB` at `..\data-dev\` - a copy of a production
   backup, made by `refresh_dev_data.cmd`. runserver on 8000, which
@@ -559,10 +559,16 @@ handlers render them.
   server's path. `common.error_for_page(exc, said=(…))` keeps the app's own
   French refusals (`said`) and turns anything else into one fixed sentence
   by kind (`SERVER_ERROR`, `UNREADABLE_IMAGE`, `UNREADABLE_PDF`), the detail
-  to the log. Left as they were: the gather's and the till import's job logs
-  (`invoices/tasks.py`, `recipes/tasks.py`), shown in the owner's espace
-  only (`integrations_allowed`), still carry the exception and its
-  traceback.
+  to the log. The gather's, a source test's and the till import's job logs
+  (`invoices/tasks.py`, `recipes/tasks.py`) are drawn in every espace since
+  the connectors opened to every bar (04/10/2026): outside the platform
+  owner's espace `common.job_line` cuts a traceback and Selenium's stack and
+  hides the server's paths, the line whole going to the server's log
+  (« Every espace's connectors », under « Gathering invoices »); the owner's
+  keep the exception and its traceback.
+  The till import's failure line is `error_for_page`'s sentence, its
+  traceback added only where `server_accounts_allowed()` (« L'Addition (the
+  till) »).
 - A signed file gone from the private folder is
   `signature_requests.FILE_MISSING` (its name, never its path) on
   « Contresigner » and « Vérifier » too: « Vérifier » writes its verdict for
@@ -596,12 +602,11 @@ handlers render them.
   tens of thousands. `ocr.check_page_count` (pdfminer's own walk of the page
   tree, stopped at `MAX_PAGES` + 1, never pdfium's count, which believes the
   /Count a file declares) runs in `receipts.import_document` after the
-  e-invoice and before the bon guard, at the top of
-  `importing.parse_and_import` and before the AI upload's bon guard;
-  `ocr.pdf_pages` is how a reader walks a PDF (refused past the cap, each
-  page closed once read): the text layer, `InvoiceParser.parse`, the AI
-  reader. `einvoice.embedded_xml` opens a pdfminer document, never a
-  pdfplumber one (it runs first, on every PDF). A bon (`returnables.
+  e-invoice and before the bon guard, and at the top of
+  `importing.parse_and_import`; `ocr.pdf_pages` is how a reader walks a PDF
+  (refused past the cap, each page closed once read): the text layer,
+  `InvoiceParser.parse`. `einvoice.embedded_xml` opens a pdfminer document,
+  never a pdfplumber one (it runs first, on every PDF). A bon (`returnables.
   reading.pdf_text`) is counted the same way, to its own 5 pages, before
   pdfplumber opens it. **Never `len(pdf.pages)` on a file from outside.**
 - **What pdfminer's object parser reads is bounded**
@@ -1262,7 +1267,7 @@ to PDFium (`ocr.bounded_reading`; PDFium itself runs in a child process:
 « What a page may say about an error, a redirect, an upload »).
 `invoices/ocr.py` stands in for `extract_text()`, and
 `parsers/receipt_base.py::ReceiptParser` is the only class allowed to
-override `parse()` besides the LLM fallback. The ticket reader still
+override `parse()`. The ticket reader still
 implements `parse_pages` **only**, so every layout is still testable from
 hand-written text with no photo and no OCR engine — `test_parser_contract.py`
 enforces that the override lives in the base and nowhere else.
@@ -1271,6 +1276,12 @@ enforces that the override lives in the base and nowhere else.
 parsers were replaced by one that reads a line for what its numbers do; a
 shop is data (`TicketShop`: header patterns, the placeholder name its till
 prints, whether its items carry a VAT code), registered once per supplier.
+**A configured till answers only in an espace holding its supplier row**
+(`receipts.configured_tills`, one query, on `recognise_shop`'s fallback only):
+a new espace starts without the original bar's local shops (`invoices.seeds`),
+and before, another bar's « Épicerie Sabah » went to Sabbh Oriental's till -
+or crashed the import once that row was gone. `import_receipt` files under a
+row of the espace or raises `UnrecognisedShopError`, never `DoesNotExist`.
 Measured against the 368 tickets a person had checked (`eval` against their
 stored lines, on a scratch copy of the database), it disagreed on 5 where the
 shop parsers disagreed on 21 - each of the 5 a person's shortcut (a quantity
@@ -1881,16 +1892,7 @@ and `detect_shop` who printed it. The import reports each file as what
 it became, and links a ticket to its review screen, an invoice to its lines.
 `/invoices/upload/` still takes one PDF with its supplier named by hand -
 folded under the import card, for a document that says nothing about its
-sender, or for the AI pseudo-supplier.
-
-**The AI reading never files part of an answer** (« Autre (analyse IA) »,
-`parsers/llm_fallback.py`): one cut off at its length limit (`MAX_TOKENS`,
-16000) or declined raises `AIReadingRefused`, said on the page
-(`receipt_batches.READING_REFUSALS`), nothing filed - the lines before a cut
-are a valid answer, and a long invoice was filed without its last ones. Its
-tool schema is asked for, not enforced: a count is a Decimal (0.5 divided
-by int(0.5)), a nameless line is left out and said, a line without a price
-or count is said, and the invoice waits in « À vérifier ».
+sender.
 
 **The review screen is the deliverable, not the parser.** The import card
 takes a batch (`/invoices/tickets/`) and detects each shop from its own
@@ -2128,9 +2130,9 @@ looks like its name, date, total: `receipts.first_reading`) and, once the
 batch has finished, offers the suppliers on that row - or a **new shop**
 (`receipts.create_shop`), named and given the text its tickets print at the
 top (`Supplier.ticket_header`). The ticket is read whatever the shop:
-`receipts.parser_for` gives every supplier but the AI pseudo-supplier a
-reader, the configured till's or the same reader without settings (a Metro
-paper ticket included). **The header is given from the review screen, not from the import card**: the
+`receipts.parser_for` gives every supplier a reader, the configured
+till's or the same reader without settings (a Metro paper ticket
+included). **The header is given from the review screen, not from the import card**: the
 card is filled in before anyone has seen the document, so it asks for a name
 only, and the review page - the photo beside it - has the box, filled in with
 what the document seems to print (`header_guess`) and with its own top lines
@@ -2483,14 +2485,28 @@ supplier) and opens on the correction page beside its PDF; the supplier learns
 what it prints. A supplier with its own reader (Metro, UBA...) keeps it, and a
 digital invoice dropped among ticket photos and filed by hand under one goes
 through it (`receipts.import_invoice_pdf`, when the file has a text layer; a
-scan is read as a ticket whatever the supplier). The AI pseudo-supplier is
-still offered there, last. A reader that fails or reads nothing (or the AI
-pseudo-supplier, which has none) still files the ticket, empty, with a failed
+scan is read as a ticket whatever the supplier). A reader that fails or
+reads nothing still files the ticket, empty, with a failed
 "Lecture automatique" check - that check is also what puts it in the review
 queue, which lists only receipts with checks. Either way the operator lands on
 the review screen, which also takes the ticket's date and total (a blank
 total keeps the one read: it is a field nobody filled in, not a total
 removed).
+
+**A source's « Lecteur »** (`InvoiceTypeForm`, `parsers.reader_choices`)
+lists « — Lecteur générique — », then the readers of a PDF layout by their
+`label`, sorted (Cecina (Vignerons de Cessenon), Metro, UBA:
+`parsers.layout_readers`) - never a till (keyed on its supplier's code, its
+settings one shop's tickets: every bar saw the original bar's local shops'
+codes there). A key saved before (a till's, one since
+removed) stays offered under its name, so no source becomes invalid. The
+sources table, an import's « Le lecteur X n'a trouvé aucune ligne » and the
+« Données » import's « garde son lecteur » note name a reader the same way
+(`parsers.reader_label`, `InvoiceType.reader_name`); a new reader needs a
+`label` (`test_parser_contract`). The hand PDF import reads with the
+SUPPLIER's reader alone (`import_document(supplier=)`):
+its card names the select's group (« Si son fournisseur est dans le groupe
+« Lecteur dédié »… »), never a source's « Lecteur ».
 
 A ticket number of four digits or fewer ("Ticket no 4278") is the till's count
 of the day: it comes round, so it is stored with the date, or a later ticket
@@ -2778,6 +2794,28 @@ suggestions » still takes everything; « Approuver les sûres » takes the
 - `least_confident` answers "low" for an unknown level - nothing unmeasured
   is ever approved in bulk. A rule's reasoning names the word matched and
   the article, in French, never the regex.
+- **A rule naming the original bar's own article names it only where that
+  article exists** (`MatchRule.bar_specific`, 04/10/2026): « Bière Du
+  Moment » for any Corona or Brooklyn, « Fût Felsgold », « Palette
+  Livraison », « Limoncel », « Foie Gras » under « Consommables ». A new bar
+  has no articles, so « Approuver les suggestions » made one of those names
+  for every match. Checked with THE lookup the suggestion is resolved with
+  (`existing_article`: `_normalize_casing`, then `name__iexact` - SQLite
+  folds ASCII case only), memoised per pass (`SuggestionContext.has_article`).
+  **Elsewhere the rule still answers, under the raw name**
+  (`_rule_suggestion`, the fallback's `_raw_article_name`): its unit and
+  counting stay - passed over, a « FUT 20L FELSGOLD » deposit became 20 L
+  of an unknown article, booked by « Approuver les suggestions » (review,
+  04/10/2026) - and so does its category, unless the original bar's is a
+  choice of its own (`elsewhere_category`: a pallet among « Consignes », a
+  foie gras in « Epicerie »). It keeps its place in the table, so a rule
+  further down never answers for it (a foie gras with pepper is no
+  « Poivre noir »). A bar-specific rule names a fixed article (no capture
+  group). The generic rules (Vodka, Gin, Tonic, Sirop…, « Casier verre »)
+  are unchanged, and so is the owner's espace wherever those articles
+  exist; one he renamed is now suggested under the raw name (the
+  fingerprint holds every article's name, so a stored suggestion is
+  remade).
 - **A factor finer than its column is no factor.**
   `_resolve_stock_type_match` rounds the suggested factor to the four
   decimals `stock_equivalent` holds, and a rounding that moves it by more
@@ -2869,8 +2907,8 @@ thread blocked for good in one call is left to the reaper.
 
 **Metro's files and a mailbox source naming its reader**
 (`tasks._import_downloaded_file`) go through the same two guards as every
-other way in, before the reader: the file's digest (« Skipped … (already
-imported) ») and the e-invoice, read from its XML
+other way in, before the reader: the file's digest (« Ignoré : … (déjà
+importé) ») and the e-invoice, read from its XML
 (`receipts.import_einvoice`). Through the reader alone a Factur-X's stated
 figures were thrown away, and a document the reader finds no number on (a
 credit note) was filed again at every gather. The returnables slip guard
@@ -3046,9 +3084,11 @@ model is a migration to apply to the real database, for a word.
 **« Identifiants »** (`/identifiants/`, `accounts/credentials.py`, the
 store `accounts/vault.py`; 01/10/2026, the owner: « renseigner les logins et
 mots de passe des différents sites et de mon email sur une page »): the
-mailbox, Metro, L'Addition and every portal (one account per pair of names,
-two sources of one site share it), typed on a page reached from « Données »'s
-header and the Sources tab - no topbar link (the bar's rows are measured).
+mailbox, Metro, L'Addition and every portal (one account per pair of
+names, two sources of one site share it), typed on a page reached from
+« Données »'s header and the Sources tab - no topbar link (the bar's rows are
+measured). Another bar's page holds the mailbox and L'Addition only (« Every
+espace's connectors », below).
 **Third-party passwords: what protects them** (security review of 01/10/2026,
 the owner: « users will enter passwords from sensitive websites »; five
 auditors and their skeptics, 25 confirmed findings - each rule below is one):
@@ -3158,17 +3198,23 @@ auditors and their skeptics, 25 confirmed findings - each rule below is one):
   the two sent a new login with an old password - a refused sign-in Metro's
   firewall counts. Metro reads it once a run (`metro_credentials`).
 - **Keyed by the .env's own names**, so every connector asks one question:
-  `vault.setting(name)` (the page's value, else `settings.<name>`) for Metro,
-  the mailbox and L'Addition, and `website.credentials` reads the store
-  before the .env for a portal - read at every call, never cached. It also
+  `vault.setting(name)` (the page's value, else - in the platform owner's
+  espace only - `settings.<name>`, `vault.server_setting`) for Metro, the
+  mailbox and L'Addition, and `website.credentials` reads
+  the store before the .env for a portal - read at every call, never
+  cached. `vault.ready(*names)` says whether a connector would sign in. It also
   refuses a portal naming an application variable (`app_env_name`) at run
   time, whatever the form and the import let through.
 - **A password is never shown back**: always an empty `new-password` field,
   a placeholder saying one is stored, blank keeps it, « Effacer » removes it;
   a login is shown. A value only in the .env is said (« Fichier .env »),
   never printed. A posted name no account offers is ignored.
-- Only where `integrations_allowed()` (anywhere else: the refusal sentence,
-  a POST 403). `never_cache`.
+- Every espace's owner (since 04/10/2026; it was the platform owner's
+  espace only), his password confirmed. Another bar's page offers no Metro
+  and no portal, says no « Fichier .env » and names its fields after their
+  account (`FIELD_ALIASES`: `boite_adresse`, `caisse_mot_de_passe`…), so no
+  server variable's name reaches it (`STARTED_OVER_HOSTED`,
+  `vault.WEAK_KEY_HOSTED`). `never_cache`.
 - Tests: `accounts/tests/test_credentials.py` - every test removes both
   files before and after (the test espace's folder is the whole run's),
   patches `credentials._env_file` off the real .env, confirms the password
@@ -3216,17 +3262,24 @@ through the motif guard too**
 (`returnables.patterns.check_invoice_mail_pattern`, used by
 `EmailInvoiceSource.clean()`, and `invoice_mail_matcher`, the
 default `compile` of `find_matching_emails`, so the gather and « Tester »
-both use it): the shape check without compiling (« The motif guard », under
-« Consignes »), then `regex.compile` with NO flag - `re`'s meaning kept,
-case-sensitive unless the pattern says `(?i)`, a blank-matching « .* »
-accepted, unlike a returnables format -, 500 characters at most (the
-column), matched on the first 200 000 characters of the text with a 1 s
-timeout per match; a timeout is « no match », said in the job's log, and
-makes the search an incomplete one (above). A refusal names its field
-(`generic_email.PATTERN_LABELS`: « Motif d'expéditeur / d'objet / de
-contenu / de pièce jointe »), and `_gather_email` says a stored pattern the
-guard refuses (saved before it) as « Motif de la source à corriger : … »,
-never « Boîte mail : », the way `_gather_slips` says a format's. It
+both use it), **in every espace, the owner's included** (his decision for
+his own espace; the merge of 04/10/2026 made it the one implementation):
+the shape check without compiling (« The motif guard », under
+« Consignes »), on the tree `regex` builds with no flag (`_check_shape(pattern,
+0)`: the tree compiled), then `regex.compile` with NO flag - `re`'s meaning
+kept, case-sensitive unless the pattern says `(?i)`, stripped as the form
+strips it, a blank-matching « .* » accepted in the owner's espace, unlike a
+returnables format -, 500 characters at most (the column), matched on the
+first 200 000 characters of the text with a 1 s timeout per match; a timeout
+is « no match », said in the job's log, and makes the search an incomplete
+one (above). A refusal at the gather names its field
+(`EmailInvoiceSource.PATTERN_LABELS`, through `generic_email._invoice_matcher`:
+« Motif d'expéditeur / d'objet / de contenu / de pièce jointe »), and
+`_gather_email` says a stored pattern the guard refuses (saved before it) as
+« Motif de la source à corriger : … », never « Boîte mail : », the way
+`_gather_slips` says a format's; `EmailInvoiceSource.clean` says
+« Expression régulière invalide : … » in the owner's espace. What another
+bar's patterns get on top is under « Every espace's connectors » below. It
 used to be a bare `re.compile` run on mail anybody can write: one
 backtracking pattern and one crafted body pinned the server's CPU for every
 bar (audit 04/10/2026). An attachment's file name
@@ -3290,13 +3343,219 @@ without its header. A parser that reads nothing, or warns (`ParsedInvoice.warnin
 leaves the message on the invoice (`error_message`) and holds it in "À
 vérifier" - an empty invoice used to say "ce fournisseur n'a pas de parseur".
 
+#### Every espace's connectors (04/10/2026)
+
+The connectors opened to every bar, each signing in with what it typed on
+its own « Identifiants »; the reference is `invoices/integrations.py`'s
+docstring. Two gates (`accounts/tenancy.py`), asked by every entry point on
+its own - the views, the task bodies, each connector last:
+- `integrations_allowed()` - **any bound espace**: the invoice mailbox (its
+  sources, « Tester », the returnables slips) and L'Addition's sales import.
+  Refused unbound only. No kill switch: an espace closed
+  (`Tenant.is_active`) is bound by no request.
+- `server_accounts_allowed()` - **the platform owner's espace only**
+  (`uses_server_integrations`; accounts.E005 unchanged: the server's .env
+  accounts are still one owner's): the .env's values as a fallback
+  (`vault.server_setting` - `setting`, `settings_of` and `ready` fall back
+  only through it, so another bar never signs in with the owner's
+  accounts), a server command's or setting's name on a page
+  (`recipes.integration.till_commands_shown`; elsewhere « récupérez ou
+  importez de nouveau les ventes … », `TILL_REIMPORT`, and
+  `laddition_import`'s job note « Lancé depuis le serveur. » - its job's log
+  is drawn on the Ventes tab), `laddition_open`, and two connectors that
+  stay his:
+  - **Metro**: every bar's sign-in would leave from the server's one IP,
+    which Metro's firewall judges for everybody (it blocked the owner
+    twice); a pause per espace protects nobody. `scrape_metro_invoices`,
+    `own_module_suppliers`, the gather (a METRO posted elsewhere fails on
+    its own line) and `metro_now`; elsewhere `integrations.METRO`, « à
+    configurer ». Its PDFs dropped by hand are read by its reader in every
+    espace.
+  - **the supplier portals**: the server's Chrome, on the owner's home
+    network, goes wherever a portal's page sends it (the router, MarginMate
+    on 127.0.0.1), and there is no egress proxy. The connector
+    (`website.credentials`, `_visit`), the gather, `test_website_task`, the
+    source form's channel and its « Tester », the gather card and the
+    Sources tab; elsewhere `integrations.PORTALS`.
+- **Offered once filled in** (another bar only; the owner's espace is never
+  asked, his .env or page stand): the gather card and Consignes offer its
+  mailbox sources and slips once `vault.ready(INVOICE_EMAIL_ADDRESS,
+  INVOICE_EMAIL_APP_PASSWORD)` (`integrations.mailbox_offered`, ONE
+  `vault.load()` per page, pinned by a test on the Achats page), else
+  « Boîte mail : à renseigner sur la page Identifiants. » - a source that
+  could only fail is not ticked at every gather; with nothing else to
+  gather (Metro and the portals are the owner's) the card draws that
+  sentence and the notes in place of the form (`gather_to_fill`). Consignes
+  still shows, and is held by, a gather running whatever the mailbox.
+- **The mailbox's guards** (another bar's unless said):
+  - **The patterns: GitHub's main's rule in every espace, another bar's
+    extras on top, one implementation** (merged 04/10/2026, « An invoice
+    source's four patterns » above). `EmailInvoiceSource.clean` (the form
+    and « Données » alike) and the gather and « Tester »
+    (`generic_email._invoice_matcher` → `invoice_mail_matcher`) all go
+    through `returnables.patterns.check_invoice_mail_pattern`. Outside the
+    owner's espace: `clean`'s refusals name their field (`PATTERN_LABELS`,
+    « Motif d'expéditeur : … » where the owner's say « Expression régulière
+    invalide : … »); a pattern finding something in an empty text keeps
+    every mail until the byte budgets stop the search, so it is refused,
+    when saved and before a search signs in, with its field's own sentence
+    (`EMPTY_MATCH_REASONS` passed as `empty_reason`, « … pour tous les
+    expéditeurs, écrivez @ »; the owner's « .* » is `re`'s); and a pattern
+    out of time on `MAX_MAIL_TIMEOUTS` (3) mails of one search stops its
+    source (`MailMatcher(max_timeouts=)`, a PatternError « Motif de
+    contenu : motif trop lent sur ces mails — simplifiez-le. », said
+    « Motif de la source à corriger : … ») - before it each slow mail makes
+    the search incomplete, as in the owner's espace, where no number of
+    them stops it. The patterns are stripped and matched on 200 000
+    characters in every espace: this branch's « not stripped » and 100 000
+    gave way to GitHub's main's rule.
+    `invoices/tests/test_mailbox_guards.py` tests each rule in both espaces.
+  - `invoices/scrapers/egress.py`: the IMAP server's name is resolved
+    (`egress.resolve`, looked up at each call) before IMAP4_SSL, and
+    anything but a public unicast address refused - loopback, private,
+    link-local, CGNAT, multicast, reserved, unspecified; an IPv6 wrapping
+    an IPv4 (IPv4-mapped, 6to4 `2002::/16`, which Python calls global)
+    judged as that IPv4. « Identifiants » refuses a local name
+    (« localhost », a single label, `.local`, `.lan`…). The connection
+    resolves again: a name rebinding in between still meets the TLS check
+    of its certificate.
+  - **Memory** (`generic_email._open_mailbox`, the classes built at the call
+    so a test's stand-in for IMAP4_SSL still applies): in every espace a
+    literal past 50 MB is refused (`MessageTooBig`). Another bar's
+    connection is also held to `MAX_RESPONSE_BYTES` (100 MB) per command's
+    answer - its literals AND its lines, counted from each `send` - and
+    `MAX_SEARCH_BYTES` (500 MB) per search (`_Budgeted`): the cap alone let
+    one FETCH of 150 messages at 49 MB each hold 7 GB, and nothing limited
+    how many 1 MB lines an answer streamed. Its phase 1 asks each message's
+    `RFC822.SIZE` (`SIZED_HEADER_QUERY`), passes over one announced past
+    the cap on its own line (`TOO_BIG_SKIPPED`), and phase 2 fetches by
+    size (`_batches_by_size`: 40 MB a FETCH, a size not said fetched
+    alone). The owner's search sends the same commands as before.
+  - **What a failure says** (`generic_email.failure_said`, in the gather's
+    mailbox and slips lines and « Tester »): another bar never reads the
+    library's words (English, its server's host, a certificate's details -
+    LB-3): the app's own refusals as they are (a search the server refused
+    or left incomplete too, `SearchRefused`, `IncompleteSearch` - GitHub's
+    main's), imaplib/ssl/socket errors as
+    fixed sentences by kind (`LOGIN_REFUSED`, `CERTIFICATE_REFUSED`,
+    `NO_ANSWER`…), anything else `common.SERVER_ERROR`; the line with its
+    traceback goes whole to the server's log (`job_line`). A gather failing
+    as a whole says `error_for_page` there too. The owner's say the
+    exception, as always.
+  - **One « Tester » at a time** for another bar (`views._a_test_runs_here`,
+    stale tests reaped first, `TEST_RUNNING`): each click was a thread
+    signing in to a server it names over the dates it chose. The owner's
+    run as before.
+  - **`NoNetworkTestCase` and `TenancyTestCase` refuse `socket.getaddrinfo`
+    of a name** (the machine's own and addresses written as such pass):
+    patch `egress.resolve`, never resolve for real.
+- **Chrome** (`invoices/scrapers/chrome.py`): another bar's always headless
+  (`headless()` - a window would open on the server's desktop), and
+  `browser_slot()`: two sessions for every other espace together, one each,
+  never waited for (« Tous les navigateurs du serveur sont occupés … »,
+  raised from L'Addition's session as `LadditionBrowsersBusy`); the owner's
+  not counted. `slot_free()` asks the same and takes nothing. Wired into
+  L'Addition's session only - Metro and the portals are the owner's.
+  Another bar with no L'Addition login on its « Identifiants » is refused
+  before a browser starts (`recipes.integration.till_login_missing`,
+  `TILL_LOGIN_MISSING`).
+- **Clean job logs** (`common.job_line`, in `ScrapeJob.append_log`, the text
+  of `update_progress` and `SalesImportJob.append_log`): outside the owner's
+  espace a line is cut at « Traceback (most recent call last): » and at
+  Selenium's « Stacktrace: », a path in the espace's own folder reduced to
+  its file's name, any other absolute path « [fichier du serveur] » - a
+  Windows or UNC one whatever it holds (« O'Brien » included), a POSIX one
+  only from a server's folder (`common.POSIX_ROOTS` and the first folder of
+  the server's own: « /v2/shift-details » and « N° /FA/2026/001 » are no
+  file) -, and sent whole to the `marginmate.jobs` logger (WARNING) with
+  the espace's folder; a line that was only a traceback is not written. The
+  gather's and the source tests' lines are French.
+- **Tests**: `invoices/tests/test_tenancy.py::GateTests` pins the
+  cross-espace guarantee - the owner's .env values in the settings, another
+  bar with nothing typed reaches none of them (Metro refused, the mailbox
+  `MAILBOX_MISSING`, L'Addition types nothing and starts no browser:
+  `recipes/tests/test_tenants.py`); `test_mailbox_guards.py`,
+  `test_chrome_policy.py`, `test_job_logs.py`,
+  `accounts/tests/test_credentials_hosted.py`.
+- **The till's tab names no server variable** to another bar
+  (`recipes/tests/test_tenants.py::test_another_bar_s_tab_names_no_server_variable`,
+  the owner's .env values in the settings and the bar's own account typed):
+  L'Addition's card is drawn only once its account is ready, and says
+  « Identifiants », never `LADDITION_EMAIL` nor « .env ». A new hosted
+  espace has no mailbox source nor slip format of its own (`invoices.seeds`):
+  a test of its mailbox gives it one (`HostedMailboxTests.beta_s_sources`).
+- **The automatic gathers and sales imports** (GitHub's main, merged
+  04/10/2026: « Notifications, rappels et récupération automatique ») run in
+  every espace under the same gates - their code was written when
+  `integrations_allowed()` meant the owner's espace alone:
+  - another bar's rules search ITS mailbox only, and only once its
+    « Identifiants » hold it (`auto_gather._start`: « sautée : boîte mail à
+    renseigner sur la page Identifiants », `MAILBOX_TO_FILL`, no job, no
+    sign-in - never the .env's; a store held for a moment, `vault.BUSY`,
+    gives the slot back instead, « en attente : identifiants momentanément
+    illisibles », `automation.Retry`; one that does not open, `UNREADABLE`,
+    stays « à renseigner », as « Identifiants » asks to type everything
+    again), its sources being `workspace.gather_sources`
+    (this branch's gates inside: Metro and the portals the owner's only,
+    the mailbox's sources and slips once filled in, ONE `vault.load()` a
+    page or a slot); the run is `gather_invoices_task(unattended=True)`,
+    whose mailbox goes through the guarded patterns, the egress check, the
+    byte budgets, `failure_said` and `job_line` like a gather by hand; the
+    run's alert names its failed sources by their labels only. The rules'
+    page says `MAILBOX_TO_FILL` and `integrations.METRO` / `PORTALS` there,
+    and a rule switched off may keep no source (`AutoGatherForm.clean`:
+    with its mailbox gone nothing is offered, and it could only be deleted);
+  - another bar's automatic sales import runs only once its own L'Addition
+    account is on its « Identifiants » (`sales_sources._laddition_ready`:
+    `till_allowed()` and not `till_login_missing()`; else « sautée : source
+    indisponible » - « en attente : identifiants momentanément illisibles »
+    while the store is held - and the page says `TILL_LOGIN_MISSING`, draws
+    no new rule's form, and still lists the rules there to switch off or
+    delete): the task signs in with that account, headless and in a browser
+    slot of its own (chrome.py), writes through `store_reading`, and fails
+    through `tasks.fail` - the job's log and the alert (`auto_sales._notify`)
+    say the till's refusal or `common.SERVER_ERROR`, never the exception's
+    words, which `fail` returns to the alert in the owner's espace alone, as
+    on GitHub's main;
+  - **the server's two browsers are taken in turns, never failed for**
+    (review of the merge: every bar's new rule is offered at 07:00, and a
+    third bar's import failed every morning, its alert saying « réessayez
+    dans quelques minutes » to a rule nothing retried): a slot finding no
+    browser free (`chrome.slot_free`, asked under the start's lock, after
+    « à jour ») gives itself back, « en attente : navigateurs du serveur
+    occupés » (`automation.BROWSERS_BUSY`), tried again each minute within
+    the 12 h catch-up. Two imports started in the same tick can both find
+    one free: the one L'Addition's session then refuses
+    (`LadditionBrowsersBusy`, before anything signs in) gives way
+    (`auto_sales.gave_way`) - its job deleted (a failed one would make the
+    rule skip its slot), its rule's `last_slot_at` put just before the slot
+    (`GIVEN_BACK`), no alert, no `last_failed`; its last result may say
+    « lancé à … » until the next tick. An import by hand so refused fails
+    with the sentence, as before;
+  - one sales import at a time includes a till's file uploaded on
+    « Ventes » (`claim_sales_import`, its job's `SalesImportJob.source`
+    « fichier »), which never counts as L'Addition's coverage nor makes a
+    waiting rule skip its slot (`auto_sales._from_history`,
+    `_ended_while_waiting` filter on the source) - « Prévoir les courses »
+    reads the till past that coverage through the files that continue it
+    (`auto_sales.till_covered_until`).
+  Tests: `invoices/tests/test_tenancy.py::AutomaticGatherGateTests`,
+  `recipes/tests/test_tenants.py::AutomaticSalesImportGateTests`,
+  `invoices/tests/test_chrome_policy.py`,
+  `recipes/tests/test_till_file_import.py::OneLockTests`.
+- **Not done, on purpose**: a kill switch per espace, an egress proxy that
+  would let the portals open, a server-wide Metro throttle, fair OCR between
+  bars, several mailboxes per espace. Every bar's store sits on the owner's
+  PC under his Windows account (« Not done, the owner's », above).
+
 ### Bank statements (`bank/`)
 
-`/banque/` imports the account's CSV export and links each spending line to
-the invoice or receipt it paid. No bank is written in the code: how the CSV
-is LAID OUT - its encoding, its separator, which column holds what, how
-dates and amounts are printed, where the account number is - is a
-`StatementFormat` a person edits (« Format du relevé », « The statement's
+`/banque/` imports the account's export - CSV, OFX or CAMT.053 - and links
+each spending line to the invoice or receipt it paid. No bank is written in
+the code: how the export is READ - the kind of file, its encoding and, for a
+CSV, its separator, which column holds what, how dates and amounts are
+printed, where the account number is - is a `StatementFormat` a person
+edits or starts from a preset (« Format du relevé », « The statement's
 layout », the next section), and what each operation IS - a card payment, a
 debit, a transfer, its payee, the day a card was used - comes from the rules
 a person edits (`bank/recognition.py`, « Reconnaissance des opérations »,
@@ -3642,17 +3901,27 @@ CSV configurable »). `statements.py` read BNP Paribas' export and nothing
 else - « ; », date;type;short type;label;value date;amount, dd/mm/yyyy,
 French decimals, the masked account `****0042` in the header line
 (`DATE_RE`, `ACCOUNT_RE`, `row[3]`… - all gone). The layout is a row now,
-`StatementFormat` (bank/models.py), edited on « Format du relevé »:
+`StatementFormat` (bank/models.py), edited on « Format du relevé ». And
+since 04/10/2026 (the branch making the product sellable to bars on other
+banks) a format reads one of three **kinds of file** (`file_type`): a CSV
+laid out in columns, an OFX / QFX file (`bank/ofx.py`) or a CAMT.053 one
+(XML ISO 20022, `bank/camt.py`) - the last two say themselves where each
+datum is, so a format of them names no column.
 
 - **Its fields.** `name` (unique; the import card and « Données » name a
   format by it, `recognition.name_key`), `position` (the first by position,
-  then name, is what an import reads with when nobody chooses), `encoding`
-  (`auto`, `utf-8`, `cp1252`, `iso-8859-1`, `utf-16`), `delimiter` (« ; »,
+  then name, is what an import reads with when nobody chooses), `file_type`
+  (« Type de fichier »: `csv`, `ofx`, `camt053`; `csv` for every format
+  stored before migration `bank/0009`, as it always read), `encoding`
+  (`auto`, `utf-8`, `cp1252`, `iso-8859-1`, `utf-16`), then a CSV's own
+  fields - blank, or at the model's defaults, for another kind
+  (`forms.CANONICAL`) -: `delimiter` (« ; »,
   « , », tab, « | »), `date_format` (jj/mm/aaaa, jj/mm/aa, jj-mm-aaaa,
   jj.mm.aaaa, aaaa-mm-jj, mm/jj/aaaa: `DATE_FORMATS`, a pattern for the
   whole cell and its `strptime`), `decimal_mark` (« , » or « . »), then the
   columns, **counted from 1, as a person reads them off the file** (the
-  compiled `Layout` holds them from 0): `date_column` (required),
+  compiled `Layout` holds them from 0): `date_column` (required of a CSV;
+  nullable since 0009),
   `label_columns` (text, « 4 » or « 3, 4 », at most `MAX_LABEL_COLUMNS` 5,
   joined in the order given), `amount_column` (signed) OR `debit_column` /
   `credit_column` (either may be missing), `value_date_column` and
@@ -3663,9 +3932,144 @@ French decimals, the masked account `****0042` in the header line
   `FormatError(field, message)`, French, on the field: a column missing,
   out of range or given two roles (« La colonne 3 sert deux fois : pour le
   libellé et pour le montant. »), no amount or an amount said both ways, a
-  choice the model does not offer, an account pattern the guard refuses.
+  choice the model does not offer, an account pattern the guard refuses,
+  a kind of file it does not know (« Type de fichier inconnu. »; a format
+  saying none - a test's namespace, an old record - is a CSV,
+  `file_type_of`). An OFX or CAMT.053 format is checked for its choices
+  only: its columns and account pattern are not read, never compiled
+  (`Layout.file_type`; `Layout.width` is 0 for a layout naming no column).
   `parse_statement(content, rules, fmt)` takes the row or its `Layout` and
   touches no database.
+- **One pipeline, whatever the file** (`statements.py`'s docstring): a
+  reader (`_reading`: `_CsvReading`, `ofx.OfxReading`, `camt.CamtReading`)
+  yields each operation as printed (`RawLine`: days, type cut to its
+  column, label, amount digit for digit), `parse_statement` asks the rules
+  what each is, and **`finish` is the one choke point** - no operation (the
+  reader's own sentence), then `ACCOUNT_TOO_LONG`, then `rules.refusal`,
+  then the fingerprint, whose composition is unchanged. The CSV path reads
+  every file as before, to the byte (`OracleTests` unchanged; a reader
+  reads a row's amount before the rules read it, so on a row whose amount
+  refuses the file the rules are not asked - `Rules.spent`/`slow` can differ
+  for that row alone, the refusal never). **No list of every row**: a CSV
+  is split once by the csv module to check all of it (a file it cannot
+  split is still refused before any row's own refusal), then read row by
+  row; `statements.rows(…, limit=)` is « Tester »'s first rows only.
+  **Bounded** (review of the design, 03/10/2026: 5 MB of one-cell rows held
+  267 MB): `MAX_ROWS` (200 000 rows, blank ones included) and
+  `MAX_OPERATIONS` (50 000) per file, `STRUCTURED_MAX_BYTES` (8 Mo) for an
+  OFX or CAMT.053 file, each refused in French; a refusal echoes
+  `ECHO_MAX` (80) characters of the file at most (`echoed`: an amount, a
+  code, a currency can be the whole file, and a message travels through the
+  session). **A CSV row is bounded too** (`MAX_ROW_CHARS`, 64 Kio over every
+  line a quoted cell spans, `NOT_A_CSV`, counted by `_RowBound` as the csv
+  module asks for each line): the module builds a whole row before anything
+  counts its cells, and one row of 9 MB held 231 MB (review, 04/10/2026). An
+  OFX or CAMT.053 label is cut to `LABEL_MAX` (1 000, what the rules read -
+  `cut_label`, as a type is cut: a CAMT.053 payroll batch's label joins
+  fifty payees and is read, cut); a CSV's is as printed. **Every reader is
+  linear in its file** (review, 04/10/2026, each pinned by a test): an OFX
+  file's comments are set aside in one pass (`ofx._without_comments`; a
+  lazy `<!--.*?-->` cost about forty hours of CPU on 8 Mo of unclosed
+  `<!--`, and « Relevé OFX » is every hosted espace's default), a leaf finds
+  its known parents at once (`ofx._nearest`), a CAMT.053 element ending
+  empties its parent (`del parent[:]` - one `remove` each moved every sibling
+  a 64 KB chunk built ahead: a sibling flood inside one entry took 22 s),
+  and more `=` than `camt.MAX_ATTRIBUTES` (200 000: every attribute has one,
+  and expat builds an element's all at once) is refused before parsing.
+  Every refusal is French: `statements.REFUSALS` and each
+  reader's `REFUSALS` are what the readers' mutation tests
+  (`test_ofx.MutationTests`, `test_camt.MutationTests`, 1 500 damaged files
+  each) find, and nothing else.
+- **OFX** (`bank/ofx.py`, its docstring is the reference): SGML 1.x and XML
+  2.x read by one stdlib tokenizer, never an XML parser; a DOCTYPE or
+  ENTITY, a NUL, anything that is no tag and its text, a file cut short
+  (its last operation would be lost in silence), nesting past 64 - refused.
+  The five XML entities and numeric references decoded, a reference only to
+  a character a label may hold (no control but the tab, no surrogate, at
+  most U+10FFFF, 7 decimal or 6 hex digits) - `&#xD800;` once made the
+  fingerprint's `.encode()` raise English. `STMTRS`/`CCSTMTRS`: CURDEF the
+  euro (else refused), the account `BANKACCTFROM`/`CCACCTFROM`'s ACCTID
+  (two accounts refuse the file); each `STMTTRN` of `BANKTRANLIST` - never
+  the pending `BANKTRANLISTP` -: `DTPOSTED`'s first eight digits (they must
+  be digits before `strptime`), `DTAVAIL` the value date, `TRNAMT` digit
+  for digit (« -12.50 », « -12,5 »; « 1.234,56 », an exponent refused, and
+  a third decimal that is not a zero - « -8.505 » was read and rounded by
+  the column while the fingerprint kept it), a
+  `CURRENCY` other than the euro refused (`ORIGCURRENCY` only informs),
+  `NAME` (else `PAYEE/NAME`) then `MEMO` the label, `TRNTYPE` the type.
+  `DTUSER` and `FITID` are not read: a card date comes from a rule, and the
+  fingerprint is the CSV's - the same month in SGML and XML gives the same.
+  A file holding no `<OFX>` at all - a CSV, most often, the usual French
+  export, under a hosted espace's default « Relevé OFX » - is told where a
+  CSV is read (`statements.not_this_kind`: « … se lit avec un format CSV -
+  choisissez-en un à l'import, ou ajoutez-en un sur « Format du relevé »
+  (« Partir d'un modèle ») »), never only to export it as OFX again; an
+  account wider than its column has the reader's own sentence
+  (`ofx.ACCOUNT_TOO_LONG`, `camt.ACCOUNT_TOO_LONG`: the CSV's tells a person
+  to tighten an account pattern these formats do not have). **An encoded
+  line break (`&#10;`, `&#13;`) in a label refuses the file** (B3: no
+  control but the tab) - a literal one is read; whether to map those two to
+  a space is the lead's decision (review, 04/10/2026, note 16).
+- **CAMT.053** (`bank/camt.py`): guarded as `invoices.einvoice` guards an
+  e-invoice, with a bank's sentences, BEFORE any parser (8 Mo; a wide
+  encoding; a declared encoding outside utf-8, us-ascii, iso-8859-1,
+  iso-8859-15, windows-1252 - expat raises an English ValueError on a
+  multi-byte one, Python a LookupError on an unknown one; a DOCTYPE or
+  ENTITY, the billion laughs), then `ElementTree.XMLPullParser` fed in
+  chunks, elements counted (`MAX_ELEMENTS`) and depth bounded, **every
+  finished element cleared and let go of**, and any ParseError, ValueError
+  or LookupError said as `BROKEN_XML`. A camt.052 or .054 is said as such.
+  One line per `Ntry`, a batch included; BOOK only (`Sts` or `Sts/Cd`),
+  euros only, DBIT negative, the amount two decimals at most (zeros past
+  them aside, up to the schema's five), `BookgDt` and `ValDt`, the ISO code
+  `Domn/Fmly/SubFmly` (« PMNT/CCRD/POSD ») then `Prtry/Cd` as the type,
+  `AddtlNtryInf` (else each detail's counterparty and `Ustrd`) as the label;
+  the account `Acct/Id/IBAN` (else `Othr/Id`), one per file. A file that is
+  no XML at all (it does not open on « < », a byte order mark and spaces
+  aside) is told where a CSV is read, before any parser.
+- **The file's kind is read from its content, never switched**
+  (`statements.sniff`, its first 4 KB): an OFX or a camt document under a
+  format of another kind is refused naming both kinds by their labels
+  (« Ce fichier est un relevé OFX / QFX (Money), et le format « … » lit les
+  fichiers CSV (colonnes) : choisissez un format OFX / QFX (Money) à
+  l'import, ou ajoutez-en un sur « Format du relevé ». »), another XML
+  document (an invoice dropped there) has its own sentence, and **another
+  camt message (camt.052, camt.054) its own, under any format**
+  (`statements.other_camt`: `sniff` says « camt.052 »; called a CAMT.053,
+  it was sent to a CAMT.053 format that then refused it as a camt.052). A
+  CSV has no mark: none of the 400 oracle files is taken for anything
+  (pinned), so the CSV path is untouched. Read with another format in
+  silence, a file would go in with another account, label and fingerprint
+  than the person chose. « Tester » asks `refuse_another_kind` before it
+  numbers a row (an OFX file's lines were drawn as a CSV's columns above
+  « this is an OFX »), and checks a CSV's text once (`csv_text`) for its
+  rows and its operations (`parse_statement(…, text=)`): split twice, never
+  three times. The import and « Tester » take `.csv`, `.ofx`, `.qfx` and
+  `.xml` (`ACCEPTED_EXTENSIONS`, one `ACCEPT_ATTRIBUTE` for every file
+  input).
+- **Presets: « Partir d'un modèle »** (`bank/presets.py`, the list page's
+  `#modeles`, posted as `action=modele` and answered before the format
+  form is read; linked from Banque's empty state - which names them from
+  `presets.PRESETS`, no bank written in the template -, an empty list and
+  « Reconnaissance des opérations »): « Relevé OFX » (rules on the
+  `TRNTYPE` codes POS, DIRECTDEBIT, XFER/DIRECTDEP), « Relevé CAMT.053 »
+  (rules on the ISO codes PMNT/CCRD/POSD, PMNT/RDDT, PMNT/ICDT, PMNT/RCDT,
+  PMNT/CNTR/CDPT, PMNT/RCHQ) and « BNP Paribas (CSV) », built from
+  migrations 0006/0007's own literals - one source. `install` writes what
+  is missing in one transaction (the format after every format, the rules
+  after every rule, each through `full_clean`) and **keeps whatever is there
+  under the same name, whatever its spelling**: installing twice writes
+  once; a name taken meanwhile (IntegrityError, ValidationError) writes
+  nothing and says so. **The OFX `TRNTYPE` codes and the ISO bank
+  transaction codes are the standards' words, never checked against a real
+  export**: a French bank's OFX may say DEBIT and CREDIT for everything, its
+  CAMT.053 may use other sub-families and put its usual label elsewhere -
+  confirm both presets' rules, and the readers' label choice, against the
+  first real export before trusting them. The fixtures
+  (`bank/tests/ofx_files.py`, `camt_files.py`) follow the published
+  structures (OFX 1.0.2 and 2.1.1; camt.053.001.02 and .08) with invented
+  data. Not done: QIF, MT940, CFONB 120, XLSX or PDF statements, other
+  banks' CSV presets (each from a real anonymised export), open banking.
 - **What a row is.** **An operation when its date column holds a date of
   the format - the whole cell, spaces aside**; every other row (a header of
   column names, a balance, a blank) is passed over, and **the rows above the
@@ -3759,8 +4163,14 @@ French decimals, the masked account `****0042` in the header line
   1, `auto`, « ; », jj/mm/aaaa, « , », date 1, type 2, label 4, value date
   5, amount 6, account `\*{2,}[0-9]+` (column 3, a short type, was never
   read). `get_or_create` by name - seeding again keeps a person's edits -,
-  reversing does nothing, every new espace has it through `_template`
-  (`TenantTests`, `test_provisioning`). **`test_statement_formats.OracleTests`
+  reversing does nothing, every database migrated alone has it (the
+  `_template`, the owner's espace, the tests'); **a hosted espace - a new
+  one that is not the owner's - gets the OFX and CAMT.053 presets AHEAD of
+  it** (`bank.presets.set_up_new_espace`, a step of
+  `accounts.provisioning.HOSTED_ESPACE_STEPS`: « Relevé OFX » is its
+  default, the BNP format kept after them with its rules - a correct
+  preset for a bar banking there; `TenantTests`, `test_provisioning`,
+  `test_presets.NewEspaceTests`). **`test_statement_formats.OracleTests`
   replays the old reader**, copied from commit 79e638c, over 400 BNP-shaped
   files generated from a fixed seed (headers, quotes, twins, blanks, footers,
   Windows-1252, every refusal): the seeded format gives the same account,
@@ -3834,7 +4244,7 @@ French decimals, the masked account `****0042` in the header line
   and the value date: anything else is a misread column, and a year 1 put
   every matching window out of the calendar. jj/mm/aa reads « 00 »-« 68 »
   as 2000-2068 and the rest as 19xx (Python's `%y`): refused.
-- **Encodings** (`_decode`): « auto » is UTF-16 behind its byte order mark,
+- **Encodings** (`decode`, once `_decode`): « auto » is UTF-16 behind its byte order mark,
   else UTF-8 with or without one, else Windows-1252 - the old reader's, plus
   UTF-16; a UTF-8 mark before what is no UTF-8 is refused (the file says it
   is UTF-8, and is a broken one). « utf-8 » drops the mark. **Windows-1252
@@ -3903,8 +4313,9 @@ French decimals, the masked account `****0042` in the header line
   action neither. « Lire un format » says how a format reads a file and
   reads an invented export (`views.FORMAT_EXAMPLE`, parsed by a test).
 - **« Tester » numbers the columns** - the first submit button, so Enter
-  tests and never saves; the page drawn again, 200. A CSV picked on the
-  form (`views.TEST_FILE`, multipart, `.csv` only, `common.file_too_big`) is
+  tests and never saves; the page drawn again, 200. A file picked on the
+  form (`views.TEST_FILE`, multipart, a statement file's extension,
+  `common.file_too_big`) is
   read with the format AS TYPED and **never stored** - nor kept between two
   tests: a browser never refills a file input, so it is picked again and
   the page names the file it read. **Both forms must say
@@ -3918,7 +4329,8 @@ French decimals, the masked account `****0042` in the header line
   form counts them - what a person picks the numbers from; at most 50
   (more is said), cells cut to 40 characters; split by `statements.rows`,
   the reader's own decoding and splitting, so the column numbered here is
-  the one the format names. Then the operations it reads - date, type,
+  the one the format names - a CSV's only: an OFX or CAMT.053 file has no
+  column to number. Then the operations it reads - date, type,
   label, value date, amount, nature and payee by the active recognition
   rules, the first `TEST_LINES_SHOWN` (30) and « … et N de plus » -, the
   account, and **how many are « déjà importées »** (their fingerprint is
@@ -3928,6 +4340,32 @@ French decimals, the masked account `****0042` in the header line
   the explainer says so. Or the import's own refusal sentence. Nothing is
   read while the format is refused (the errors are on the form); the name
   alone wrong still reads.
+- **A CSV's fields are a fieldset of their own**
+  (`bank/_statement_format_fields.html`, `data-file-types="csv"`): the name,
+  the kind of file and the encoding first, then the rest, **hidden AND
+  disabled** for another kind - by the server for the kind it draws (the
+  posted one, else the stored one: `form.shown_file_type`), then by
+  `static/js/statement_format.js` as the menu changes (a script of its own,
+  never ui.js). Disabled, they are never sent: an empty required field of
+  the hidden part would stop the browser sending the form, silently (the
+  source form's lesson, « Gathering invoices »). So the form requires a
+  CSV's fields of a CSV alone (`CSV_REQUIRED`), drops their errors for
+  another kind (a page without its script sent them) and stores
+  `forms.CANONICAL` in them (`presets` stores the same, one definition); a
+  POST saying no kind keeps the format's own. **A stored format's kind of
+  file never changes**: its menu is drawn disabled, saying why
+  (`forms.FILE_TYPE_FIXED`), and nothing posted for it is read - changed,
+  the BNP format's columns were written over with `CANONICAL`, and the
+  preset, which keeps a name that is there, could not bring them back
+  (review, 04/10/2026). Another kind is a new format. The encoding's help
+  says a CAMT.053 file reads in the encoding its XML declares. The form's
+  own errors are said once (`_form_fields.html`'s `fields_only`).
+  `bank/tests/test_statement_format_browser.py` (tagged « browser ») saves
+  an OFX format in Chrome, the script hiding and disabling a CSV's fields. **`staff/tests/page_forms.py` posts nothing a
+  `<fieldset disabled>` holds** (but its first `<legend>`), as a browser:
+  a test of « Format du relevé » sends exactly what the owner's click
+  would. The list says each format's kind (« Fichier ») and, for an OFX or
+  CAMT.053 one, « lues dans le fichier » and « — » for a CSV's columns.
 - **« Données »** carries the formats in « Règles de la banque »
   (`statement_formats` in regles_banque.json, `sections/bank_rules.py`;
   banque.json until 02/10/2026, still read from an older archive -
@@ -3959,9 +4397,26 @@ French decimals, the masked account `****0042` in the header line
   refused until one is brought back or typed again - as after a
   « Remplacer » with an empty list. A line keeps the fingerprint it was
   imported with: a format an archive brings reads no statement again.
+  `file_type` is carried and compared like any field; **a format record
+  without one (an archive written before 0009) is a CSV**, never « not
+  said »: replaced onto an OFX format of the same name here, its columns
+  would otherwise have been written onto a format that stayed OFX. A record
+  of a kind that names no column has a CSV's fields as the page stores them
+  (`NO_COLUMN_FILE_TYPES`, `forms.CANONICAL`), whatever the archive says
+  there: the check skips them for such a kind, and they were stored as said.
+  The date column is no longer a required key (`FORMAT_REQUIRED`): a CSV
+  without one is refused by the format's own check (« colonne de la date :
+  indiquez une colonne »).
 - Migration `bank/0007`, **WRITTEN and left to be applied** with 0003-0006
   (the owner, after a backup, `migrate_tenants`; `serve` refuses to start
   until then).
+- Migration `bank/0009` (`file_type`), **WRITTEN and left to be applied**
+  (the owner, after a backup, `migrate_tenants`; `serve` refuses to start
+  until then): schema only - `AddField` with the `csv` default every
+  stored format takes (exactly how it reads today), `date_column` nullable,
+  `label_columns` blank, « auto »'s label saying it reads UTF-16 too; no
+  RunPython (`FileTypeMigrationTests` asserts the operations). Going back
+  fails while a format of another kind holds no date column.
 
 ### Recognising the operations (`bank/recognition.py`, « Reconnaissance des opérations »)
 
@@ -4164,7 +4619,11 @@ values in, plain values out - but for its last three functions (`load`,
   then the payout (« TOTAL ENCAISSE <brut> EURO(S) ») and cash and cheques by
   the operation type. `get_or_create` by name; reversing does nothing (the
   table goes with the CreateModel). Test databases run it, and every new
-  espace has it through `_template` (`TenantTests`).
+  espace has it through `_template` (`TenantTests`); a hosted espace also
+  gets the OFX and CAMT.053 presets' rules (`bank.presets.
+  set_up_new_espace`), AFTER the eight - which read a payee the codes do
+  not -, and any espace can add a preset from « Format du relevé »
+  (« Partir d'un modèle », « The statement's layout »).
   `test_recognition.OracleTests` replays the OLD functions, copied into the
   test, against the seeded rows over a corpus holding every kind and every
   source; what reads otherwise on purpose is pinned there
@@ -5155,9 +5614,11 @@ Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 One page (`/donnees/`, in the navigation) replaced « Exporter / Importer les
 associations »: three tabs - Exporter, Importer, Effacer - each with the same
 two groups of boxes, « Configuration » (fournisseurs, sources, associations
-produits → articles, recettes, liens recettes ↔ ventes, règles de la banque,
-types et formats de consignes) and « Données » (factures et tickets, banque,
-ventes, inventaires, consignes) - twelve sections. The owner asked for it on
+produits → articles, recettes, liens recettes ↔ ventes, formats des fichiers
+de caisse, règles de la banque, types et formats de consignes) and « Données »
+(factures et tickets, banque, ventes, inventaires, consignes) - thirteen
+sections (« Formats des fichiers de caisse » since 04/10/2026: « The till's
+file import », below). The owner asked for it on
 19/09; the old addresses redirect there and the old associations JSON still
 imports (`transfer/legacy.py`).
 
@@ -5189,16 +5650,28 @@ imports (`transfer/legacy.py`).
   facture » rules read its credits and debits on draw; required, clearing
   the rules would have taken the lines), « Consignes » requires its types
   and formats (its counts and slips name them, PROTECT). **A new espace
-  already holds rows of four configuration sections** (the seeded
-  suppliers, the UBA mailbox search, the BNP format and eight recognition
-  rules, the three types and the UBA slip format: `views.SEEDED_SECTIONS`):
+  already holds rows of up to four configuration sections** (the seeded
+  suppliers, the UBA mailbox search - the owner's espace only -, the BNP
+  format and eight recognition rules - and, in a hosted espace, the OFX
+  and CAMT.053 presets ahead of them, known by their frozen names
+  `bank.presets.NEW_ESPACE_*` through `views._holds_only_bank_seeds` -, the
+  three types and - the owner's only - the UBA slip format:
+  `views.SEEDED_SECTIONS`):
   merged, an archive's edited copy of one is a conflict and the seeded one
   stays, so on a new database (`_fresh_database`) the Importer tab's
   « Base neuve » note names the archive's parts among them and asks for
   « Remplacer » - **each only while it holds nothing but its seeds**
   (`views.holds_only_seeds`: the seeds by the names their migrations gave
   them, read off the migrations' own literals, edited or not; no ignore
-  rule at all, none is seeded). « Remplacer » deletes what the archive does
+  rule at all, none is seeded) **and holds a row at all** (`_holds_rows`,
+  reading the tables of `SEEDED_MODELS` - a test holds that map to each
+  section's own `count()`, so a part added to `SEEDED_SECTIONS` needs its
+  tables there: a new espace that is not the owner's starts without the
+  original bar's UBA, its mailbox source and slip format, Sabbh Oriental
+  and Wing Seng -
+  `invoices/seeds.py` - so its « Sources de factures » holds nothing to
+  replace; it is still a new database, holding a subset of
+  `SEEDED_SUPPLIERS`). « Remplacer » deletes what the archive does
   not name: an espace without its first invoice may well have imported
   statements and typed a « sans facture » rule already, and the note asked
   to delete it (review, 02/10/2026). The Exporter tab says the archive
@@ -5247,7 +5720,7 @@ imports (`transfer/legacy.py`).
   by its rank in its invoice, a bank line by its fingerprint, a treasury
   point by its day and an adjustment by its random `reference`, a sale
   document by its `key` (random, or its content's for one older than
-  recipes 0019 - « Factures de vente », below). An invoice with no number,
+  recipes 0020 - « Factures de vente », below). An invoice with no number,
   no stored sha and no file on the disk (typed by hand
   without a file, or a ticket whose PDF is gone) carries the moment it was
   typed: its key's `moment` is its imported_at in UTC, which an import
@@ -5371,13 +5844,13 @@ imports (`transfer/legacy.py`).
   19/09 read as 43 years of sales (211 products over 662 days). The
   manifest's counts are `count()`'s, under the same labels (« prix connus »
   is the review page's word, since an « article » is a StockType), so the
-  import tab compares like with like. The AI pseudo-supplier is no supplier
-  on the page: count(), the manifest and the report's « fournisseurs » all
-  leave it out (`suppliers._tally`). A change to it is counted on a row of
-  its own (« fiche de l'analyse IA »), so the preview shows it and the
-  safety archive still takes the section. Counted in the report only, a
-  merge of the 19/09 copy said « 30 inchangés » for the 29 suppliers the
-  page announced. A document updated, or given a file back by a merge,
+  import tab compares like with like - count(), the manifest and the
+  report's « fournisseurs » count the same suppliers: counted in the report
+  only, one supplier made a merge of the 19/09 copy say « 30 inchangés » for
+  the 29 suppliers the page announced (one exception, the removed AI
+  reading's supplier in an archive written before 04/10/2026: « Test
+  data »). A document updated, or given a file
+  back by a merge,
   still counts the files it keeps - and, merged without a conflict, its
   lines - « inchangés » (`InvoicesSection._untouched_files`): a « Remplacer »
   restore of that copy that updated one ticket counted 1 518 of its 1 520
@@ -5565,9 +6038,10 @@ imports (`transfer/legacy.py`).
   next gather types the .env variables it names into the page it names. A
   portal naming a variable the application reads for itself is refused, by
   the import and the source form alike (`invoices.models.APP_ENV_PREFIXES`,
-  in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, the AI,
-  Django, the signatures and the mail server; a test checks the list against
-  config/settings.py). An import
+  in `WebsiteInvoiceSource.clean`: Metro, the mailbox, the till, Django,
+  the signatures and the mail server - and the removed AI reading's key,
+  which an older .env or « Identifiants » may still hold; a test checks the
+  list against config/settings.py). An import
   never switches a portal on **unless the archive is one this installation
   wrote itself**: a file in `backups/`, where only `safety.before` writes
   (`ImportContext.own_backup` - a manifest can claim any `reason`, so the
@@ -5671,7 +6145,7 @@ Test every section the same way (`transfer/tests/support.py`): a round trip
 (export, clear, import, same snapshot by natural keys, files byte-identical),
 importing its own export changes nothing (every record « inchangé » - this is
 what catches a Decimal's places or a time zone), merge versus replace on one
-record of each kind, the preview changing nothing - and all twelve at once
+record of each kind, the preview changing nothing - and all thirteen at once
 (`test_full_round_trip.py`), since what crosses sections (a stock take's
 invoice line, a payment to a ticket known only by its file) only shows there.
 Rehearse on a scratch copy of the real database, never on it: `preview_start`'s
@@ -6584,7 +7058,7 @@ never proposed there: no history rule reaches a first purchase.
   public for it).
 
 **What is read** (`shopping_data.prepare`, a constant number of queries:
-`inventory/tests/test_shopping_data.py` pins 5 with the till off and 20
+`inventory/tests/test_shopping_data.py` pins 5 with the till off and 21
 with it on, and `test_shopping_page.PageCostTests` the whole page):
 - every PURCHASE movement of an invoice line, BOTH signs, in one streamed
   scan, dated by its `occurred_on`, else its invoice's date - **never
@@ -6594,14 +7068,21 @@ with it on, and `test_shopping_page.PageCostTests` the whole page):
   positive purchase at the store, on any article, excluded ones included.
   Today is history: a visit made this morning is the last one.
 - the stores offered: every supplier with a purchase, but the suppliers
-  of charges (`expenses_only`) and the AI pseudo-supplier; what was bought
-  at those still counts. « Autres enseignes » holds those under 3 visits in
-  the year.
+  of charges (`expenses_only`) and the removed AI reading's supplier, kept
+  by invoices/0038 where something named it and told by its code
+  (`receipts.RETIRED_CODES`); what was bought at those still counts.
+  « Autres enseignes » holds those under 3 visits in the year.
 - **the till, only with « Tenir compte des ventes de la caisse » on** -
   off, not one sales table is read and the engine never runs. The design's
   Option A: `attribute_sales` runs ONCE over the window W = (last complete
-  day − 365, min(coverage, last complete day)], its capacity the window's
-  purchases floored at 0, then each article's figure is spread per day -
+  day − 365, min(coverage, last complete day)] - the coverage L'Addition's,
+  carried on by the till's files uploaded on « Ventes » that continue it
+  (`auto_sales.till_covered_until`: a SUCCESS file job starting at most the
+  day after, up to its last day, never past the last complete day when it
+  was read; a gap stops it: a bar filling days by file, or one that left
+  L'Addition, was read up to its last fetch for good) -, its capacity the
+  window's purchases floored at 0, then each article's figure is spread per
+  day -
   the exact pours by the day's sales, the « OU » share by what each day's
   choices could have poured - so **the days add back up to the engine's
   totals over W** (pinned). The till's start is clamped to W. **The till's
@@ -6783,10 +7264,12 @@ reference; it never imports the views); the views are thin, at the end of
 
 **The rules** (`shopping_lists.py`):
 - The stores offered are the forecast's (`offered_stores()`: no supplier
-  of charges, not the AI pseudo-supplier, a positive PURCHASE movement -
-  one query); `store_of` also takes a store with a list in progress, so a
-  list stays reachable once its store's documents are gone. Ids through
-  `is_id`.
+  of charges, not the removed AI reading's - told by its code,
+  `receipts.RETIRED_CODES`, as « Prévoir les courses » tells it: invoices/0038
+  keeps it, its reader key emptied, where something names it -, a positive
+  PURCHASE movement - one query); `store_of` also takes a store with a list
+  in progress, so a list stays reachable once its store's documents are
+  gone. Ids through `is_id`.
 - **An open list with no item is no list in progress.** Emptied by
   « Retirer », it keeps no store reachable (`store_of` needs an item), it
   is not under « En cours » (the index filters `total > 0`), and its next
@@ -6985,9 +7468,135 @@ optional `test_shopping_run_browser`, not written).
 records sales. Add `--dry-run` first: it reports which till products match a
 recipe and which don't, without writing. `--file x.xlsx` skips the download.
 
-Credentials come from « Identifiants » (`accounts/vault.py`), else `.env`
-(`LADDITION_EMAIL` / `LADDITION_PASSWORD`), and are typed by the browser at
-run time, same as the Metro scraper.
+Credentials come from the espace's « Identifiants » (`accounts/vault.py`),
+else - in the platform owner's espace only - `.env` (`LADDITION_EMAIL` /
+`LADDITION_PASSWORD`), and are typed by the browser at run time, same as the
+Metro scraper. Every espace fetches its own sales since 04/10/2026
+(« Every espace's connectors », under « Gathering invoices »);
+`laddition_open` stays the owner's.
+
+
+**Every till reading has ONE writer: `recipes.tasks.store_reading(export,
+log, *, payments_beside_sales=False)`** - the till products and their days
+(« Ventes », with the day's money), the recipes' sales under
+`sales.TILL_SOURCE`, then the payments, each step said in French through
+`log`. The job fetching L'Addition, `laddition_import` (whose output is now
+the job's French lines) and a file uploaded on « Ventes » (« The till's file
+import », below) all write through it. A reading of payments alone
+(`ParsedExport.sales_read` False) writes no sales and says nothing of them;
+`payments_beside_sales` writes a day's payments only where « Ventes » holds a
+sale (`payments.record_payments(beside_sales=True)`, `days_with_sales`,
+shared with `laddition_backfill_payments`) and lists the others
+(`RecordedPayments.days_without_sales`). The fetch keeps its old order
+(lines first, payments after, `beside_sales` False): the owner's imports
+write exactly as before.
+
+**The recipes' sales of the days read follow every till product of those
+days** (`tasks.till_entries`, review of 04/10/2026): `record_sales` sets a
+(recipe, day) to what it is handed, while `sync_pos_products` replaces only
+the products a reading holds. Handed the reading alone, a file holding part
+of a day (an upload correcting one product) set the recipe to that product
+while the day kept its others - a pint corrected to 4 beside its happy-hour
+name's 3 left the recipe at 4: « Vendu » and « Écarts » read 4, Marges read
+7, and the next link changed went back to 7. `record_sales` is now handed the
+reading's own (product, day) quantities and, beside them, every other till
+product's quantity on file for the days it touched - what
+`resync_recipe_from_daily_quantities` rebuilds. The products said to have no
+recipe are the reading's own. A fetch reads whole days: beside its own
+entries it finds only a product an earlier reading of a day held and this one
+no longer prints - which the recipe now counts, as a link changed always
+did.
+
+**The job's log follows LB-3, since a hosted bar may run it**: a failure is
+« Échec : » + `common.error_for_page(exc, said=tasks.TILL_REFUSALS)` - the
+till's own French refusals (`TillImportError`, `LadditionExportError`,
+`LadditionAuthError`, `LadditionDownloadError`, `XlsxError`,
+`TillFileError`) as they are, anything else one fixed sentence; the
+exception and its traceback always go to the server's log (`tasks.fail`),
+and the traceback is added to the job's log only where
+`server_accounts_allowed()` (the owner's, as before). The download's,
+session's and parser's messages are French and name no folder and no
+address (the export's URL is signed: it opens the bar's sales to anyone); a
+Selenium timeout or browser error is one sentence
+(`laddition_download.NO_ANSWER`, `NO_BROWSER`); a payments sheet that does
+not read says the reader's sentence or « la feuille ne se lit pas », the
+library's text logged (`_add_payments`).
+
+**L'Addition's card on « Ventes » is drawn only where its account is ready**
+(`recipes/pos/connectors.py`, `LADDITION.ready()`: `integration.till_allowed()`
+and `vault.ready("LADDITION_EMAIL", "LADDITION_PASSWORD")`, one reading of
+the store). Where the till is not this espace's, the « à configurer »
+sentence (`integration.refusal`); where it is and the account has no value,
+one line for the owner pointing at « Identifiants » - never a form that can
+only fail, never a server variable's name. `trigger_sales_import` refuses
+the same way before any job (`views.LADDITION_NOT_READY`). The test settings
+blank every credential, so a test drawing the card gives it an account
+(`recipes/tests/till_support.LADDITION_ACCOUNT`, the owner's .env values
+through `server_setting`).
+
+**The readers are hardened for files from outside, for every caller**
+(04/10/2026; the owner's downloads read exactly as before, none of this ever
+fires on them):
+- `xlsx_reader` refuses a cell past column XFD (16 384): one reference
+  « ZZZZZZZZZZZZ1 » in a tiny file asked for a row of ~10^17 cells - the whole
+  server out of memory. A caller needing the first columns says so
+  (`max_columns`) and the rest are never read. It refuses a DOCTYPE or an
+  ENTITY anywhere in a member: the encoding is decided first (a UTF-16/32
+  mark, a NUL in the first bytes, a declared encoding outside a few
+  ASCII-compatible ones: refused), then every chunk the XML parser reads is
+  scanned, with an overlap (`_Guarded`) - a DOCTYPE after kilobytes of
+  comments is found. For an upload (`untrusted=True`, `check_untrusted`):
+  100 MB a member and 200 MB in all once inflated, a ratio bound past 10 MB,
+  1 000 members, 1 000 000 shared strings - read off the zip's directory
+  (zipfile never inflates past the size it declares). The first sheet by
+  default, `date1904`, a seekable file object, numeric cells typed on request
+  (`Number`, a date cell `Moment`), rows numbered as Excel shows them. Every
+  refusal is an `XlsxError` in French naming no path, and every member is
+  closed when its reading ends or is given up (on Windows a file held open
+  cannot be deleted). A zip whose directory claims a version zipfile does
+  not know (NotImplementedError) or points before the file's start
+  (ValueError, « negative seek value ») is no workbook: fuzzed, a few in a
+  thousand escaped as those, a 500 on « Tester ». A sheet unknown lists the
+  first `SHEETS_SHOWN` (10) sheets, each cut to 40.
+- **No member costs far more memory than its size** (review of 04/10/2026):
+  one `<row>` of a few million empty cells - a 20 KB upload - was built whole
+  before its end (about 1 GB for a 262 KB file), a string of a million runs
+  too, and what is outside the rows piled up on the root. Every element is
+  dropped from its parent as soon as it is read now (`_kept`: a string, a
+  relationship, a sheet's entry; `_rows`: a cell at its end, a row once
+  read), parents taken from the reading's own stack - the parser builds a
+  16 KB chunk ahead of its events, so the tree is never asked. And bounded,
+  for every caller: nesting `MAX_DEPTH` (64), the elements held at once in
+  one row, cell or string `MAX_HELD` (50 000), a row's cells `MAX_COLUMNS`,
+  the distinct names of elements and attributes `MAX_NAMES` (2 000 - the
+  parser keeps each for good), a stretch without « > » `MAX_STRETCH` (1 MB,
+  measured across the chunks: one start tag of a million attributes). An
+  owner's export is far under each. Measured on a synthetic 2 million cells:
+  the same rows, about 1,25 times the time of the old reader, a tenth of its
+  memory.
+- **An upload is read no wider than what is read** (`read_sheet`'s
+  `header_columns`: the first row whole, then nothing past the last title
+  named): `laddition_xlsx.parse_sales_export(untrusted=True)` names
+  `LINE_COLUMNS` and `TICKET_COLUMNS` - 20 000 rows each with a cell at XFD,
+  a 104 KB upload, took 11 s padded to 16 384 cells a row. And it holds at
+  most `MAX_ROWS` (500 000) rows a sheet and `MAX_PRODUCTS` (5 000) products
+  (`parse_rows(bounded=)`, `parse_payment_rows(bounded=)`), the limits of any
+  till's file (`till_file` imports them). The owner's fetched exports are
+  held to none of it: three years of lines read as before. A payments sheet
+  refused on an upload names the file uploaded, never its staging name
+  (`file_name=`).
+- `laddition_xlsx` refuses a number `Decimal` reads but no export writes
+  (NaN, Infinity, digits that are not ASCII, an exponent making it 1 or more:
+  `_plain`) and a day outside 2000-2099 - a float's tiny noise printed with an
+  exponent (« 5.5511151231258E-17 », PHP's way below 1e-4) still reads as
+  before, so no export the owner reads today is refused for it; bounds a (product, day)'s revenue to its (10, 2)
+  columns and a (day, method)'s payments to (12, 2) (« A figure wider than
+  the column », under « The electronic invoice ») and quantities
+  (`MAX_LINE_QUANTITY`, `MAX_DAY_QUANTITY`) - the file refused, naming the
+  product and the day; cuts a name, a category and a typology to 255; and
+  turns any `ArithmeticError` into a `LadditionExportError`. Something
+  Decimal does not read at all (« sept euros », the Total row's « - ») reads
+  as before: an amount unread, a row skipped.
 
 An import also runs by itself, on rules of its own (« Import automatique des
 ventes », `/recipes/import-auto/`, `recipes/auto_sales.py`): from the last
@@ -6997,8 +7606,11 @@ all when that is already in - see « L'import automatique des ventes » under
 hand or automatic, starts through `recipes/importing.start_sales_import`;
 `laddition_import` downloading takes the same lock
 (`importing.claim_sales_import`: a manual job, RUNNING and beating while it
-runs, cancellable from the Ventes tab, its SUCCESS recording the coverage),
-so no import starts beside it.
+runs, cancellable from the Ventes tab, its SUCCESS recording the coverage,
+its failure said by `tasks.fail`), and so does a till's file uploaded on
+« Ventes » (its job's `source` « fichier »), so no import starts beside it.
+In another bar's espace the automatic import waits for its own L'Addition
+account (« Every espace's connectors », under « Gathering invoices »).
 
 Four things that cost real debugging time:
 
@@ -7021,8 +7633,11 @@ Four things that cost real debugging time:
   "submit" while XPath `@type` matches nothing. It's matched on exact text —
   which also avoids the "Mot de passe oublié ?" button right next to it.
 
-The UI is two tabs of **Recettes & ventes**: "Ventes" runs the import
-(background thread + htmx polling, same shape as the invoice gather) and "À
+The UI is two tabs of **Recettes & ventes**: "Ventes" runs the imports -
+L'Addition's fetch (its card only where its account is ready, above) and a
+file of any till (« The till's file import », below), each a background
+thread + htmx polling, same shape as the invoice gather, one status card for
+both drawn apart from either door - and "À
 lier" (`/recipes/caisse/`) is the backlog of till products with no recipe -
 biggest sellers first, since that's where the unexplained stock is. Four
 actions per row, in place: link to a recipe (the one with a close name is
@@ -7164,10 +7779,12 @@ account.
   lines imported all the same. It is parsed apart and taken only whole.
 - **A day's payments only beside a day « Ventes » holds**
   (`PosProductDailyQuantity`), whoever writes them: payments on a day with no
-  sales are money the sales pages contradict. The import job and
-  `laddition_import` run the same order - `sync_pos_products`,
-  `record_sales`, `record_payments` - and « Remplacer » prunes the payments of
-  a day it leaves without sales.
+  sales are money the sales pages contradict. Every writer goes through
+  `store_reading`, in one order - `sync_pos_products`, `record_sales`,
+  `record_payments` -; a file uploaded writes its payments with
+  `beside_sales=True` (a file of payments alone could not hold the rule by
+  its order); and « Remplacer » prunes the payments of a day it leaves
+  without sales.
 - **`manage.py laddition_backfill_payments [--dry-run] [--folder]`** fills the
   days already imported from the .xlsx in the espace's `downloads/`, **contacting
   nothing** and reading the ticket sheet alone. The revenue backfill's shape:
@@ -7194,6 +7811,201 @@ was relinked by the next import. An ignored till product sells no recipe
 whatever its name (`record_sales` skips it, and does not list it as
 unmatched).
 
+### The till's file import (`recipes/pos/till_file.py`, « Formats des fichiers de caisse »)
+
+A bar whose till is not L'Addition - or that has old exports to bring - uploads
+its till's export on « Ventes » (« Importer un fichier de la caisse »). **No
+till is written in the code**: how its export is laid out is a `TillFormat`
+(migration `recipes/0019`, a table only) the bar describes on « Formats des
+fichiers de caisse » (`/recipes/caisse/formats/`, `recipes/till_views.py`),
+read by the pure `till_file.read` into the very `ParsedExport` L'Addition's
+reader returns, then written by `store_reading`. L'Addition's own « Lignes de
+ventes » export is offered too, read by its parser with no format and no
+account (`connectors.LADDITION_CHOICE`). Which till a bar has is derived,
+never a setting: its credentials and its formats say it, and one bar may use
+both. A future API connector is a `connectors.Fetcher` entry, an account on
+« Identifiants » and a reader returning a `ParsedExport`.
+
+**A format** (`till_file.check_format`, the model's `clean()`, each refusal
+on its field): « Ventes par produit » (product and quantity required; amount
+TTC, amount HT, rate, category, typology optional) or « Encaissements »
+(method and paid amount); the encoding, separator, decimal mark and date
+format of the bank's « Format du relevé »; an .xlsx's sheet (blank: the
+first); `service_day_end_hour` 0-11; « prix unitaire »; the method map. Each
+column is its **title as the header prints it** (accents, case and spaces
+aside - the header is the first of the first 30 rows holding every titled
+column, the rows above passed over and counted) **or its number from 1**
+(`MAX_COLUMN` 100); a column of the other kind, two roles on one column, an
+HT or rate column without the amount, a time without the day are refused. A
+« Ventes » format with no amount column is allowed - the formats list and
+« Tester » say what its import does (`till_views.NO_MONEY`): no money is
+read, a day already imported with its money keeps it (the import writes the
+quantities alone, `tasks._sync_pos_products`), any other stays « non lu »
+(Marges' banner). « reste non lue » was false of the first kind of day.
+A format with no day column (a daily Z report) is read at the « Jour des
+ventes » posted with the upload; a day posted for a format that reads one is
+refused.
+
+**The rules, each a way a till's file could be silently wrong money**:
+- **A row that holds a sale is never dropped.** A day cell holding digits
+  that are no date of the format, a 31/02, a year outside 2000-2099, a day
+  after tomorrow (`DayReader.latest`: « 99 » in jj/mm/aa is 2099, a day and a
+  month the wrong way round land months ahead; a « Jour des ventes » to come
+  is refused by the reader too, `till_file.DAY_TO_COME`), a dated
+  row with a product and no readable quantity, a payment with no readable
+  amount: the FILE is refused (`TillFileError`, « Ligne 12 : … Fichier
+  refusé. », the row numbered as the person sees it). A row whose day cell is
+  blank, or holds no digit at all and no readable sale (a « Total » footer,
+  the header of a format given by numbers), is passed over - counted, and
+  said in « Tester » and the job's log (`ParsedExport.skipped`). A digit-less
+  day cell on a row that reads as a sale (« lundi;Pinte;2;… ») is refused.
+- **The business day**: a time after the date (« 03/07/2026 23:41 », ISO's
+  « T », fractional seconds) or in a time column; a sale timed before
+  `service_day_end_hour` belongs to the day before. An .xlsx date cell is
+  Excel's serial (1900 or 1904 calendar, `xlsx_reader.date1904`), a whole
+  serial a date with no time (never shifted), a `t="d"` cell its ISO text.
+  A sales format and a payments format may say different hours: nothing
+  ties them, and a day's payments would then land on another day than its
+  sales - give both the same hour.
+- **Money**: the line's amount TTC (discounts off, a comp 0), or a unit price
+  × the quantity when ticked. HT per French rate bucket (`laddition_xlsx`'s
+  `KNOWN_RATES` and `_to_ht`; « 20 % », « 20 », « 0,2 », « 0.2 » one rate, a
+  « % » printed says it is a percentage, « 19,6 » none), or summed from an HT
+  column, which wins over the rate. No rate assumed: the TTC whose rate does
+  not read is `without_rate_ttc`. A (product, day) one of whose lines has no
+  readable amount is left unread (`days_without_amount`).
+- **Its own number reader** (`till_file.read_number`, never
+  `bank.statements`'): a text cell digit for digit with the format's decimal
+  mark - ONE kind of group separator (a space of any kind, « ' » or the other
+  mark), only between groups of exactly three digits (`_ungrouped`: « 42 50 »,
+  « 1 0,5 », « 1 2 3 » are no number - every space was taken out wherever it
+  stood, and « 42 50 » read 4 250 €, the bug « Combler les écarts » met
+  once), a sign in front or a « - » behind, a « € » at either end, spaces
+  beside them; no exponent, no NaN; at most 2 decimals for an amount TTC or
+  paid, 4 for HT, 3 for a quantity - more is refused, never rounded. An .xlsx
+  numeric cell is `Decimal` of its text: its binary noise
+  (10.499999999999998, under 1e-9) rounded half up to those places, anything
+  more refused (3.505 is no amount). A numeric RATE is rounded to 4 places
+  the same way before it is compared (`read_rate`: Excel stores 5,5 % as
+  0.055000000000000007, and read as text no line had its HT).
+- **Quantities are signed** (a refund), summed exactly per (product, day),
+  and a day ending on a fraction is rounded half away from zero and counted
+  (`quantities_rounded`) - never truncated (L'Addition's own reader still
+  truncates toward zero: its quantities are ±1).
+- **Payments**: each row one payment, filed under the format's map (« texte
+  de la caisse = Carte », its left side matched accent- and case-blind),
+  else the app's own word (« Carte », « Espèces », « Chèque »,
+  « Titres-restaurant », « Avoir »), else `PosDailyPayment.canonical()` (CB,
+  Cash…), else kept as printed and listed (`unmapped_methods`, said by
+  « Tester » and the job). `canonical()` itself is unchanged: the owner's
+  re-reads are as before. A row with an amount and no method is filed under
+  « Illisible » and counted. A new format starts with the usual French
+  spellings mapped (`forms.DEFAULT_METHOD_MAP`).
+- **Bounds**: a (product, day)'s revenue fits (10, 2), a (day, method)'s
+  payments (12, 2), a line's quantity 100 000, a day's 1 000 000, a name 255
+  (cut); at most 500 000 rows (`MAX_ROWS`) and 5 000 distinct products
+  (`MAX_PRODUCTS`) a file (`laddition_xlsx`'s, which bounds an uploaded
+  L'Addition export the same way), `MAX_SEPARATORS` 5 000 a CSV line; a CSV
+  decoded
+  as the bank's (« auto » UTF-16 behind its mark, else UTF-8, else
+  Windows-1252, never Windows-1252 behind a Unicode mark), a NUL or a
+  `csv.Error` refused; an .xlsx through the reader's upload bounds; .xls
+  refused (« enregistrez-le en .xlsx ou en .csv »).
+
+**The upload** (`till_views.upload_sales_file`, POST, `caisse/import/fichier/`):
+the weight (`common.file_too_big`), the kind, the choice (`connectors.resolve`:
+L'Addition's export must be an .xlsx; a format by `common.is_id`, which must
+exist and pass the check now), the day, a job already running - each refused
+before anything is kept. Then the file is staged under the espace's
+`imports/caisse/` (never `downloads/`: the backfills glob `downloads/*.xlsx`
+and a fetch takes the first new .xlsx landing there), the one sales import's
+lock taken (`importing.claim_sales_import`, the job's `source` « fichier »:
+an automatic import's slot arriving meanwhile refuses the upload and the
+staged file goes; a file is never L'Addition's coverage) and a
+`SalesImportJob` thread (`target=bound(tasks.import_till_file_task)`) reads it: the same
+status card, cancel, reaper and « Données » busy check as the fetch. The job
+resolves the choice again (a format deleted or edited meanwhile is said),
+reads, and only a file **read whole** is moved into place - L'Addition's
+export to `downloads/` (the backfills re-read it), any other to
+`downloads/caisse/` - under « televerse-AAAAMMJJ-HHMMSS-<empreinte>-<nom
+sûr> » (`tasks.UPLOADED`, 16 hex of the content's SHA-256, the name cut,
+`get_valid_filename`); a refused file is deleted. **The same content is kept
+once** (its digest in the name: the staged copy goes) and only the newest
+`tasks.KEPT_FILES` (50) uploads stay in each folder - in `downloads/` only
+those named `televerse-…`: the fetch's own downloads are never pruned.
+downloads/ is in every backup, and uploaded exports piled up there 25 MB at a
+time. **The job beats while it reads** (`read_upload(progress=)`,
+`laddition_xlsx.with_progress`, every `PROGRESS_ROWS` (5 000) rows) and hears
+a cancel there: silent, a long reading was reaped at ten minutes and a second
+upload or fetch could start beside it. The log says the file, the format, the day given and « Importé par
+<nom> », then what was read (`tasks.reading_log`; `money_log` for sales,
+`payments_log` for L'Addition's export only - its words are that export's),
+then `store_reading` with the payments beside the days « Ventes » holds.
+**What a file imported again replaces is what it holds**: each (product,
+day) it prints (a product missing from a corrected file keeps its old day),
+or each day's payments whole; a sale typed by hand is never touched - the
+card says exactly that. The recipes' sales of its days follow every till
+product of those days, its own and those kept (`tasks.till_entries`, under
+« L'Addition (the till) »).
+
+**« Tester »** (the first submit button, so Enter never saves) reads the file
+picked on the page with the format AS TYPED, in memory, at most
+`TEST_ROW_LIMIT` (5 000) rows, and shows: the first 15 rows in numbered
+columns, the header row found and each role's column (« produit → colonne 2
+« Article » »), the rows read and passed over, the (product, day), units,
+TTC/HT, days covered, days left unread, fractions rounded; for payments, the
+total per method and the spellings nothing maps; which product names are
+new (« à lier ») against the till's - or the import's own refusal. Nothing
+saved, no file kept. « Lire un format » reads an invented export
+(`till_views.FORMAT_EXAMPLE`, read by a test).
+
+**The owner's alone** (`accounts/access.py`): the formats pages and the
+upload. An upload writes the till's sales AND payments, which nothing tells
+from the till's own and which « Entrées d'argent » holds against the bank -
+an employee given « Recettes & ventes » could otherwise hide a shortfall.
+The file card is drawn for the owner only.
+
+**« Données »**: « Formats des fichiers de caisse » (`formats_caisse`,
+`transfer/sections/till_formats.py`), configuration (order 52, requires
+nothing, nothing requires it): keyed by the name as the form compares it,
+every field but the id, the moment restored and never compared, a
+difference a conflict under « Fusionner » and replaced under « Remplacer »
+(whose prune deletes what the archive does not name, of a list it said),
+every format written through the model's check, its refusal in French.
+
+- Migration `recipes/0019`, **WRITTEN and left to be applied** (the owner,
+  after a backup, `migrate_tenants`; `serve` refuses to start until then).
+  Written as 0018 and renumbered after GitHub's main's
+  `recipes/0018_auto_sales_import`, which it depends on; a dev copy
+  migrated under the old name is restored from a backup
+  (`refresh_dev_data.cmd`) and migrated again - never faked, which would
+  skip `SalesImportJob.source`. One new empty
+  table, and a column of the sales jobs with its default
+  (`SalesImportJob.source`, « laddition » - what every job before it read):
+  nothing existing is read or rewritten, in any espace or the `_template`.
+  Until it is applied, « Ventes » (it lists the formats for the owner and
+  reads the jobs), the formats pages and « Données » (it counts them) answer
+  « no such table » or « no such column ».
+
+Not done, the owner's call: ready-made formats per till (no real export of
+any - collect one at onboarding, build its format with « Tester », publish it
+as a « Configuration seule » archive), the till's money and payments in
+« Données », a generic backfill re-reading `downloads/caisse/`, a source per
+connector on `PosProduct` / `PosDailyPayment` (two tills on one day collide:
+the later reading replaces the day), non-French VAT, wide payment exports
+(one column per method), a global cap on browser sessions across espaces.
+
+Tests: `recipes/tests/test_till_file.py` (the reader), `test_xlsx_reader.py`
+and `test_laddition_limits.py` (the hardened readers), `test_store_reading.py`,
+`test_import_job_errors.py`, `test_till_format_views.py`,
+`test_till_file_import.py` (the upload, the cards, two espaces, a file
+kept once, the heartbeat), `test_till_source.py` (the one key, and
+`WrittenAsNamedEscapesTests`: no tab, no-break space or byte order mark
+written as itself in recipes/), and
+`transfer/tests/test_till_formats_section.py`. `till_file` needs Django's
+settings (`common.search_key`, today's date): it writes and reads nothing
+else of the database but the payments' vocabulary.
+
 ### « Factures de vente » (`recipes/sale_*.py`, `bank/sale_*.py`)
 
 The owner, 05/10/2026: « Je veux pouvoir ajouter des factures de vente, soit au format facture
@@ -7212,7 +8024,7 @@ known customers, the deposit doubts), `sale_lines.py` (tie proposals, the consum
 `recipes` reaches `bank` only inside a function (`# here: bank reads this module`), the way
 `invoices/workspace.py` reaches `bank`.
 
-**What a document is** (recipes 0019):
+**What a document is** (recipes 0020):
 - `SaleDocument` keeps `reference`, `sold_on` and `note`, and gains `key` (below), `customer`,
   `customer_identifier` (BT-47, else BT-48: shown, never matched), `counting` (below), the totals it
   STATES - `stated_total_ttc` (BT-112, or typed), `stated_total_ht` (BT-109, or typed beside the
@@ -7245,7 +8057,7 @@ known customers, the deposit doubts), `sale_lines.py` (tie proposals, the consum
 
 **Its key** (`SaleDocument.key`, 16 hex, unique, never shown) is what « Données » names it by:
 random for a new document (`new_sale_key`, a module function the migration names, never a frozen
-value), and for one saved before 0019 - or a key-less record of an older archive -
+value), and for one saved before 0020 - or a key-less record of an older archive -
 `legacy_key(fingerprint, occurrence)`: the first 16 hex of sha256(« fingerprint#occurrence »), the
 fingerprint « Données » always matched documents by (`transfer.sections.sales.fingerprint`) and the
 rank among identical ones. The database migrated and every older archive of it give one document one
@@ -7253,10 +8065,10 @@ key, deterministically. The migration adds the column NULL and not unique, fills
 `RunPython(fill_keys)` - the fingerprint FROZEN in the migration, which imports nothing of the app -
 and only then makes it unique with its default: one `AddField(unique=True, default=…)` computes the
 callable ONCE for the table rebuild, gives every row the same key and fails on the index with two
-documents. Proved twice (`recipes/tests/test_migration_0019.py`): `LegacyKeyTests` (the frozen
-derivation equals the live one) and `MigrationReplayTests` (back to 0018, two identical documents
-and a third, forward again: unique keys, each the live derivation; the leaf restored in `finally`) -
-only a replay proves the risky step.
+documents. Proved twice (`recipes/tests/test_migration_0020.py`): `LegacyKeyTests` (the frozen
+derivation equals the live one) and `MigrationReplayTests` (back to the migration before it,
+`recipes/0019_tillformat`, two identical documents and a third, forward again: unique keys, each
+the live derivation; the leaf restored in `finally`) - only a replay proves the risky step.
 
 **Two ways in, on the tab's card** (`recipes/_sale_documents_card.html`, `#factures-vente`):
 - **« Lire la facture »** (`recipes:sale_document_read`, POST): a Factur-X PDF or a CII / UBL XML,
@@ -7305,7 +8117,7 @@ only a replay proves the risky step.
   look. A plausible date AND a typed one: the typed one is said ignored.
 - **Duplicates and direction**: one document per file (the sha, then the constraint); a number is
   unique among sale documents, case aside - the card refuses it naming the first, the typed form
-  only when the number CHANGED (`NUMBER_TAKEN`: two documents saved before 0019 with one number
+  only when the number CHANGED (`NUMBER_TAKEN`: two documents saved before 0020 with one number
   still save). A seller a supplier retains (`identified_supplier`), or a buyer whose SIREN is the
   bar's (a stored `seller_siren`), is a purchase: refused, « importez-la dans « Factures » ». Stored
   as a sale, it would also teach Achats' guard a supplier's SIREN.
@@ -7354,7 +8166,7 @@ charge was 110 € on the tab and at the bank, 134 € in « Marges ») - lines 
 total: typed beside some
 lines, it says the rest has no line (the owner ties « certains éléments ») or, lower, that a
 discount applies to them. A line's money is its stated HT at its rate (EN 16931 states no line TTC),
-else price × quantity, else - a recipe line saved before 0019 only - the recipe's menu price. **No
+else price × quantity, else - a recipe line saved before 0020 only - the recipe's menu price. **No
 document's money moves after it is saved**: `save_typed` writes the menu price of the day into every
 recipe line saved with a blank price (`_write_menu_prices`: every line, not only the forms that
 changed), or raising a cocktail's price moved every old invoice's total, its payment state and the
@@ -7667,8 +8479,11 @@ and the messages are worded from it (« Réglée par une entrée de « Banque »
 automatiquement. », without detail). A « Recettes » employee's read or save may run the pass and
 link credits, and his delete detaches links (CASCADE): the owner's question, built as the default.
 
-**Migration recipes 0019, WRITTEN and left to be applied** (deploy.cmd in production; data-dev by
-hand, DEPLOY.md section 16). Until it is, « no such table / column » answers on the « Ventes » tab
+**Migration recipes 0020, WRITTEN and left to be applied** (deploy.cmd in production; data-dev by
+hand, DEPLOY.md section 17). Written as `0019_sale_invoices` and renumbered `0020_sale_invoices`
+after GitHub's main's `recipes/0019_tillformat` (« The till's file import », above), which it now
+follows; a dev copy migrated under the old name is restored from a backup (`refresh_dev_data.cmd`)
+and migrated again - never faked. Until it is, « no such table / column » answers on the « Ventes » tab
 and every sale document page, Marges, the stock pages reading `recipes.sales` (« Vendu »,
 « Écarts », « Combler les écarts », « Prévoir les courses »), Banque's « Entrées » tab and « Entrées
 d'argent », Achats' import of an electronic invoice (the guard), deleting a recipe or merging an
@@ -7683,7 +8498,7 @@ classes named:
 - `recipes/tests/test_sale_document_model.py` - `SaleDocumentModelTests` (defaults, the key, the
   money rules), `FreeLineTests` (the five constraints, `clean()`, a free line's names),
   `VatDivisorTests`, `SaleDocumentPaymentModelTests` (the pair, CASCADE, the related names);
-- `test_migration_0019.py` - `LegacyKeyTests`, `MigrationReplayTests`;
+- `test_migration_0020.py` - `LegacyKeyTests`, `MigrationReplayTests`;
 - `test_sale_einvoice.py` - `ReadSaleTests`, `RefusalTests` (each figure past its column, 501 lines,
   einvoice's refusals as they are), `FixtureTests`;
 - `test_sale_files.py` - `ReadEInvoiceUploadTests` (the read card step by step),
@@ -8243,6 +9058,29 @@ Not per (recipe, day). A sale typed in by hand exists precisely because the
 till never saw it, so an import must never overwrite it — and keyed without
 the source, re-importing a period would silently delete the manual entry for
 every day it touched. `sales_between` sums across sources.
+
+**Two sources, named once** (`recipes/sales.py`): `TILL_SOURCE` and
+`MANUAL_SALE_SOURCE` (re-exported from `recipes.forms`). **The till's key is
+« laddition » for EVERY connector** - L'Addition fetched, a file of any till
+uploaded, an API one day - and stays so (no data migration): the per-recipe
+till sales are rebuilt from tables that hold no source
+(`resync_recipe_from_daily_quantities` from `PosProductDailyQuantity`,
+« Données »'s rebuild), Marges counts any other source as typed by hand
+(`margins.computation.TILL_SOURCE`, `hand_typed_units`), and `till_links`
+compares the till's rows. A second key would be counted twice after the
+first link changed, read on Marges as typed by hand, and turned back into
+« laddition » by a « Données » round trip. Which connector read a day is in
+the job's log, never in the rows. **No writer spells a source**: the guard
+(`recipes/tests/test_till_source.py`) reads every non-test module for a
+`RecipeSale(...)`, `RecipeSale.objects.…(...)` or `record_sales(...)` call
+given a literal source - and for any `create`, `get_or_create`,
+`update_or_create` or `bulk_create` given one, whatever reaches it: a
+recipe's own manager (`recipe.sales.update_or_create(source=...)`) names no
+RecipeSale. **The key is stored, never shown**: « Par origine »
+and « Dernières ventes » say « Caisse » and « Saisie à la main »
+(`SOURCE_LABELS`, `source_label`; a key nobody named is shown as stored), the
+totals rows keep their `source` beside a `label`, and the search finds the
+words as well as the keys (`sources_named`).
 
 ### "OU" nests
 
@@ -9244,10 +10082,12 @@ page ouverte » with none).
   address, so a login that typed its own on a colleague's form signed in her place - audit
   04/10/2026) and the sheets' header (`SAVE_ESTABLISHMENT` refused in French; the name is the
   employer's on every sheet, its certificate and the signature mails); deleting a stock take (it
-  froze the stock's value at its date); « Données », « Identifiants », « Accès des employés »; the
-  reminders, alerts, automatic gathers and automatic sales imports (« Notifications, rappels et
-  récupération automatique » below: they write to every phone, search the mailbox and sign in to
-  the till on their own). Each login's own notification devices are every login's (`EVERYONE`).
+  froze the stock's value at its date); the till's file formats and its file upload
+  (`recipes:till_format*`, `upload_sales_file`: an upload writes the till's sales and payments, and
+  could hide a shortfall); « Données », « Identifiants », « Accès des employés »; the reminders,
+  alerts, automatic gathers and automatic sales imports (« Notifications, rappels et récupération
+  automatique » below: they write to every phone, search the mailbox and sign in to the till on
+  their own). Each login's own notification devices are every login's (`EVERYONE`).
   The employee's e-mail address is still not frozen in the signature request at send time: that
   needs a migration.
 - **A stored file by the folder it RESOLVES to** (`areas_of_file`): `/fichiers/` serves any file of
@@ -9340,7 +10180,11 @@ with other tickets »): how a bon is read is a **format de bon**, a set of
 espace: three types (« Fûts », « Caisses verre », « Bouteilles CO2 ») and
 « UBA — bon du livreur », whose motifs were checked against the owner's real
 bons (every part found, every line read, every total matched, the re-sends
-and the replacements seen); tests that need an empty app call
+and the replacements seen) - except a new espace that is not the owner's,
+which drops that format with UBA (`invoices/seeds.py`, « Test data »): a bar
+buying from UBA there adds the supplier and a format de bon itself, or
+Achats' guard (`receipts.route_to_returnables`, active formats only) no
+longer sends a driver's bon to Consignes. Tests that need an empty app call
 `returnables/tests/support.py::no_defaults()`.
 
 **Migrations - unlike Personnel, other pages read these tables.**
@@ -9618,8 +10462,7 @@ consignes : rangé dans Consignes (bon n° X) — ce n'est pas une facture. »
 a `DuplicateInvoiceError`: no Invoice. Several formats recognising it is
 refused the same way, naming them - filed as a purchase, it would be
 silently wrong money. Anything else (no format, a PDF over 5 MB or 5 pages,
-no text) is imported as before. The « Analyse IA » upload goes through it
-too, before `parse_and_import`. A folder import draws a routed bon « Rangé
+no text) is imported as before. A folder import draws a routed bon « Rangé
 dans Consignes », and one several formats recognise « Erreur » (stored
 nowhere, said in the batch's log); naming the shop of a kept file that turns
 out to be a bon does the same. A new shop named for such a slip, filed in
@@ -9923,7 +10766,9 @@ never a lost bon.
   time, `AUTO_GATHER_END_BEFORE_START`), the CheckConstraint
   `auto_gather_end_after_start` (0036), and its card, which says « heures
   illisibles : corrigez-les » (« jours illisibles » for its days) rather
-  than a 500.
+  than a 500. « Cochez au moins une source » is asked of an ACTIVE rule
+  only (`AutoGatherForm.clean`): a rule switched off may keep none - with
+  its mailbox gone, another bar is offered nothing to tick.
 - **Each source's coverage is recorded** (`invoices.GatherCoverage`,
   `invoices/coverage.py`; it replaced the « last clean search » walk of the
   history). Per source (`type-<id>`, `bons-<id>`): `searched_until`, the
@@ -10067,7 +10912,11 @@ never a lost bon.
   every source (a failing portal used to pull it 90 days back for the
   mailbox and Metro). Mailbox types keep the posted start; manual gathers
   are otherwise unchanged.
-- `run_due`: nothing without `integrations_allowed()`; on a dev server each
+- `run_due`: nothing without `integrations_allowed()` - any bound espace
+  since the merge with the connectors opened to every bar: another bar's
+  rules search its own mailbox, once on its « Identifiants » (« sautée :
+  boîte mail à renseigner sur la page Identifiants »), never Metro nor a
+  portal (« Every espace's connectors », under « Gathering invoices »); on a dev server each
   due slot is claimed and says « sautée : serveur de développement ». A due
   slot is the latest instant in `(last_slot_at or created_at, now]`, claimed
   by a conditional UPDATE on the `last_slot_at` read. **Catch-up**
@@ -10163,8 +11012,11 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   the give-back, the catch-up limit, the dev-server skip (« sautée :
   serveur de développement »), the deploy mark, the unreadable rule claimed
   once, `except Exception` → « échec : erreur interne à HH:MM », a
-  DatabaseError → given back « en attente : base occupée », the guarded
-  writes, one rule's failure kept to itself (`run_each`). A kind is an
+  DatabaseError → given back « en attente : base occupée », an
+  `automation.Retry` raised before anything was created → given back with
+  its own « en attente : … » (`WAITS`: another bar's « Identifiants » held,
+  the server's browsers taken; past the limit « manquée : … à HH:MM »), the
+  guarded writes, one rule's failure kept to itself (`run_each`). A kind is an
   `automation.Kind` (its model, instants, limit, `start`, sentences and log
   lines). `invoices/auto_gather.py` is the gathers' kind and kept every
   behaviour and word: its hooks call ITS module's functions at call time
@@ -10178,13 +11030,23 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   `last_slot_at`, `last_result`, `last_failed` (the last failure's local
   day, cleared by a success). Cap 5. Catch-up 12 h: an import is idempotent
   per day, late is fine. `run_due` is the scheduler's third JOB; nothing
-  outside the owner's espace (`till_allowed`).
+  unbound (`till_allowed`: any bound espace since the merge with the
+  connectors opened to every bar).
 - **The sources** (`recipes/sales_sources.py`): `SalesSource(key, label,
-  available, unavailable_reason, job_label, task)`. Another site is an
+  available, unavailable_reason, job_label, task, uses_browser)`. Another
+  site is an
   entry whose task (`(job_id, start, end)`) records the same day-level
   sales (`record_sales`, `PosProductDailyQuantity`) and ends with
   `auto_sales.finish` - nothing else in the scheduling changes. A key the
   registry no longer has is « sautée : source inconnue », never a 500.
+  L'Addition is `available()` where the espace may fetch with its own
+  account: in the owner's espace as on GitHub's main, in another once its
+  « Identifiants » hold the login and password (`till_login_missing`). In
+  the owner's espace that is `till_allowed()` alone, NOT
+  `pos.connectors.LADDITION.ready()`, which draws the Ventes tab's fetch
+  card and also wants his account: an owner with neither (« Identifiants »
+  nor .env) is offered rules whose import fails and says so in its alert,
+  as on GitHub's main - kept so, not aligned on the card.
 - **One sales import at a time** (`recipes/importing.start_sales_import`,
   used by the Ventes tab's `trigger_sales_import` and the automatic run):
   reap, active check and create in one `transaction.atomic()`, the bound
@@ -10210,8 +11072,9 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   annulé », the slot kept): only when its last result was « en attente » and
   a failed or cancelled sales job finished at or after the slot. The owner's
   « Annuler », a refused sign-in, are not repeated a minute later; its next
-  slot runs. Jobs carry no source: filter on one once a second source
-  exists.
+  slot runs. Only a job of the rule's own source counts
+  (`SalesImportJob.source`, recipes 0019: « laddition », or « fichier » for
+  a till's file uploaded on « Ventes »).
 - **The period** (`period_for`): END the last COMPLETE till day
   (`last_complete_day`: yesterday once the local time is past
   « La nuit se termine à » - 00:00 = yesterday at any hour -, else the day
@@ -10221,9 +11084,10 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   import COMPLETES - by hand from the Ventes tab too, never failed,
   cancelled or killed - up to the last complete day when it FINISHED (an
   import up to today has not seen tonight's sales). Unknown, it is read once
-  from the SUCCESS sales jobs (L'Addition's only; the job being recorded
-  left out). **Nothing new when the day after the coverage is past END**:
-  the slot says « à jour : ventes importées jusqu'au JJ/MM », no job, no
+  from the SUCCESS sales jobs (L'Addition's only - `source` « laddition »,
+  never an uploaded file; the job being recorded left out). **Nothing new
+  when the day after the coverage is past END**: the slot says « à jour :
+  ventes importées jusqu'au JJ/MM », no job, no
   sign-in - two slots a day sign in once. Otherwise START = coverage − 3
   days, or (never covered) the newest sales day − 3, else today − 90; only
   bounded at today − 400 (said in the job's log; such a run records its
@@ -10242,8 +11106,11 @@ automatic gathers of invoices and bons - and the slot machinery is ONE.
   The tick prunes automatic jobs older than 30 days.
 - **The page** (`recipes/auto_sales_views.py`, `recipes:auto_sales`, POST-only
   `…/<pk>/` and `…/<pk>/supprimer/`; lights « Recettes & ventes »): owner
-  only for POST (members read-only, 403), no form where no source is
-  `available()` (its reason instead). One card per rule (`#import-<pk>`),
+  only for POST (members read-only, 403), no NEW rule's form where no
+  source is `available()` (its reason instead, its POST 403) - the rules
+  already there still listed, switched off, changed or deleted wherever
+  `till_allowed()`: a bar that cleared its account could otherwise never
+  stop them. One card per rule (`#import-<pk>`),
   « Prochains imports », the last 10 automatic runs, the period line naming
   the night setting; a new card « Ventes de la veille », every day, 07:00.
   Saving never runs an import (creation, re-activation, new days or times
@@ -10257,7 +11124,9 @@ what an import records - the task run with the download patched),
 `test_auto_sales_start_and_alert.py`, `test_auto_sales_views.py`,
 `test_auto_sales_races.py` (the plan under the lock, the SUCCESS and its
 coverage in one transaction, the skip after a failure, the command holding
-the lock); `transfer/tests/test_sales_section.py::SalesCoverageTests`;
+the lock); `test_tenants.py::AutomaticSalesImportGateTests` (another bar:
+its account, the browsers taken, the store held, its rules once the account
+is gone); `transfer/tests/test_sales_section.py::SalesCoverageTests`;
 `notifications/tests/test_schedule.py` (`CalendarInstantsTests`). The
 thread is always patched (`recipes.importing.threading.Thread`):
 `download_sales_lines` is never reached. A test running `run_due` at a
@@ -10518,6 +11387,89 @@ arithmetic isn't exact decimal either — see the comments on
 `tests/factories.py` — plain functions, no factory_boy. Note that
 `invoices/migrations/0002_seed_suppliers` seeds METRO and UBA into every
 database, the test one included.
+
+**What a new espace starts with (`invoices/seeds.py`, 04/10/2026).** The test
+database, `_template` and the owner's espace hold every seed: Metro, UBA
+(0002), « UBA - Factures » (0007), Franprix, Monoprix, Sabbh Oriental, Wing
+Seng (0012), the three returnable types and « UBA — bon du livreur »
+(returnables/0002). UBA, Sabbh Oriental and Wing Seng are the bar the app
+was written for: a new espace that is NOT the owner's drops them, with UBA's
+mailbox source and slip format (`forget_original_bar_suppliers`, a step of
+`accounts.provisioning.HOSTED_ESPACE_STEPS`, one transaction), and keeps
+Metro (not fetching), Franprix, Monoprix and the types. So
+**`Tenant.uses_server_integrations` also decides which seeds a new espace
+keeps** - it is set at creation only, and the owner's espace was adopted,
+never provisioned: nothing reaches it. Their readers and tills stay in the
+code (a till answers only where its row is, `receipts.configured_tills`;
+`create_shop` never takes a registry key as a code: « Sabbh » is
+`SABBH_2` - nor a retired one, `RETIRED_CODES`: « Other » is `OTHER_2`).
+The seed migrations and `SEEDED_SOURCE` are unchanged, and
+`SEEDED_SUPPLIERS` lost only OTHER (invoices/0038, below): a new espace holds
+a subset of the seeds. **A later data
+migration must not count on them**: `migrate_tenants` runs it in every
+espace, hosted ones included, so it looks UBA, SABBH, WINGSENG, « UBA -
+Factures » or the UBA slip format up with `.filter(...).first()` and does
+nothing where they are absent - never `.get()`, which stops the migration
+there, nor `get_or_create`, which puts back in every hosted espace what
+`forget_original_bar_suppliers` took out. In a real tenant's
+test (`TwoTenantsTestCase`), only an `owner=True` espace has UBA or its
+format: `returnables.tests.support.seeded_format()` makes the format again
+where it is absent (under a new pk - SQLite never reuses one; a test needing
+the same pk in two espaces passes `pk=` to `make_format`), and a gate test
+needing a mailbox source in the hosted espace makes its own
+(`invoices/tests/test_tenancy.py`, `reopen_the_owners_integrations_in_b`) -
+otherwise its `assert_not_called()` on the mailbox proves nothing.
+
+**The AI reading was removed on 04/10/2026, never used** (the owner: « tu
+peux supprimer la clé IA »): the « Autre (analyse IA) » choice of the PDF
+import (`parsers/llm_fallback.py`, the Anthropic SDK and its key
+`ANTHROPIC_API_KEY`, its « Identifiants » card), and the pseudo-supplier
+0002 seeded for it (code OTHER, reader key LLM). Migration `invoices/0038`
+deletes that supplier wherever no row names it - every relation to Supplier
+walked, CASCADE and hidden ones included, and a reminder « repris par » it
+(`notifications.Reminder.skip_supplier_id`, a plain id no relation shows:
+`PLAIN_IDS`; deleted under it, the reminder would never be skipped again) -
+and keeps it as an ordinary supplier, its reader key emptied, where
+something does; no other supplier is touched. Migrations `invoices/0038`
+and `accounts/0006` (which rewords the admin's help of « utilise les accès
+du serveur », no SQL), **WRITTEN and left to be applied** (the owner, after
+a backup, `migrate_tenants`; `serve` refuses to start until then). They
+were written as `invoices/0037` and `accounts/0004` and renumbered as
+GitHub's main brought its own, already published (`0037_auto_gather` and
+`0004_pushdevice`, then `accounts/0005_shopping_area`: accounts' twice):
+0038 depends on
+`0037_auto_gather` and on the latest migration of every app pointing at
+Supplier then - bank 0009, inventory 0022 (its `ShoppingExclusion`, 0021,
+and `ShoppingList`, 0022), returnables 0002 - or holding a plain id of one
+(notifications 0001); accounts 0006 on `0005_shopping_area`. A dev copy
+migrated under an old name is restored from a backup (`refresh_dev_data.cmd`)
+and migrated again. **0038's test compares the relations it walks with that
+day's literal list** (`RELATIONS_AT_0038`, the merges'
+`inventory.ShoppingExclusion` and `inventory.ShoppingList` included: a
+shopping list naming the retired supplier keeps it, as any CASCADE row
+does), never with the live model:
+a key to Supplier added later is none of its business, and a dependency
+added to it once applied is an InconsistentMigrationHistory in every espace.
+- **« Données »** never creates it again from an older archive, nor writes
+  its reader key (`sections/suppliers._retired_ai`). Kept here by 0038, the
+  record is that supplier's, matched by its code as any other (left out,
+  « Remplacer » pruned it and what named it). Gone here, it comes back as an
+  ordinary supplier only when the run imports something filed under it -
+  its own known prices, a record of another section naming it, « Banque »
+  by its payee names alone (its `supplier_names` also names the suppliers of
+  the documents its lines pay, which only « Factures » brings) - else it is
+  left out, said (`_filed_under_by_this_run`). No new shop takes the code
+  OTHER (`receipts.RETIRED_CODES`), so OTHER here is always that supplier.
+  **The one exception to count(), the manifest and the report counting the
+  same suppliers** (« Export, import and clear »): an archive written before
+  then counted its « fournisseurs » without it, so a run bringing it, or
+  merging it into an espace that kept it, reports one more than the archive
+  announced.
+- **`APP_ENV_PREFIXES` keeps `ANTHROPIC_`**: nothing reads the key, but an
+  older .env or « Identifiants » may still hold it, and a portal naming it
+  would have it typed into its page. A key typed on « Identifiants » before
+  stays there until « Effacer » (« Identifiants qui ne servent plus », in
+  words on another bar's page, its name on the owner's).
 
 ## Known data issues (not code bugs)
 

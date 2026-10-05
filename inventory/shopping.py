@@ -239,7 +239,7 @@ class ArticleInfo:
 @dataclass(frozen=True, slots=True)
 class StoreInfo:
     """A store the page offers (a supplier with purchases, neither
-    expenses_only nor the AI pseudo-supplier)."""
+    expenses_only nor the removed AI reading's)."""
 
     id: int
     name: str

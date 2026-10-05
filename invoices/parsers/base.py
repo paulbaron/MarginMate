@@ -232,11 +232,13 @@ class InvoiceParser:
     """One InvoiceParser subclass per supplier PDF layout.
 
     Subclasses implement `parse_pages`; `parse` handles the pdfplumber I/O
-    for all of them. (The LLM fallback parser overrides `parse` directly,
-    since it works from whole-document text rather than a layout.)
+    for all of them.
     """
 
     supplier_code: str = ""
+    # The reader's name on screen (a source's « Lecteur », an import's
+    # message): French, a name a person recognises - never the registry key.
+    label: str = ""
     # extract_tables() is comparatively expensive, so only the parsers that
     # actually read tables pay for it.
     needs_tables: bool = False

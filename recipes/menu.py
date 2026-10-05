@@ -23,6 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 
+from accounts.access import access_of
 from common import RANGE_END, RANGE_START, DateRange, date_range, is_id, read_date
 from inventory.models import StockMovement, StockType
 
@@ -37,9 +38,11 @@ from .models import (
     SalesImportJob,
     variation_scope,
 )
+from .pos.connectors import LADDITION, upload_choices
 from .sale_documents import DELETE_QUESTION, DOCUMENTS_PAGE_SIZE, NO_FINAL_INVOICE_PILL, listed
 from .sale_files import EINVOICE_EXTENSIONS
 from .sale_payments import Allocation, payment_state, read_links
+from .sales import source_label, sources_named
 from .usage import article_uses
 
 
@@ -167,6 +170,7 @@ def render_menu(request, tab, *, status=200, **extra):
     if tab == "recipes":
         extra.setdefault("article", article)
     if tab == "sales":
+        extra.setdefault("owner", access_of(request).owner)
         extra.setdefault("query", request.GET.get("vente", ""))
         extra.setdefault("show_all", request.GET.get("ventes") == SHOW_ALL)
         extra.setdefault("window", window)
@@ -379,8 +383,12 @@ def _to_link() -> dict:
 
 def _sales_matching(query: str):
     """What a typed search means on the sales: a recipe, a date as it is
-    written (12/07/2026, 07/2026, 2026), or where the sale came from."""
+    written (12/07/2026, 07/2026, 2026), or where the sale came from - in
+    the page's words (« caisse », « main »), or as stored."""
     matches = Q(recipe__name__icontains=query) | Q(source__icontains=query)
+    named = sources_named(query)
+    if named:
+        matches |= Q(source__in=named)
     written = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", query)
     month = re.fullmatch(r"(\d{1,2})[/.-](\d{4})", query)
     if written:
@@ -430,6 +438,7 @@ def _sales(
     read_date: str = "",
     read_counting: str = "",
     card_messages=(),
+    owner: bool = False,
 ) -> dict:
     """The recent sales, the till import, a form to add one by hand, and the
     « Factures de vente » card.
@@ -455,6 +464,13 @@ def _sales(
     allocation's state, recipes/sale_payments.py) - the amounts it was
     given, never a bank date, a payer or another invoice's money: the links
     read once for the tab, two queries, and only when a document is listed.
+
+    The till's two doors (recipes/pos/connectors.py): L'Addition's card only
+    where its account is ready (one reading of the store) - elsewhere one
+    line pointing at « Identifiants », for the owner; and the file card, the
+    owner's (an upload writes the till's sales and payments). The import's
+    status card stands apart from both, so whatever door started a job
+    follows it.
     """
     window = window or DateRange()
     hidden_fields = hidden_fields or {}
@@ -482,7 +498,14 @@ def _sales(
     recipe_url = url_for_each("recipes:recipe_detail")
     for sale in shown:
         sale.recipe_url = recipe_url(sale.recipe_id)
-    totals = recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
+        sale.source_label = source_label(sale.source)
+    allowed = till_allowed()
+    choices = upload_choices() if owner else []
+    # Each row keeps its stored `source` beside the words the page says.
+    totals = [
+        {**row, "label": source_label(row["source"])}
+        for row in recorded.values("source").annotate(rows=Count("id"), units=Sum("quantity")).order_by("-units")
+    ]
     return {
         "form": form or ManualSaleForm(),
         "sales": shown,
@@ -497,6 +520,7 @@ def _sales(
         "date_window_label": _window_label(window),
         "totals": totals,
         "manual_source": MANUAL_SALE_SOURCE,
+        "manual_label": source_label(MANUAL_SALE_SOURCE),
         "sales_search_fields": hidden_fields.get("sales", []),
         "period_fields": hidden_fields.get("period", []),
         # « Factures de vente »: its list, counted over the window and its
@@ -527,10 +551,19 @@ def _sales(
             }
             for value, label in SaleDocument.Counting.choices
         ],
-        # The import from the till - offered only where the server's account
-        # may be used (recipes/integration.py); elsewhere « à configurer ».
-        "till_allowed": till_allowed(),
+        # The fetch from L'Addition - offered only where this espace may use
+        # it (recipes/integration.py; elsewhere « à configurer ») and its
+        # account is ready (else the owner is pointed at « Identifiants »).
+        "till_allowed": allowed,
         "till_to_configure": TILL_TO_CONFIGURE,
+        "laddition_ready": allowed and LADDITION.ready(),
+        "credentials_url": reverse("accounts:credentials"),
+        # A file of the till, any till's: the owner's door.
+        "owner": owner,
+        "upload_choices": choices,
+        "has_formats": len(choices) > 1,
+        "upload_url": reverse("recipes:upload_sales_file"),
+        "formats_url": reverse("recipes:till_formats"),
         "job": SalesImportJob.objects.first(),
         "default_start": (timezone.localdate() - timedelta(days=30)).isoformat(),
         "default_end": timezone.localdate().isoformat(),

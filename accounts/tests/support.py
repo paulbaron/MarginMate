@@ -52,6 +52,7 @@ import shutil
 import tempfile
 from contextvars import ContextVar
 from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TransactionTestCase, override_settings
@@ -124,6 +125,12 @@ class TenancyTestCase(TransactionTestCase):
         template = paths.template_database()
         template.parent.mkdir(parents=True)
         provisioning.copy_database(template_master(), template)
+        # A DNS lookup of a name is the network: refused as NoNetworkTestCase
+        # refuses it (another bar's mailbox resolves its server first -
+        # patch invoices.scrapers.egress.resolve instead).
+        from tests.support import _guarded_getaddrinfo
+
+        self.enterContext(mock.patch("socket.getaddrinfo", new=_guarded_getaddrinfo))
 
     def make_tenant(self, name="Bar Essai", *, owner=False) -> Tenant:
         """A real tenant (accounts.provisioning.create_tenant). `owner`: the

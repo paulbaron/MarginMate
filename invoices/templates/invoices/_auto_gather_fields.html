@@ -18,7 +18,7 @@ shown disabled with why.
                 {% if source.reason %}<p class="help">{{ source.reason }}</p>{% endif %}
             </li>
         {% empty %}
-            <li class="muted">Aucune source : voir l'onglet « Sources » de Factures.</li>
+            <li class="muted">{% if gather_to_fill %}{{ gather_to_fill }}{% else %}Aucune source : voir l'onglet « Sources » de Factures.{% endif %}</li>
         {% endfor %}
     </ul>
     {% for error in form.sources.errors %}<p class="field-error">{{ error }}</p>{% endfor %}

@@ -1,4 +1,4 @@
-"""recipes 0019 (« Factures de vente »): every document saved before it is
+"""recipes 0020 (« Factures de vente »): every document saved before it is
 given the key « Données » already knew it by - its content fingerprint and
 its rank among identical documents (`recipes.models.legacy_key`) - so an
 archive written before the migration still finds it.
@@ -7,8 +7,9 @@ The key is the risky step. One AddField(unique=True, default=new_sale_key)
 gives every existing row the SAME value - Django works a callable default
 out once for a table rebuild - and the migration then fails on the unique
 index as soon as two documents exist. Only a replay proves the steps in
-their order: MigrationReplayTests takes the test database back to 0018,
-writes documents there through the historical models, and migrates forward.
+their order: MigrationReplayTests takes the test database back to the
+migration before it (0019_tillformat), writes documents there through the
+historical models, and migrates forward.
 
 Invented data throughout.
 """
@@ -25,12 +26,12 @@ from recipes.models import SaleDocument, legacy_key
 from tests.factories import make_recipe, make_stock_type
 from transfer.sections.sales import fingerprint
 
-BEFORE = ("recipes", "0018_auto_sales_import")
-AFTER = ("recipes", "0019_sale_invoices")
+BEFORE = ("recipes", "0019_tillformat")
+AFTER = ("recipes", "0020_sale_invoices")
 
 
 def migration():
-    return importlib.import_module("recipes.migrations.0019_sale_invoices")
+    return importlib.import_module("recipes.migrations.0020_sale_invoices")
 
 
 class LegacyKeyTests(SimpleTestCase):
@@ -60,11 +61,13 @@ class LegacyKeyTests(SimpleTestCase):
         self.assertEqual(keys, {11: legacy_key(same, 0), 12: legacy_key(same, 1), 13: legacy_key(third, 0)})
         self.assertEqual(len(set(keys.values())), 3)
 
-    def test_it_follows_recipes_0018_and_the_bank_s_treasury(self):
-        """The link table names `bank.BankTransaction`; no bank migration
-        depends on recipes."""
+    def test_it_follows_the_till_s_formats_and_the_bank_s_treasury(self):
+        """It follows recipes 0019_tillformat (written as 0019, it was
+        renumbered after GitHub's main's) and the bank's treasury: its link
+        table names `bank.BankTransaction`, and no bank migration depends on
+        recipes."""
         self.assertEqual(
-            set(migration().Migration.dependencies), {("recipes", "0018_auto_sales_import"), ("bank", "0008_treasury")}
+            set(migration().Migration.dependencies), {("recipes", "0019_tillformat"), ("bank", "0008_treasury")}
         )
 
     def test_it_says_what_going_back_does(self):
@@ -81,7 +84,7 @@ class MigrationReplayTests(TransactionTestCase):
             historical = executor.loader.project_state([BEFORE]).apps
             Document = historical.get_model("recipes", "SaleDocument")
             Line = historical.get_model("recipes", "SaleDocumentLine")
-            # Neither table moves in 0019: the live models write them.
+            # Neither table moves in 0020: the live models write them.
             coupe = make_recipe(name="Coupe exemple", selling_price_ttc="9.00")
             keg = make_stock_type(name="Fût exemple 30 L")
             made = []

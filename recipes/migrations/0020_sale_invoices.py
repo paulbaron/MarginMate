@@ -15,7 +15,12 @@ so an archive written before this migration still finds it.
 
 Going back drops the new columns, the link table and every link, and puts
 the old « exactly one source » constraint back: it FAILS once a line tied to
-nothing exists - delete those lines first, or restore the backup."""
+nothing exists - delete those lines first, or restore the backup.
+
+Written as 0019_sale_invoices and renumbered after GitHub's main's
+0019_tillformat (merged 05/10/2026), which it now depends on: applied in no
+production. A dev copy migrated under the old name is restored from a backup
+and migrated again - never faked."""
 
 import hashlib
 import json
@@ -36,7 +41,7 @@ BATCH = 500
 
 # The key a document had in « Données » until now, frozen here: a migration
 # replays the same whatever the code becomes (bank/0006's RULES is the
-# precedent). recipes/tests/test_migration_0019.py checks it against the
+# precedent). recipes/tests/test_migration_0020.py checks it against the
 # live transfer.sections.sales.fingerprint and recipes.models.legacy_key.
 
 
@@ -98,7 +103,7 @@ def fill_keys(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("recipes", "0018_auto_sales_import"),
+        ("recipes", "0019_tillformat"),
         ("bank", "0008_treasury"),
     ]
 

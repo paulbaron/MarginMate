@@ -95,10 +95,29 @@ def storage_scope(tenant) -> str:
 
 
 def integrations_allowed() -> bool:
-    """Whether the server's own accounts (Metro, the invoice mailbox,
-    L'Addition, the LLM parser, the portals' .env credentials) may be used
-    for this thread's tenant: only the owner's tenant
-    (`Tenant.uses_server_integrations`), never unbound."""
+    """Whether the connectors - the invoice mailbox and L'Addition - may run
+    for this thread: any bound tenant (since 04/10/2026; before, the
+    platform owner's only), each signing in with the accounts
+    typed on ITS « Identifiants » page (accounts/vault.py). Never unbound. A
+    tenant closed (`Tenant.is_active` unticked) is bound by no request.
+
+    Metro and the supplier portals stay the platform owner's
+    (`server_accounts_allowed`): one server IP that Metro's firewall judges
+    for everybody, and the server's Chrome on the owner's home network
+    (invoices/integrations.py). Whether the SERVER's accounts stand in for
+    a value not typed is `server_accounts_allowed` too."""
+    return current_tenant() is not None
+
+
+def server_accounts_allowed() -> bool:
+    """Whether the SERVER's own accounts and settings are this thread's
+    tenant's: the .env's values as a fallback for a credential not typed on
+    « Identifiants » (`vault.server_setting`, `scrapers.website.credentials`),
+    a server setting's or command's name on a page, the server's desktop (a
+    visible browser), Metro and the supplier portals. The platform owner's
+    tenant only (`Tenant.uses_server_integrations`, at most one:
+    accounts.E005); never unbound. Every other espace signs in with what it
+    typed itself."""
     tenant = current_tenant()
     return bool(tenant is not None and tenant.uses_server_integrations)
 

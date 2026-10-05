@@ -52,6 +52,7 @@ def _to_decimal(text: str | None, default: str = "0") -> Decimal:
 @register
 class CecinaParser(InvoiceParser):
     supplier_code = "CECINA"
+    label = "Cecina (Vignerons de Cessenon)"
     # Text-only: this layout's tables come out with merged cells.
 
     def parse_pages(self, pages: list[PdfPage], date_hint: date | None = None, source_name: str = "") -> ParsedInvoice:

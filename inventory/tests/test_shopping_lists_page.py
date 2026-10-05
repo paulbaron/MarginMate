@@ -48,7 +48,6 @@ from inventory.tests.test_shopping_page import (
     said_in,
     warnings_of,
 )
-from invoices.parsers import LLM_PARSER_KEY
 from margins.tests.test_page import cells_of, row_of
 from tests.factories import make_invoice, make_invoice_line, make_movement, make_product, make_supplier
 from tests.runner import TEST_EMAIL, employee_of_the_test_tenant
@@ -235,6 +234,20 @@ def finish_its_list(item) -> None:
 def remove_it(item) -> None:
     """Another phone presses « Retirer »."""
     ShoppingListItem.objects.filter(pk=item.pk).delete()
+
+
+def retired_ai_supplier(article):
+    """The removed AI reading's supplier as invoices/0038 leaves it where
+    something names it - its code OTHER, its reader key emptied -, `article`
+    bought there (a document filed under it is why it was kept)."""
+    retired = make_supplier(code="OTHER", name="Autre (analyse IA)")
+    line = make_invoice_line(
+        invoice=make_invoice(supplier=retired),
+        product=make_product(supplier=retired, stock_type=article),
+        total_ht="40.00",
+    )
+    make_movement(stock_type=article, quantity="1", unit_cost_ht="40", invoice_line=line)
+    return retired
 
 
 class SentencesTests(SimpleTestCase):
@@ -506,10 +519,12 @@ class IndexTests(ListPageTestCase):
         self.assertEqual(table_of(html, "listes en cours"), "")
 
     def test_the_store_menu_offers_only_the_stores_bought_at(self):
-        """Not a supplier of charges, not the AI pseudo-supplier, not a
-        supplier nothing was bought at - each sorted as read."""
+        """Not a supplier of charges, not the removed AI reading's (kept by
+        invoices/0038 where something named it: its code OTHER, its reader
+        key emptied), not a supplier nothing was bought at - each sorted as
+        read."""
         charges = make_supplier(name="Assurance exemple", expenses_only=True)
-        robot = make_supplier(name="Lecture IA exemple", parser_key=LLM_PARSER_KEY)
+        robot = make_supplier(code="OTHER", name="Autre (analyse IA)")
         make_supplier(name="Jamais acheté exemple")
         for supplier in (charges, robot):
             line = make_invoice_line(
@@ -702,6 +717,14 @@ class EditPageTests(ListPageTestCase):
                 self.assertEqual(self.redirected(fournisseur=asked), reverse(INDEX))
                 self.assertEqual(said_at_the_top(self.html(INDEX)), [STORE_TO_CHOOSE])
 
+    def test_the_removed_ai_reading_s_supplier_has_no_list(self):
+        """Bought at, and still no store: its address is the lists' page."""
+        retired = retired_ai_supplier(self.made.beer)
+        for run in ("", "courses"):
+            with self.subTest(mode=run):
+                self.assertEqual(self.redirected(fournisseur=retired.pk, mode=run), reverse(INDEX))
+                self.assertEqual(said_at_the_top(self.html(INDEX)), [STORE_TO_CHOOSE])
+
     def test_a_store_with_an_open_list_and_no_purchase_left(self):
         """Its documents gone, the store is no longer offered: its open list
         still opens."""
@@ -876,6 +899,15 @@ class AddTests(ListPageTestCase):
                 response = self.post(ADD, {"fournisseur": asked, "nom": "Pain exemple", "quantite": "2"})
                 self.assertEqual(self.landing(response), reverse(INDEX))
                 self.assertEqual(said_at_the_top(response.content.decode()), [STORE_NOT_FOUND_ADD])
+
+    def test_nothing_is_added_for_the_removed_ai_reading_s_supplier(self):
+        retired = retired_ai_supplier(self.made.beer)
+        before = row_counts()
+        response = self.post(ADD, {"fournisseur": retired.pk, "nom": "Pain exemple", "quantite": "2"})
+        self.assertEqual(self.landing(response), reverse(INDEX))
+        self.assertEqual(said_at_the_top(response.content.decode()), [STORE_NOT_FOUND_ADD])
+        self.assertEqual(row_counts(), before)
+        self.assertFalse(ShoppingList.objects.filter(supplier=retired).exists())
         self.assertFalse(ShoppingList.objects.exists())
 
     def test_twice_is_once(self):

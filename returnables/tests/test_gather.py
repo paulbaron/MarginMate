@@ -531,8 +531,10 @@ class PurchasesPeriodTests(NoNetworkTestCase):
 
 
 class GatherTenantsTests(TwoTenantsTestCase):
-    """Bar Alpha is the owner's tenant; Bar Beta uses none of the server's
-    accounts. Both have the seeded format, under the same pk."""
+    """Bar Alpha is the platform owner's espace; Bar Beta another bar, whose
+    slips come through its own mailbox (its « Identifiants »). Both have
+    UBA's format, under the same pk: Beta, a new hosted espace, starts
+    without it (invoices.seeds) and is given it here."""
 
     owner_a = True
 
@@ -543,30 +545,42 @@ class GatherTenantsTests(TwoTenantsTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         with bound_tenant(self.bar_a):
-            self.code = code_of(seeded_format())
+            seeded = seeded_format()
+            self.code = code_of(seeded)
         with bound_tenant(self.bar_b):
+            make_format(name=SEEDED_FORMAT_NAME, pk=seeded.pk)
             self.assertEqual(code_of(seeded_format()), self.code, "the same pk in both, or this proves less")
 
-    def test_the_card_offers_the_slips_in_the_owners_tenant_only(self):
+    def beta_s_mailbox(self):
+        """Beta's mailbox typed on its « Identifiants » page."""
+        from accounts import vault
+
+        with bound_tenant(self.bar_b):
+            vault.save(
+                {"INVOICE_EMAIL_ADDRESS": "beta@exemple.invalid", "INVOICE_EMAIL_APP_PASSWORD": "secret-beta"},
+                bindings={"INVOICE_EMAIL_APP_PASSWORD": "imap.beta.invalid"},
+            )
+
+    def test_the_card_offers_the_slips_in_every_espace_with_its_mailbox(self):
         self.client.force_login(self.user_a)
         self.assertContains(
             self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer"), f'value="{self.code}"'
         )
+        self.beta_s_mailbox()
         self.client.force_login(self.user_b)
         page = self.client.get(reverse("invoices:invoice_list") + "?ajouter=recuperer")
-        self.assertNotContains(page, f'value="{self.code}"')
-        self.assertNotContains(page, "Bons de consignes")
-        self.assertContains(page, integrations.GATHER)
-        # Not even read: nothing about the server's accounts is, there.
-        self.assertEqual(page.context["gather_sources"], [])
+        self.assertContains(page, f'value="{self.code}"')
+        self.assertNotContains(page, integrations.GATHER)
 
-    def test_a_gather_of_slips_is_refused_in_beta_with_no_job_and_no_thread(self):
+    def test_a_gather_of_slips_in_beta_runs_bound_to_beta(self):
         self.client.force_login(self.user_b)
         with mock.patch("invoices.views.threading.Thread") as thread:
             response = self.client.post(reverse("invoices:gather"), {"sources": [self.code], "retour": "/consignes/"})
-        thread.assert_not_called()
         self.assertEqual(response["Location"], "/consignes/")
-        with bound_tenant(self.bar_b):
+        target, args = thread.call_args.kwargs["target"], thread.call_args.kwargs["args"]
+        self.assertEqual(target.tenant.pk, self.bar_b.pk)
+        self.assertEqual(args[3], {self.code})
+        with bound_tenant(self.bar_a):
             self.assertFalse(ScrapeJob.objects.exists())
 
     def test_alphas_gather_of_slips_runs_bound_to_alpha(self):
@@ -587,19 +601,19 @@ class GatherTenantsTests(TwoTenantsTestCase):
         self.assertEqual(target.tenant.pk, self.bar_a.pk)
         self.assertEqual(args[3], {self.code})
 
-    def test_the_task_refuses_by_itself_in_beta(self):
-        with bound_tenant(self.bar_b):
-            job = ScrapeJob.objects.create()
-            with (
-                mock.patch("invoices.tasks.find_matching_emails") as find,
-                mock.patch("invoices.tasks._GatherHeartbeat"),
-            ):
-                gather_invoices_task(job.pk, date(2026, 9, 1), date(2026, 9, 20), {self.code})
-            job.refresh_from_db()
-            self.assertFalse(Slip.objects.exists())
+    def test_the_task_refuses_by_itself_unbound(self):
+        job = ScrapeJob.objects.create()
+        with (
+            mock.patch("invoices.tasks.find_matching_emails") as find,
+            mock.patch("invoices.tasks._GatherHeartbeat"),
+        ):
+            gather_invoices_task(job.pk, date(2026, 9, 1), date(2026, 9, 20), {self.code})
+        job.refresh_from_db()
         find.assert_not_called()
         self.assertEqual(job.status, ScrapeJob.Status.FAILED)
         self.assertIn(integrations.GATHER, job.log)
+        with bound_tenant(self.bar_b):
+            self.assertFalse(Slip.objects.exists())
 
     def test_alphas_slips_land_in_alpha(self):
         with bound_tenant(self.bar_a):

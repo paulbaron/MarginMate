@@ -22,9 +22,9 @@ which a restore leaves « non lu ») nor the till's means of payment per day
 `manage.py laddition_backfill_revenue`, then `laddition_backfill_payments`,
 contacting nothing. So a clear deletes the payments, and a « Remplacer »
 deletes those of every day it leaves with no till sales, and both say how to
-bring them back (`PAYMENTS_NOTE`) - or, in a tenant whose till the server
-does not import (a hosted bar, which runs no command on the server), that
-this is « à configurer » (`payments_note`); nothing else here touches them.
+bring them back (`PAYMENTS_NOTE`) - or, in an espace that runs no command on
+the server (every one but the platform owner's), to fetch or import its
+sales again (`payments_note`); nothing else here touches them.
 
 **The till's coverage goes back with the days deleted** (`lower_till_coverage`):
 the automatic sales imports start from `ventes-<key>`, « imported without a
@@ -34,7 +34,7 @@ automatic import fetches them again. Left as they were, those days stayed
 empty for good under a page saying they were imported.
 
 **A sale document is its `key`** (recipes.models: 16 hex characters, random
-for a new one). An archive written before recipes 0019 carries none: each
+for a new one). An archive written before recipes 0020 carries none: each
 of its records is keyed by its content - `legacy_key(fingerprint(…),
 occurrence)`, the key the migration gave every document of the database the
 archive came from -, so an older archive still finds its documents. One not
@@ -88,7 +88,7 @@ from bank.models import BankTransaction
 from common import format_money
 from invoices.forms import EARLIEST_DOCUMENT_DATE
 from recipes.forms import MANUAL_SALE_SOURCE
-from recipes.integration import TILL_TO_CONFIGURE, till_allowed
+from recipes.integration import TILL_REIMPORT, till_commands_shown
 from recipes.models import (
     SALE_FILES_FOLDER,
     PosDailyPayment,
@@ -210,12 +210,10 @@ PAYMENTS_NOTE = (
     "« manage.py laddition_backfill_payments » les relit des exports déjà téléchargés, pour les jours "
     "dont les ventes sont enregistrées."
 )
-#: PAYMENTS_NOTE where that command is not this tenant's to run: it reads the
-#: exports of the till the server imports, the owner's (recipes/integration.py),
-#: and a hosted bar runs no command on the server.
-PAYMENTS_NOTE_TO_CONFIGURE = (
-    f"Les moyens de paiement de la caisse ne sont pas dans les archives, et {TILL_TO_CONFIGURE}."
-)
+#: PAYMENTS_NOTE where that command is not this espace's to run: it runs on
+#: the server, named in the platform owner's espace only
+#: (recipes/integration.py) - any other fetches or imports its sales again.
+PAYMENTS_NOTE_HOSTED = f"Les moyens de paiement de la caisse ne sont pas dans les archives : {TILL_REIMPORT}."
 #: Said only when key-less records - an archive written before the sales
 #: invoices - created documents while this database had some.
 LEGACY_NOTE = (
@@ -251,8 +249,8 @@ LINE_DEFAULTS = {"label": "", "total_ht": None, "vat_rate": None, "consumed_quan
 
 
 def payments_note() -> str:
-    """What a run that deleted the till's payments says, for the bound tenant."""
-    return PAYMENTS_NOTE if till_allowed() else PAYMENTS_NOTE_TO_CONFIGURE
+    """What a run that deleted the till's payments says, for the bound espace."""
+    return PAYMENTS_NOTE if till_commands_shown() else PAYMENTS_NOTE_HOSTED
 
 
 #: Rows written or deleted per query: SQLite caps a statement's parameters.
@@ -274,7 +272,7 @@ def _text(value, places: int) -> str | None:
 def fingerprint(reference: str, sold_on, note: str, lines) -> str:
     """A sale document's content key: its reference, day, note and its lines
     in order, each (« recipe » or « article », folded name, quantity, unit
-    price). What « Données » knew a document by before recipes 0019, and
+    price). What « Données » knew a document by before recipes 0020, and
     still the key of a record with none of its own (`legacy_key`): left as
     it is, or an older archive no longer finds its documents."""
     canonical = {
@@ -403,7 +401,7 @@ def _line_record(line: SaleDocumentLine) -> dict:
 def _line_shape(line: SaleDocumentLine) -> tuple | None:
     """What the content fingerprint reads of a line: one source, or None -
     a line tied to nothing has no content key (only a document saved since
-    recipes 0019 can hold one)."""
+    recipes 0020 can hold one)."""
     if line.recipe_id and not line.stock_type_id:
         return ("recipe", line.recipe.name, line.quantity, line.unit_price_ttc)
     if line.stock_type_id and not line.recipe_id:
@@ -414,7 +412,7 @@ def _line_shape(line: SaleDocumentLine) -> tuple | None:
 def _contents(documents) -> dict[tuple[str, int], SaleDocument]:
     """(fingerprint, occurrence) → document, for every document here whose
     lines each have one source - the only kind an archive written before
-    recipes 0019 can name -, in the order given ((created_at, id))."""
+    recipes 0020 can name -, in the order given ((created_at, id))."""
     found: dict[tuple[str, int], SaleDocument] = {}
     seen: dict[str, int] = defaultdict(int)
     for document in documents:
@@ -550,7 +548,7 @@ class _Doc:
     position: int
     key: str
     #: (fingerprint, occurrence) for a record with no key of its own (an
-    #: archive written before recipes 0019), else None.
+    #: archive written before recipes 0020), else None.
     content: tuple[str, int] | None
     title: str
     #: What is compared and assigned, as the archive says it: the legacy
@@ -1148,7 +1146,7 @@ class SalesSection(Section):
                 self._protect(key, None)
             raise Skip(str(exc)) from None
         if key is None:
-            # An archive written before recipes 0019: the key its content
+            # An archive written before recipes 0020: the key its content
             # gave it there, which the migration gave its document here.
             print_ = fingerprint(
                 values["reference"], values["sold_on"], values["note"], [line.shape for line in lines or []]

@@ -13,14 +13,15 @@ from django.db import DatabaseError, OperationalError, transaction
 from django.utils import timezone
 
 from accounts import paths
-from accounts.tenancy import bound, integrations_allowed
+from accounts.tenancy import bound, integrations_allowed, server_accounts_allowed
+from common import error_for_page
 
 from . import coverage, integrations
 from .coverage import CATCH_UP_TO_DO, DEFAULT_LOOKBACK_DAYS, OVERLAP_DAYS  # noqa: F401 - their home for callers
 from .importing import DuplicateInvoiceError, RoutedToReturnablesError, parse_and_import
 from .models import EMAIL_SEARCH_FIELDS, AutoGather, EmailInvoiceSource, Invoice, InvoiceType, ScrapeJob, Supplier
 from .ocr import PdfiumBusy
-from .scrapers.generic_email import IncompleteSearch, find_matching_emails, scrape_email_invoices
+from .scrapers.generic_email import IncompleteSearch, failure_said, find_matching_emails, scrape_email_invoices
 from .scrapers.metro import MetroError, MetroPaused, scrape_metro_invoices
 from .scrapers.website import WebsiteError, WebsiteRecipe, fetch_website_invoices, list_website_invoices
 
@@ -246,7 +247,7 @@ def _import_downloaded_file(
         invoice.save(update_fields=["source_sha256"])
         return True
     except DuplicateInvoiceError:
-        job.append_log(f"Skipped {pdf_path} (already imported)")
+        job.append_log(f"Ignoré : {pdf_path} (déjà importé)")
         return False
     except einvoice.OwnSalesInvoiceError as exc:
         # The bar's own sales invoice (receipts.own_sales_invoice): refused for
@@ -254,11 +255,11 @@ def _import_downloaded_file(
         job.append_log(f"{os.path.basename(pdf_path)} : {exc}")
         return False
     except (OperationalError, PdfiumBusy) as exc:
-        job.append_log(f"Not imported now, fetched again next time: {pdf_path}: {exc}")
+        job.append_log(f"Non importé pour l'instant, repris à la prochaine récupération : {pdf_path} : {exc}")
         return None
     except Exception as exc:  # noqa: BLE001 - one bad PDF shouldn't fail the whole batch
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Failed to import {pdf_path}: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec de l'import de {pdf_path} : {detail}\n{traceback.format_exc()}")
         return False
 
 
@@ -292,10 +293,11 @@ def gather_invoices_task(
     batches (scrapers/generic_email.py), before each Metro window and
     download, before each portal download.
 
-    Every source it searches is one of the server's own accounts: in a
-    tenant that may not use them (integrations.py) nothing is searched, and
-    the job says why - whatever its rows say, since a mailbox source or
-    Metro can be switched back on by an import.
+    Unbound, nothing is searched and the job says why (integrations.py). In
+    an espace that is not the platform owner's, Metro and the portals are
+    not searched - whatever its rows say, since an import can switch them
+    back on -, and one asked for all the same is said on its own line; its
+    mailbox signs in with its own « Identifiants ».
 
     A gather of returnables slips alone (the Consignes page's: every code a
     « bons- » one) is told apart from the first moment (_name_slip_sources)
@@ -349,8 +351,12 @@ def gather_invoices_task(
         if slips_run:
             _name_slip_sources(job, slip_formats, source_codes)
         _raise_if_cancelled(job)
-        metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first()
-        if unattended and source_codes is not None and "METRO" in source_codes:
+        # Metro is the platform owner's alone (integrations.py).
+        server = server_accounts_allowed()
+        metro_supplier = Supplier.objects.filter(code="METRO", is_scrapable=True).first() if server else None
+        if not server and source_codes is not None and "METRO" in source_codes:
+            job.update_progress("METRO", label="Metro", error=integrations.METRO)
+        elif unattended and source_codes is not None and "METRO" in source_codes:
             # Its firewall judges every automated sign-in (scrapers/metro.py).
             job.append_log("Metro : à la main seulement, jamais dans une récupération automatique.")
         elif metro_supplier and source_codes is not None and "METRO" in source_codes:
@@ -367,8 +373,12 @@ def gather_invoices_task(
             found, imported = _gather_metro(job, metro_supplier, start, end, metro_now)
             found_total += found
             created_total += imported
-        elif metro_supplier is None:
-            job.append_log("Metro supplier is not configured as scrapable, skipping.")
+        elif source_codes is not None and "METRO" in source_codes:
+            # Said only when Metro was asked for: every other gather never
+            # meant to search it.
+            job.append_log(
+                "Metro : la récupération automatique est désactivée pour ce fournisseur, rien n'est cherché."
+            )
 
         email_types = list(
             InvoiceType.objects.filter(is_active=True, source_kind=InvoiceType.SourceKind.EMAIL).select_related(
@@ -383,7 +393,7 @@ def gather_invoices_task(
 
             source = getattr(invoice_type, "email_source", None)
             if source is None:
-                job.append_log(f"{invoice_type.name}: no email source configured, skipping.")
+                job.append_log(f"{invoice_type.name} : aucune recherche de boîte mail réglée, source ignorée.")
                 continue
 
             # Its own start, before the search: what the search imports
@@ -424,9 +434,15 @@ def gather_invoices_task(
             code = f"type-{invoice_type.id}"
             if source_codes is not None and code not in source_codes:
                 continue
+            if not server:
+                # The portals are the platform owner's alone (integrations.py):
+                # one asked for elsewhere fails on its own line, unsearched.
+                if source_codes is not None:
+                    job.update_progress(code, label=invoice_type.name, error=integrations.PORTALS)
+                continue
             source = getattr(invoice_type, "website_source", None)
             if source is None:
-                job.append_log(f"{invoice_type.name}: no website configured, skipping.")
+                job.append_log(f"{invoice_type.name} : aucun espace client réglé, source ignorée.")
                 continue
             own_start = _own_start(invoice_type.supplier)
             start = min(start_date, own_start) if start_date else own_start
@@ -456,8 +472,10 @@ def gather_invoices_task(
         job.append_log("Annulé par l'utilisateur.")
         job.status = ScrapeJob.Status.CANCELLED
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
-        detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Gather run failed: {detail}\n{traceback.format_exc()}")
+        # Another bar's card shows this: never a library's words there
+        # (common.error_for_page); the owner reads the exception as always.
+        detail = (str(exc).strip() or exc.__class__.__name__) if server_accounts_allowed() else error_for_page(exc)
+        job.append_log(f"Récupération interrompue par une erreur : {detail}\n{traceback.format_exc()}")
         # The card shows the log's last line in plain view: the reason, not
         # the traceback's last frame.
         job.append_log(f"Échec de la récupération : {detail[:300]}")
@@ -634,7 +652,9 @@ def _gather_email(
         job.update_progress(code, error=f"Motif de la source à corriger : {exc}"[:300])
         return 0, 0
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
-        detail = str(exc).strip() or exc.__class__.__name__
+        # Another bar reads a fixed sentence, never the library's words
+        # (generic_email.failure_said); the owner the exception as always.
+        detail = failure_said(exc)
         job.append_log(f"{invoice_type.name} : échec de la boîte mail - {detail}\n{traceback.format_exc()}")
         job.update_progress(code, error=f"Boîte mail : {detail}"[:300])
         return 0, 0
@@ -831,7 +851,7 @@ def _gather_slips(
     except _Cancelled:
         raise
     except Exception as exc:  # noqa: BLE001 - one source failing is said on its own line
-        detail = str(exc).strip() or exc.__class__.__name__
+        detail = failure_said(exc)
         job.append_log(f"{slips_label(fmt)} : échec - {detail}\n{traceback.format_exc()}")
         # A pattern the guard refuses is the format's to correct, not the
         # mailbox's.
@@ -961,7 +981,10 @@ def _import_document_file(
     from .receipts import OCR_LOCK, OCR_WAIT_SECONDS, import_document
 
     if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
-        job.append_log(f"Skipped {path}: another document was being read for too long - fetched again next time")
+        job.append_log(
+            f"Non importé pour l'instant : {path} (un autre document était en lecture depuis trop longtemps) - "
+            "repris à la prochaine récupération"
+        )
         return None
     try:
         # What the document teaches its supplier is recorded as coming from
@@ -984,7 +1007,7 @@ def _import_document_file(
         job.append_log(f"{os.path.basename(path)} : {exc}")
         return False
     except DuplicateInvoiceError:
-        job.append_log(f"Skipped {path} (already imported)")
+        job.append_log(f"Ignoré : {path} (déjà importé)")
         return False
     except einvoice.OwnSalesInvoiceError as exc:
         # The bar's own sales invoice (receipts.own_sales_invoice), as a slip
@@ -992,11 +1015,11 @@ def _import_document_file(
         job.append_log(f"{os.path.basename(path)} : {exc}")
         return False
     except (OperationalError, PdfiumBusy) as exc:
-        job.append_log(f"Not imported now, fetched again next time: {path}: {exc}")
+        job.append_log(f"Non importé pour l'instant, repris à la prochaine récupération : {path} : {exc}")
         return None
     except Exception as exc:  # noqa: BLE001 - one bad file shouldn't fail the whole gather
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Failed to import {path}: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec de l'import de {path} : {detail}\n{traceback.format_exc()}")
         return False
     finally:
         OCR_LOCK.release()
@@ -1005,11 +1028,11 @@ def _import_document_file(
 def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, start_date: date, end_date: date) -> None:
     """Dry run of a website source: signs in and lists what it would
     download, downloading nothing - how a new site's settings are checked
-    before a real gather. Its rows land in job.test_matches. The server's
-    .env names the credentials: another bar's tenant is refused before any
-    is read (integrations.py)."""
+    before a real gather. Its rows land in job.test_matches. The portals are
+    the platform owner's espace's alone: anywhere else refused before any
+    credential is read or a browser starts (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
-    if not integrations_allowed():
+    if not server_accounts_allowed():
         _refused(job, integrations.PORTALS)
         return
     job.status = ScrapeJob.Status.RUNNING
@@ -1036,7 +1059,7 @@ def test_website_task(job_id: int, recipe: WebsiteRecipe, supplier_id: int, star
         job.status = ScrapeJob.Status.FAILED
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
         detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Test failed: {detail}\n{traceback.format_exc()}")
+        job.append_log(f"Échec du test : {detail}\n{traceback.format_exc()}")
         job.status = ScrapeJob.Status.FAILED
     finally:
         job.finished_at = timezone.now()
@@ -1052,15 +1075,15 @@ def test_email_pattern_task(
     body_pattern: str,
     attachment_pattern: str,
 ) -> None:
-    """Dry-run: searches the shared mailbox for emails matching the given
+    """Dry-run: searches the espace's mailbox for emails matching the given
     patterns and records what it found in job.test_matches - nothing is
     written to disk and nothing is imported. Lets a new invoice type's
     patterns be verified against real mail before it's ever used in a real
     gather run. Cancellable the same way gather_invoices_task is (see its
     docstring) - a wide test range can scan thousands of emails too.
 
-    The mailbox is the owner's: from another bar's tenant its senders and
-    subjects would be listed there (integrations.py)."""
+    The mailbox is the bound espace's own (its « Identifiants »): refused
+    unbound only (integrations.py)."""
     job = ScrapeJob.objects.get(pk=job_id)
     if not integrations_allowed():
         _refused(job, integrations.MAILBOX)
@@ -1109,8 +1132,8 @@ def test_email_pattern_task(
         if job.status == ScrapeJob.Status.CANCELLED:
             job.append_log("Annulé par l'utilisateur.")
     except Exception as exc:  # noqa: BLE001 - surfaced to the UI via the job log
-        detail = str(exc).strip() or exc.__class__.__name__
-        job.append_log(f"Test failed: {detail}\n{traceback.format_exc()}")
+        detail = failure_said(exc)
+        job.append_log(f"Échec du test : {detail}\n{traceback.format_exc()}")
         job.status = ScrapeJob.Status.FAILED
     finally:
         job.finished_at = timezone.now()

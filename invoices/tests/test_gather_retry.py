@@ -89,7 +89,7 @@ class GatherOutcomeTests(TestCase):
     def test_a_failed_gather_says_why(self):
         """The pill said "Échoué", Metro 0/0; the reason sat in the log."""
         job = gather_job(ScrapeJob.Status.FAILED)
-        job.append_log("Gather run failed: la base de données est verrouillée")
+        job.append_log("Récupération interrompue par une erreur : la base de données est verrouillée")
         self.assertContains(self.card(job), "la base de données est verrouillée")
 
     def test_a_test_job_is_unchanged(self):

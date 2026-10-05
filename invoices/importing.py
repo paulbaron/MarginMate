@@ -744,18 +744,17 @@ def parse_and_import(
 
     With no parser for the supplier, the invoice is imported EMPTY - the PDF
     is filed, and its lines are typed in by hand afterwards (see
-    invoices/views.py::edit_invoice_lines). This used to hand the document to
-    an LLM instead and keep whatever it returned. Guessing at prices is the
-    one thing this app must not do: every number here ends up in a stock
+    invoices/views.py::edit_invoice_lines). Guessing at prices is the one
+    thing this app must not do: every number here ends up in a stock
     valuation or a margin, and a plausible-looking wrong figure is worse than
     no figure at all, because nothing downstream can tell the difference.
     """
-    from .parsers import get_parser
+    from .parsers import get_parser, reader_label
 
     # A PDF past ocr.MAX_PAGES is refused before anything reads a page or
-    # files anything (DocumentTooBig): the AI reader had no cap of its own,
-    # and with no parser the invoice was filed EMPTY before `document_text`
-    # below refused the file (review of the HARDEN-01 fix).
+    # files anything (DocumentTooBig): with no parser the invoice was filed
+    # EMPTY before `document_text` below refused the file (review of the
+    # HARDEN-01 fix).
     check_page_count(pdf_path)
     key = supplier.parser_key if parser_key_override is None else parser_key_override
     parser = get_parser(key)
@@ -781,8 +780,8 @@ def parse_and_import(
     problems = list(parsed.warnings)
     if parser is not None and not parsed.lines:
         problems.append(
-            f"Le parseur {key} n'a trouvé aucune ligne dans ce document : sa mise en page a peut-être "
-            "changé. Saisissez les lignes à la main."
+            f"Le lecteur {reader_label(key)} n'a trouvé aucune ligne dans ce document : sa mise en page a "
+            "peut-être changé. Saisissez les lignes à la main."
         )
     if invoice.invoice_date is None:
         # Undated, it sits outside every stock valuation and the bank match.

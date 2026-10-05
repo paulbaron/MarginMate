@@ -1,12 +1,14 @@
 import html
 from dataclasses import dataclass, field
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django import forms
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db.models import Q
 from django.forms import BaseInlineFormSet, BoundField, inlineformset_factory
+from django.forms.models import construct_instance
 from django.forms.renderers import DjangoTemplates, get_default_renderer
 from django.template import Context
 from django.template.base import render_value_in_context
@@ -29,15 +31,17 @@ from .models import (
     RecipeSale,
     SaleDocument,
     SaleDocumentLine,
+    TillFormat,
 )
+from .pos.till_file import FormatError, check_format
 from .sale_einvoice import MAX_SALE_LINES
 from .sale_files import EXTENSION_REFUSED, SALE_FILE_ACCEPT, SALE_FILE_EXTENSIONS, file_extension
 from .sale_lines import consumption_doubt, tieable
-from .services import assert_no_cycle
 
-# Sales typed in by hand live under their own source so a till import, which
-# only ever rewrites its OWN rows, can never clobber them.
-MANUAL_SALE_SOURCE = "manual"
+# Re-exported: views, menu and « Données » (transfer/sections) import it from
+# here; its one definition is beside the till's (recipes/sales.py).
+from .sales import MANUAL_SALE_SOURCE
+from .services import assert_no_cycle
 
 
 class SelectWidget(forms.Select):
@@ -1206,6 +1210,209 @@ class SaleTiesForm(forms.Form):
                 )
             )
         return rows
+
+
+# -- « Formats des fichiers de caisse » --------------------------------------------------
+
+#: A text field past its length, in Django's own placeholders (the sale
+#: documents' TOO_LONG above is a str.format template). A NUL is refused
+#: with NUL_REFUSED, imported from invoices.forms: the same sentence.
+TILL_FORMAT_TOO_LONG = "%(limit_value)d caractères au plus (%(show_value)d ici)."
+TILL_FORMAT_NAME_REQUIRED = "Donnez un nom au format."
+SERVICE_HOUR = "Une heure de 0 à 11."
+
+#: Pre-filled on a new format: the spellings French tills print most, each
+#: to the app's word (recipes/pos/till_file.py maps them; « Encaissements »).
+DEFAULT_METHOD_MAP = (
+    "Carte bancaire = Carte\nEspèces = Espèces\nChèque = Chèque\nTicket restaurant = Titres-restaurant\nAvoir = Avoir"
+)
+
+#: The fields a format is made of, in the order the page draws them.
+TILL_FORMAT_FIELDS = (
+    "kind",
+    "encoding",
+    "delimiter",
+    "decimal_mark",
+    "date_format",
+    "sheet",
+    "day_column",
+    "time_column",
+    "service_day_end_hour",
+    "product_column",
+    "quantity_column",
+    "amount_column",
+    "amount_is_unit_price",
+    "amount_ht_column",
+    "rate_column",
+    "category_column",
+    "typology_column",
+    "method_column",
+    "paid_column",
+    "method_map",
+)
+_COLUMN_FIELDS = (
+    "sheet",
+    "day_column",
+    "time_column",
+    "product_column",
+    "quantity_column",
+    "amount_column",
+    "amount_ht_column",
+    "rate_column",
+    "category_column",
+    "typology_column",
+    "method_column",
+    "paid_column",
+)
+
+
+def till_format_key(name: str) -> str:
+    """A format's name as two names are compared: accents, case and spaces
+    aside - « Caisse » and « CAISSE » are one."""
+    from common import search_key
+
+    return " ".join(search_key(str(name or "")).split())
+
+
+class TillFormatForm(forms.ModelForm):
+    """One format of « Formats des fichiers de caisse »: how a till's export
+    is laid out - checked by `till_file.check_format`, each refusal on its
+    field. `layout` is the compiled format once it passes: what « Tester »
+    reads the file with."""
+
+    service_day_end_hour = forms.IntegerField(
+        label="Fin du service",
+        min_value=0,
+        max_value=11,
+        initial=0,
+        help_text="Une vente avant cette heure compte pour la veille (ex. 5). 0 : le jour imprimé.",
+        error_messages={
+            "required": SERVICE_HOUR,
+            "invalid": SERVICE_HOUR,
+            "min_value": SERVICE_HOUR,
+            "max_value": SERVICE_HOUR,
+        },
+        widget=forms.NumberInput(attrs={"min": 0, "max": 11}),
+    )
+
+    class Meta:
+        model = TillFormat
+        fields = ["name", *TILL_FORMAT_FIELDS]
+        labels = {
+            "name": "Nom",
+            "kind": "Contenu",
+            "encoding": "Encodage",
+            "delimiter": "Séparateur",
+            "decimal_mark": "Séparateur décimal",
+            "date_format": "Format des dates",
+            "sheet": "Feuille (Excel)",
+            "day_column": "Colonne du jour",
+            "time_column": "Colonne de l'heure",
+            "product_column": "Colonne du produit",
+            "quantity_column": "Colonne de la quantité",
+            "amount_column": "Colonne du montant TTC",
+            "amount_is_unit_price": "Le montant est un prix unitaire",
+            "amount_ht_column": "Colonne du montant HT",
+            "rate_column": "Colonne du taux de TVA",
+            "category_column": "Colonne de la catégorie",
+            "typology_column": "Colonne de la typologie",
+            "method_column": "Colonne du moyen de paiement",
+            "paid_column": "Colonne du montant payé",
+            "method_map": "Moyens de paiement",
+        }
+        help_texts = {
+            "name": "Ex. « Caisse — ventes par produit ».",
+            "kind": "Ventes par produit et par jour, ou encaissements par moyen de paiement.",
+            "date_format": (
+                "Une heure après la date est acceptée ; dans un fichier Excel, une cellule date se lit d'elle-même."
+            ),
+            "sheet": "Vide : la première feuille.",
+            "day_column": "Vide pour un rapport d'un seul jour : le jour se choisit à l'import.",
+            "time_column": "Facultatif : pour la fin du service, quand la date ne porte pas l'heure.",
+            "product_column": "Ventes.",
+            "quantity_column": "Ventes. Négative pour un remboursement.",
+            "amount_column": (
+                "Ventes. Remises déduites ; une ligne offerte vaut 0. Sans elle, aucune recette n'est lue."
+            ),
+            "amount_is_unit_price": "Coché : multiplié par la quantité. Sinon, le montant de la ligne.",
+            "amount_ht_column": "Facultatif : l'emporte sur le taux.",
+            "rate_column": "20 %, 10 %, 5,5 %, 2,1 % ou 0 % ; sans taux lisible, le HT reste inconnu.",
+            "category_column": "Facultatif.",
+            "typology_column": "Facultatif.",
+            "method_column": "Encaissements.",
+            "paid_column": "Encaissements.",
+            "method_map": (
+                "Une ligne par moyen : « texte de la caisse = Carte ». Carte, Espèces, Chèque, Titres-restaurant ou "
+                "Avoir. Un moyen absent de la liste est gardé tel qu'imprimé."
+            ),
+        }
+        error_messages = {
+            "name": {
+                "required": TILL_FORMAT_NAME_REQUIRED,
+                "max_length": TILL_FORMAT_TOO_LONG,
+                "unique": "Un format porte déjà ce nom.",
+                "null_characters_not_allowed": NUL_REFUSED,
+            },
+            "kind": {"required": "Contenu inconnu.", "invalid_choice": "Contenu inconnu."},
+            "encoding": {"required": "Encodage inconnu.", "invalid_choice": "Encodage inconnu."},
+            "delimiter": {"required": "Séparateur inconnu.", "invalid_choice": "Séparateur inconnu."},
+            "decimal_mark": {
+                "required": "Séparateur décimal inconnu.",
+                "invalid_choice": "Séparateur décimal inconnu.",
+            },
+            "date_format": {"required": "Format de date inconnu.", "invalid_choice": "Format de date inconnu."},
+            "method_map": {"null_characters_not_allowed": NUL_REFUSED},
+            **{
+                name: {"max_length": TILL_FORMAT_TOO_LONG, "null_characters_not_allowed": NUL_REFUSED}
+                for name in _COLUMN_FIELDS
+            },
+        }
+        widgets = {
+            "name": forms.TextInput(attrs={"autocomplete": "off"}),
+            "method_map": forms.Textarea(attrs={"rows": 5}),
+            **{name: forms.TextInput(attrs={"autocomplete": "off"}) for name in _COLUMN_FIELDS},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        #: The format as `check_format` compiled it, once every field but
+        #: the name passed - what « Tester » reads the file with.
+        self.layout = None
+        if not self.is_bound and self.instance.pk is None:
+            self.initial.setdefault("method_map", DEFAULT_METHOD_MAP)
+
+    def clean_name(self):
+        name = " ".join((self.cleaned_data.get("name") or "").split())
+        if not name:
+            raise forms.ValidationError(TILL_FORMAT_NAME_REQUIRED)
+        key = till_format_key(name)
+        for other in TillFormat.objects.exclude(pk=self.instance.pk).only("pk", "name"):
+            if till_format_key(other.name) == key:
+                raise forms.ValidationError(f"Le format « {other.name} » porte déjà ce nom : choisissez-en un autre.")
+        return name
+
+    def clean(self):
+        cleaned = super().clean()
+        # A field refused already is said once, on itself: the check would
+        # read its absence as a second refusal of a value nobody typed.
+        if any(name in self.errors for name in TILL_FORMAT_FIELDS):
+            return cleaned
+        for name in _COLUMN_FIELDS:
+            cleaned[name] = (cleaned.get(name) or "").strip()
+        values = SimpleNamespace(
+            name=cleaned.get("name") or "", **{name: cleaned.get(name) for name in TILL_FORMAT_FIELDS}
+        )
+        try:
+            self.layout = check_format(values)
+        except FormatError as error:
+            self.add_error(error.field if error.field in self.fields else None, error.message)
+        return cleaned
+
+    def _post_clean(self):
+        # Every field is checked above as the model's clean() would
+        # (`check_format`); run again, it would check what the instance held
+        # before, where a field was refused here.
+        self.instance = construct_instance(self, self.instance, self._meta.fields, self._meta.exclude)
 
 
 # -- « Import automatique des ventes » (recipes/auto_sales.py) -------------------------------------------------------

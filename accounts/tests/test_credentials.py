@@ -557,6 +557,21 @@ class PageTests(ConfirmedCase):
         self.post(OLD_PORTAL_PASSWORD__clear="on")
         self.assertEqual(vault.load().values, {})
 
+    def test_a_key_typed_for_the_removed_ai_reading_is_offered_for_deletion(self):
+        """The AI reading and its account went on 04/10/2026: a key typed
+        before stays in the store until « Effacer », and no card asks for
+        one any more."""
+        vault.save({"ANTHROPIC_API_KEY": SECRET})
+        page = self.page()
+        self.assertNotIn("Analyse IA", page)
+        self.assertIn("Identifiants qui ne servent plus", page)
+        # An account's key, not a source's: the sentence says both.
+        self.assertIn("Enregistrés pour un compte ou une source qui n'existe plus", page)
+        self.assertIn('name="ANTHROPIC_API_KEY__clear"', page)
+        self.assertNotIn(SECRET, page)
+        self.post(ANTHROPIC_API_KEY__clear="on")
+        self.assertEqual(vault.load().values, {})
+
     def test_the_status_says_where_a_value_comes_from_never_the_value(self):
         self.env_file("LADDITION_EMAIL=du-fichier@exemple.invalid\n")
         page = self.page()
@@ -612,13 +627,20 @@ class PageTests(ConfirmedCase):
     def test_a_development_copy_says_not_to_type_real_passwords(self):
         self.assertIn("Copie de développement", self.page())
 
-    def test_refused_where_the_integrations_are_not_allowed(self):
-        with mock.patch("accounts.credentials.integrations_allowed", return_value=False):
+    def test_another_bar_s_page_offers_its_connectors_accounts_under_their_own_names(self):
+        """The page opens in every espace (04/10/2026; it was refused outside
+        the owner's): there, no Metro, no portal, and fields named after
+        their account (accounts/tests/test_credentials_hosted.py has the
+        real two espaces)."""
+        portal()
+        with mock.patch("accounts.credentials.server_accounts_allowed", return_value=False):
             page = self.page()
-            self.assertNotIn('name="METRO_PASSWORD"', page)
-            response = self.post(METRO_PASSWORD=SECRET)
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(vault.load().values, {})
+            self.assertNotIn("METRO", page)
+            self.assertNotIn("BOX_", page)
+            self.assertIn('name="caisse_mot_de_passe"', page)
+            response = self.client.post(URL, {**self.drawn(), "caisse_mot_de_passe": SECRET})
+        self.assertRedirects(response, URL)
+        self.assertEqual(vault.load().values, {"LADDITION_PASSWORD": SECRET})
 
     def test_refused_to_a_member_who_is_not_the_owner_even_confirmed(self):
         Membership.objects.filter(tenant=current_tenant()).update(role=Membership.Role.MEMBER)

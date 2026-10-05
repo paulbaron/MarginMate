@@ -1,0 +1,13 @@
+{% comment %}
+A format's fields (forms.StatementFormatForm): its name, its kind of file and
+its encoding, then what a CSV alone needs - its separator, dates, decimals,
+columns and account pattern - in a fieldset hidden AND disabled for another
+kind of file: drawn so by the server for the kind it shows, then following
+the menu (static/js/statement_format.js). Disabled, its fields are never
+sent - an empty required one would otherwise stop the browser sending the
+form, silently. The form's own errors are said once, above.
+{% endcomment %}
+{% include "_form_fields.html" with form=form only=form.head_fields %}
+<fieldset class="format-columns" data-file-types="csv"{% if not form.reads_columns %} hidden disabled{% endif %}>
+    {% include "_form_fields.html" with form=form exclude=form.head_fields fields_only=True %}
+</fieldset>

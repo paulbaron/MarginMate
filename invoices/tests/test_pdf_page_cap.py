@@ -127,6 +127,14 @@ class Recorder(InvoiceParser):
         return pages
 
 
+def read_text(path: str) -> str:
+    """Every page's text as a supplier's reader is handed it
+    (InvoiceParser.parse: ocr.pdf_pages inside ocr.bounded_reading)."""
+    recorder = Recorder()
+    recorder.parse(path)
+    return "\n".join(page.text for page in recorder.pages)
+
+
 class CheckedBeforeAnyPageTests(SimpleTestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
@@ -309,34 +317,6 @@ class NoReaderMakesEveryPageTests(SimpleTestCase):
             self.assertIsNone(einvoice.document_xml(path))
         self.assertEqual(pages.made, 0)
 
-    def test_the_ai_reader_refuses_before_reading_a_page(self):
-        """`llm_fallback._extract_text` read every page of the document it
-        sends to the API, with no cap (the « Analyse IA » upload)."""
-        from invoices.parsers import llm_fallback
-
-        path = os.path.join(self.folder, "long.pdf")
-        with open(path, "wb") as handle:
-            handle.write(pdf_of_pages(3))
-        with (
-            mock.patch.object(ocr, "MAX_PAGES", 2),
-            mock.patch.object(pdfplumber.page.Page, "extract_text", never("extract_text")) as text,
-        ):
-            with self.assertRaises(ocr.DocumentTooBig) as refused:
-                llm_fallback._extract_text(path)
-        text.assert_not_called()
-        self.assertEqual(str(refused.exception), TOO_LONG)
-
-    def test_the_ai_reader_reads_a_document_within_the_cap_page_by_page(self):
-        from invoices.parsers import llm_fallback
-
-        path = os.path.join(self.folder, "deux-pages.pdf")
-        with open(path, "wb") as handle:
-            handle.write(pdf_of_pages(2))
-        with mock.patch.object(ocr, "MAX_PAGES", 2), PageReadings(("extract_text",)) as readings:
-            text = llm_fallback._extract_text(path)
-        self.assertEqual(text.count("ARTICLE EXEMPLE"), 2)
-        self.assertEqual(readings.events[:4], [("extract_text", 1), ("close", 1), ("extract_text", 2), ("close", 2)])
-
 
 class RefusedWhereTheDocumentArrivesTests(TestCase):
     """Each way a PDF comes in says the refusal in French, and files
@@ -375,29 +355,6 @@ class RefusedWhereTheDocumentArrivesTests(TestCase):
                 {"supplier": metro.pk, "source_file": SimpleUploadedFile("facture.pdf", self.content)},
                 follow=True,
             )
-        self.assertContains(response, escape(f"Échec de l'import. {TOO_LONG}"))
-        self.assertFalse(Invoice.objects.exists())
-
-    def test_the_ai_upload_refuses_before_the_api_is_called(self):
-        """« Analyse IA »: the API was billed for every page, the invoice
-        filed, and only then did the text kept beside it refuse the file -
-        reported as a failed upload after all."""
-        from django.test import override_settings
-
-        from invoices.parsers import LLM_PARSER_KEY
-
-        ai = Supplier.objects.get(parser_key=LLM_PARSER_KEY)
-        with (
-            override_settings(ANTHROPIC_API_KEY="cle-de-test"),
-            mock.patch.object(ocr, "MAX_PAGES", 2),
-            mock.patch("anthropic.Anthropic", never("l'API")) as api,
-        ):
-            response = self.client.post(
-                reverse("invoices:invoice_upload"),
-                {"supplier": ai.pk, "source_file": SimpleUploadedFile("facture.pdf", self.content)},
-                follow=True,
-            )
-        api.assert_not_called()
         self.assertContains(response, escape(f"Échec de l'import. {TOO_LONG}"))
         self.assertFalse(Invoice.objects.exists())
 
@@ -468,13 +425,10 @@ class TooManyGlyphsTests(TestCase):
         self.addCleanup(patch.stop)
 
     def test_every_reader_says_it(self):
-        from invoices.parsers import llm_fallback
-
         readers = {
             "text_layer_pages": ocr.text_layer_pages,
             "document_text": ocr.document_text,
             "InvoiceParser.parse": Recorder().parse,
-            "llm_fallback": llm_fallback._extract_text,
         }
         for name, reader in readers.items():
             with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
@@ -539,13 +493,10 @@ class InflatedContentTests(TestCase):
             handle.write(pdf_with_streams(streams))
 
     def test_every_reader_refuses_before_reading_a_page(self):
-        from invoices.parsers import llm_fallback
-
         readers = {
             "check_page_count": ocr.check_page_count,
             "text_layer_pages": ocr.text_layer_pages,
             "InvoiceParser.parse": Recorder().parse,
-            "llm_fallback": llm_fallback._extract_text,
             "page_images": lambda path: list(ocr.page_images(path)),
         }
         for name, reader in readers.items():
@@ -583,7 +534,6 @@ class InflatedContentTests(TestCase):
     def test_a_form_drawn_again_is_counted_again_by_the_readers(self):
         """Weighed once, a form the page draws over and over is interpreted
         each time (6 to 11 s of CPU a MB): the readers count every run."""
-        from invoices.parsers import llm_fallback
         from returnables.tests.test_reading import pdf_drawing_a_form
 
         with open(self.path, "wb") as handle:
@@ -597,7 +547,7 @@ class InflatedContentTests(TestCase):
                 ocr.text_layer_pages(self.path)
         self.assertEqual(str(refused.exception), "Document trop long à lire : plus de 9 Ko de contenu à dessiner.")
         with mock.patch.object(ocr, "MAX_RUN_TOTAL", 13_000):
-            self.assertEqual(llm_fallback._extract_text(self.path).count("REPRISE VIDE"), 3)
+            self.assertEqual(read_text(self.path).count("REPRISE VIDE"), 3)
 
     def test_the_readers_share_the_budget_too(self):
         """Should a stream escape the weighing (a form a page draws, a
@@ -756,9 +706,7 @@ class DrawnContentTests(TestCase):
         )
         with mock.patch.object(ocr, "MAX_RUN_TOTAL", 100):
             ocr.check_page_count(self.path)
-        from invoices.parsers import llm_fallback
-
-        self.assertEqual(llm_fallback._extract_text(self.path).count("REPRISE VIDE"), 1)
+        self.assertEqual(read_text(self.path).count("REPRISE VIDE"), 1)
 
     def test_a_file_pdfminer_cannot_weigh_is_never_drawn(self):
         """PDFium rebuilds a PDF cut before its xref, which pdfminer cannot
@@ -815,12 +763,9 @@ class TooManyCodesTests(TestCase):
         self.addCleanup(patch.stop)
 
     def test_every_reader_says_it(self):
-        from invoices.parsers import llm_fallback
-
         readers = {
             "text_layer_pages": ocr.text_layer_pages,
             "InvoiceParser.parse": Recorder().parse,
-            "llm_fallback": llm_fallback._extract_text,
         }
         for name, reader in readers.items():
             with self.subTest(reader=name), self.assertRaises(ocr.DocumentTooBig) as refused:
@@ -864,13 +809,10 @@ class TooBigObjectsTests(TestCase):
         self.addCleanup(patch.stop)
 
     def test_every_reader_says_it(self):
-        from invoices.parsers import llm_fallback
-
         readers = {
             "check_page_count": ocr.check_page_count,
             "text_layer_pages": ocr.text_layer_pages,
             "InvoiceParser.parse": Recorder().parse,
-            "llm_fallback": llm_fallback._extract_text,
             "page_images": lambda path: list(ocr.page_images(path)),
         }
         for name, reader in readers.items():

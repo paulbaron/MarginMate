@@ -27,10 +27,11 @@ class RecipeAdmin(admin.ModelAdmin):
 
 @admin.register(RecipeSale)
 class RecipeSaleAdmin(admin.ModelAdmin):
-    """Deliberately just the admin for now: the till isn't connected, and
-    building a bespoke entry screen before knowing whether sales arrive by
-    API or by CSV would be guessing. Anything that does arrive goes through
-    recipes.sales.record_sales, not through here."""
+    """The admin's view of the stored rows. The screens are « Ventes » (a sale
+    typed by hand, the till's import - L'Addition's or a file of any till);
+    everything the till sells arrives through recipes.sales.record_sales,
+    never through here. `source` is the stored key (« laddition » for every
+    till, « manual » for a sale typed by hand)."""
 
     list_display = ["sold_on", "recipe", "quantity", "source"]
     list_filter = ["source", "recipe"]

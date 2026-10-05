@@ -43,7 +43,7 @@ from django.db.models import Count, Max, Sum
 from django.db.models.functions import Length
 from django.utils import timezone
 
-from accounts.tenancy import integrations_allowed, tenant_key
+from accounts.tenancy import tenant_key
 from common import error_for_page, format_money
 
 from . import einvoice
@@ -61,7 +61,6 @@ from .ocr import (
     text_layer_pages,
 )
 from .parsers import (
-    LLM_PARSER_KEY,
     PARSER_REGISTRY,
     get_parser,
     is_ticket_shop,
@@ -186,16 +185,24 @@ def receipt_parsers() -> dict[str, ReceiptParser]:
     return {key: parser for key, parser in PARSER_REGISTRY.items() if isinstance(parser, ReceiptParser)}
 
 
-def parser_for(supplier: Supplier) -> ReceiptParser | None:
+def configured_tills() -> list[ReceiptParser]:
+    """The tills configured in the code (generic_receipt.SHOPS) whose
+    supplier this espace holds, in the registry's order - one query. A till
+    whose row is absent answers nothing: a new espace starts without the
+    original bar's local shops (invoices.seeds), and another bar's
+    « Épicerie Sabah » is not Sabbh Oriental's."""
+    tills = receipt_parsers()
+    present = set(Supplier.objects.filter(code__in=list(tills)).values_list("code", flat=True))
+    return [till for key, till in tills.items() if key in present]
+
+
+def parser_for(supplier: Supplier) -> ReceiptParser:
     """The reader for `supplier`'s tickets: its till's own settings when it
     has some, and the same reader without them for any other supplier - a
-    shop added from a ticket, a Metro paper ticket. None only for the AI
-    pseudo-supplier, under which nothing is filed."""
+    shop added from a ticket, a Metro paper ticket."""
     configured = ticket_parser_for(supplier.code)
     if configured is not None:
         return configured
-    if supplier.parser_key == LLM_PARSER_KEY:
-        return None
     return GenericReceiptParser(TicketShop(supplier.code, (), supplier.name))
 
 
@@ -205,12 +212,11 @@ WAITING_GROUP = "En attente de leur premier document"
 def _waiting_first(suppliers) -> tuple[list[Supplier], list[Supplier]]:
     """(those with no document yet, the others): a supplier created for
     what is about to be imported is looked for first - among eighty, under
-    its letter, it was one more to scroll past. The AI pseudo-supplier is
-    never waiting: it is a way of reading, not someone."""
+    its letter, it was one more to scroll past."""
     # Unordered: the model's ordering would join its columns to the DISTINCT
     # and read back every document rather than every supplier.
     filed = set(Invoice.objects.order_by().values_list("supplier_id", flat=True).distinct())
-    waiting = [supplier for supplier in suppliers if supplier.pk not in filed and supplier.parser_key != LLM_PARSER_KEY]
+    waiting = [supplier for supplier in suppliers if supplier.pk not in filed]
     return waiting, [supplier for supplier in suppliers if supplier not in waiting]
 
 
@@ -218,7 +224,7 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
     """What a ticket can be filed under by hand, grouped: those waiting for
     their first document, the shops, then the suppliers whose invoices are
     PDFs (a paper ticket of theirs). Every one of them has its tickets read."""
-    waiting, suppliers = _waiting_first(list(Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).order_by("name")))
+    waiting, suppliers = _waiting_first(list(Supplier.objects.order_by("name")))
     return [
         (WAITING_GROUP, waiting),
         ("Magasins", [supplier for supplier in suppliers if is_ticket_shop(supplier)]),
@@ -231,23 +237,12 @@ def shop_choices() -> list[tuple[str, list[Supplier]]]:
 
 def invoice_supplier_choices() -> list[tuple[str, list[Supplier]]]:
     """What a PDF invoice can be imported under, grouped by how it is read -
-    those waiting for their first document first. The AI reading runs on the
-    owner's key: not offered where the server's accounts may not be used
-    (integrations.py; forms.InvoiceUploadForm refuses it when posted)."""
+    those waiting for their first document first."""
     waiting, suppliers = _waiting_first(list(Supplier.objects.order_by("name")))
-    ai = [supplier for supplier in suppliers if supplier.parser_key == LLM_PARSER_KEY]
     return [
         (WAITING_GROUP, waiting),
         ("Lecteur dédié", [supplier for supplier in suppliers if has_own_reader(supplier)]),
-        (
-            "Lue comme un ticket",
-            [
-                supplier
-                for supplier in suppliers
-                if supplier.parser_key != LLM_PARSER_KEY and not has_own_reader(supplier)
-            ],
-        ),
-        ("Analyse IA", ai if integrations_allowed() else []),
+        ("Lue comme un ticket", [supplier for supplier in suppliers if not has_own_reader(supplier)]),
     ]
 
 
@@ -286,7 +281,8 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
 
     A header a person gave a shop first - "EPICERIE SABAH" before the
     "SABAH" a configured till answers to, since a header printed inside
-    another one gives way to it - then the configured tills, then the SIREN,
+    another one gives way to it - then the configured tills this espace
+    holds the supplier of (`configured_tills`), then the SIREN,
     phone or web site learned from the shop's documents
     (`identified_supplier`). Returns None rather than a best guess: an
     unrecognised receipt that is reported as such costs the operator one
@@ -305,8 +301,7 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
     printed = [
         (header, supplier)
         for header, supplier in (
-            (plain_text(supplier.ticket_header), supplier)
-            for supplier in Supplier.objects.exclude(ticket_header="").exclude(parser_key=LLM_PARSER_KEY)
+            (plain_text(supplier.ticket_header), supplier) for supplier in Supplier.objects.exclude(ticket_header="")
         )
         if _has_header(plain, header)
     ]
@@ -325,7 +320,7 @@ def recognise_shop(text: str) -> tuple[ReceiptParser | None, list[str], str]:
         parser = next(
             (
                 till
-                for till in receipt_parsers().values()
+                for till in configured_tills()
                 if any(re.search(pattern, text, re.IGNORECASE) for pattern in getattr(till, "header_patterns", ()))
             ),
             None,
@@ -371,7 +366,7 @@ def identifier_owners(identifiers=None, suppliers=None) -> dict[str, list[Suppli
     if wanted is not None and not wanted:
         return {}
     if suppliers is None:
-        suppliers = Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[])
+        suppliers = Supplier.objects.exclude(ticket_identifiers=[])
     owners: dict[str, list[Supplier]] = defaultdict(list)
     for supplier in suppliers:
         for identifier in supplier.ticket_identifiers or ():
@@ -388,7 +383,7 @@ def _companies_of_others(text: str, supplier_code: str) -> list[Supplier]:
     if not sirens:
         return []
     owners = defaultdict(list)
-    for supplier in Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[]):
+    for supplier in Supplier.objects.exclude(ticket_identifiers=[]):
         for identifier in sirens.intersection(supplier.ticket_identifiers or ()):
             owners[identifier].append(supplier)
     found = {}
@@ -406,7 +401,7 @@ def _company_of_another(text: str, supplier_code: str) -> Supplier | None:
     if not sirens:
         return None
     owners = defaultdict(list)
-    for supplier in Supplier.objects.exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[]):
+    for supplier in Supplier.objects.exclude(ticket_identifiers=[]):
         for identifier in sirens.intersection(supplier.ticket_identifiers or ()):
             owners[identifier].append(supplier)
     others = {
@@ -427,7 +422,7 @@ def identified_supplier(text: str) -> tuple[Supplier | None, list[str]]:
     if not printed:
         return None, []
     owners = defaultdict(list)
-    for supplier in Supplier.objects.exclude(parser_key=LLM_PARSER_KEY):
+    for supplier in Supplier.objects.all():
         for identifier in printed.intersection(supplier.ticket_identifiers or ()):
             owners[identifier].append(supplier)
     named = {identifier: suppliers[0] for identifier, suppliers in owners.items() if len(suppliers) == 1}
@@ -466,8 +461,6 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
     customer's own company number refused every document of another that
     printed it, header or not, for as long as nobody filed one of its own.
     """
-    if supplier.parser_key == LLM_PARSER_KEY:
-        return []
     # As stored now: another ticket of the shop may have taught it meanwhile.
     supplier.refresh_from_db(fields=["ticket_identifiers", "ticket_header", "refused_identifiers"])
     known = set(supplier.ticket_identifiers or ())
@@ -487,9 +480,7 @@ def learn_identifiers(supplier: Supplier, *texts: str) -> list[str]:
         set_identifiers(supplier, kept, reasons=_why_lost(supplier, known - kept))
         learned = sorted(kept - known)
     if printed:
-        for other in (
-            Supplier.objects.exclude(pk=supplier.pk).exclude(parser_key=LLM_PARSER_KEY).exclude(ticket_identifiers=[])
-        ):
+        for other in Supplier.objects.exclude(pk=supplier.pk).exclude(ticket_identifiers=[]):
             if printed.intersection(other.ticket_identifiers or ()):
                 _recheck(other)
     return learned
@@ -976,6 +967,14 @@ def rename_supplier(supplier: Supplier, name: str, dry_run: bool = False) -> Ren
     return renamed
 
 
+#: Codes never given to a new shop: OTHER was the AI reading's
+#: pseudo-supplier (invoices/0038). An archive written before 04/10/2026
+#: still carries it, and « Données » pairs a supplier by its code - a shop
+#: named « Other » would take that archive's « Autre (analyse IA) » and the
+#: documents filed under it (transfer/sections/suppliers.py).
+RETIRED_CODES = frozenset({"OTHER"})
+
+
 def create_shop(name: str, header: str = "", ignoring=(), expenses_only: bool = False) -> Supplier:
     """A new shop, for tickets no known header was on. With `header`, its
     next tickets are recognised by it. Raises ValueError, for the operator:
@@ -993,7 +992,11 @@ def create_shop(name: str, header: str = "", ignoring=(), expenses_only: bool = 
     header = check_header(header, ignoring)
     base = re.sub(r"[^A-Z0-9]+", "_", plain_text(name)).strip("_")[:24] or "ENSEIGNE"
     code, suffix = base, 1
-    while Supplier.objects.filter(code=code).exists():
+    # Never a code a reader of the code answers to, its row absent or not: a
+    # shop named « Sabbh » in an espace without Sabbh Oriental (invoices.seeds)
+    # would become that till (ticket_parser_for is keyed on the code). Nor a
+    # retired one (`RETIRED_CODES`).
+    while code in PARSER_REGISTRY or code in RETIRED_CODES or Supplier.objects.filter(code=code).exists():
         suffix += 1
         code = f"{base}_{suffix}"
     supplier = Supplier.objects.create(
@@ -1080,8 +1083,6 @@ def move_documents(invoices, supplier: Supplier) -> Moved:
     moved = Moved(count=len(moving))
     if not moving:
         return moved
-    if supplier.parser_key == LLM_PARSER_KEY:
-        raise ValueError("Un document ne se range pas sous ce fournisseur.")
     numbers = Counter(invoice.invoice_number for invoice in moving if invoice.invoice_number)
     twice = [number for number, times in numbers.items() if times > 1]
     if twice:
@@ -1532,8 +1533,7 @@ def supplier_notices(supplier: Supplier) -> list[dict]:
             }
         )
     if (
-        supplier.parser_key != LLM_PARSER_KEY
-        and ticket_parser_for(supplier.code) is None
+        ticket_parser_for(supplier.code) is None
         and not has_own_reader(supplier)
         and not supplier.ticket_header
         and not supplier.ticket_identifiers
@@ -1883,7 +1883,7 @@ def vat_table(invoice: Invoice) -> list[dict]:
     rows = invoice.vat_breakdown
     if not rows and not invoice.vat_table_typed and invoice.ocr_text:
         parser = parser_for(invoice.supplier)
-        if parser is not None and hasattr(parser, "parse_text"):
+        if hasattr(parser, "parse_text"):
             try:
                 rows = [
                     [str(rate), str(base), str(tax)]
@@ -1999,8 +1999,6 @@ def reread_receipt(invoice: Invoice) -> bool:
     if not charge and not _failures(invoice.parse_checks):
         return False
     parser = parser_for(invoice.supplier)
-    if parser is None:
-        return False
     try:
         parsed = parser.parse_text(invoice.ocr_text)
     except Exception:  # noqa: BLE001 - a reading today's parser can't handle stays as it was
@@ -2118,8 +2116,6 @@ def _reread_receipt_file(invoice: Invoice, path: str) -> str:
     from .importing import replace_invoice_lines
 
     supplier = invoice.supplier
-    if parser_for(supplier) is None:
-        raise RereadError(f"Les tickets {supplier.name} ne sont pas lus automatiquement : rien à relire.")
     if not OCR_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
         raise RereadError("Un autre ticket est en cours de lecture : réessayez dans un instant.")
     try:
@@ -2177,7 +2173,7 @@ def _reread_invoice_file(invoice: Invoice, path: str) -> str:
     from .importing import replace_invoice_lines
 
     parser = get_parser(invoice.supplier.parser_key)
-    if parser is None or parser.supplier_code == LLM_PARSER_KEY:
+    if parser is None:
         raise RereadError(f"Les factures {invoice.supplier.name} ne sont pas lues automatiquement : rien à relire.")
     try:
         parsed = parser.parse(path, date_hint=invoice.invoice_date)
@@ -2226,7 +2222,7 @@ def _describe(invoice: Invoice) -> str:
 def has_own_reader(supplier: Supplier) -> bool:
     """Whether `supplier`'s PDF invoices have a reader of their own (Metro,
     UBA...) - any other supplier's are read the way a ticket is."""
-    return supplier.parser_key != LLM_PARSER_KEY and not is_ticket_shop(supplier)
+    return not is_ticket_shop(supplier)
 
 
 def has_text_layer(path: str) -> bool:
@@ -2836,7 +2832,7 @@ def import_receipt(
 
     With `supplier`, the operator has named the shop: nothing is detected,
     and the ticket is always filed - with no lines, and a failed check saying
-    why, when its reader read nothing (or it has none). With `by_type` too,
+    why, when its reader read nothing. With `by_type` too,
     an invoice type named it: a document printing what names another
     supplier is filed all the same, its doubt kept on it, and teaches nothing
     until a person validates or moves it (type_supplier_doubt,
@@ -2851,9 +2847,15 @@ def import_receipt(
     read = read_receipt(pdf_path, date_hint=date_hint, supplier=supplier)
     named_by_hand = supplier is not None
     if supplier is None:
-        if read.parser is None or read.parsed is None:
+        # A reader names a supplier by its code; one this espace does not
+        # hold (configured_tills already keeps those out) is no shop of its.
+        supplier = (
+            Supplier.objects.filter(code=read.parser.supplier_code).first()
+            if read.parser is not None and read.parsed is not None
+            else None
+        )
+        if supplier is None:
             raise UnrecognisedShopError(read.conflict or "Enseigne non reconnue sur ce ticket.", text=read.text)
-        supplier = Supplier.objects.get(code=read.parser.supplier_code)
         parsed = read.parsed
         if read.identified_by:
             parsed.checks.append(
@@ -2940,8 +2942,8 @@ def _chosen_shop_read(
     """What gets filed for a ticket whose shop the operator named.
 
     Whatever the reader made of it, plus a check saying the shop was chosen
-    by hand - it is also what puts a ticket with no reader in the review
-    queue, which only lists receipts with checks.
+    by hand - it is also what puts a ticket read empty in the review queue,
+    which only lists receipts with checks.
     """
     parsed = read.parsed
     if parsed is None:
@@ -2953,9 +2955,7 @@ def _chosen_shop_read(
             from_ocr=True,
         )
     if not parsed.lines:
-        if read.parser is None:
-            reason = f"Les tickets {supplier.name} ne sont pas lus automatiquement"
-        elif read.problem:
+        if read.problem:
             reason = f"La lecture du ticket a échoué ({read.problem})"
         else:
             reason = "Aucune ligne lue sur le ticket"

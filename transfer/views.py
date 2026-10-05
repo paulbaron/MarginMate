@@ -118,13 +118,19 @@ TYPE_TO_CONFIRM = "Tapez EFFACER pour confirmer."
 IMPORT_RUNNING = "Un import est déjà en cours pour cet espace : réessayez dans un instant."
 #: Installed by the migrations into every database: a database holding only
 #: these (and no invoice) is new, and « Remplacer » is what gives them the
-#: archive's settings.
-SEEDED_SUPPLIERS = {"METRO", "UBA", "OTHER", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
+#: archive's settings. A new hosted espace holds only some of them - not the
+#: original bar's UBA, SABBH and WINGSENG (invoices.seeds) - and is new too.
+#: Not OTHER, the AI reading's « Autre (analyse IA) »: invoices/0038 removed
+#: it where nothing named it, and kept it as a supplier of the bar's own
+#: where something did.
+SEEDED_SUPPLIERS = {"METRO", "UBA", "FRANPRIX", "MONOPRIX", "SABBH", "WINGSENG"}
 #: The sections whose rows the migrations install into every database too
 #: (the suppliers, the UBA mailbox search, the bank's format and recognition
 #: rules, the returnable types and the UBA slip format): merged into a new
 #: database, an archive's edited copy of one of them is a conflict and the
-#: installed one stays - only « Remplacer » gives them the archive's.
+#: installed one stays - only « Remplacer » gives them the archive's. A part
+#: holding no row is not named (`_holds_rows`): a new hosted espace holds no
+#: source.
 SEEDED_SECTIONS = ("fournisseurs", "sources", "regles_banque", "types_consignes")
 
 TABS = (
@@ -607,6 +613,24 @@ def _migration(app: str, name: str):
     return importlib.import_module(f"{app}.migrations.{name}")
 
 
+def _holds_only_bank_seeds() -> bool:
+    """« Règles de la banque » holds nothing but what a new espace starts
+    with: no ignore rule (none is installed), no format and no recognition
+    rule but those of bank/0007 and bank/0006 (their literals) and those a
+    new espace that is not the owner's is given (`bank.presets.
+    NEW_ESPACE_FORMAT_NAMES`, `NEW_ESPACE_RULE_NAMES`, frozen)."""
+    from bank import presets
+    from bank.models import IgnoreRule, OperationRule, StatementFormat
+
+    rules = [rule[1] for rule in _migration("bank", "0006_operation_rules").RULES]
+    formats = [_migration("bank", "0007_statement_formats").NAME]
+    return (
+        not IgnoreRule.objects.exists()
+        and not OperationRule.objects.exclude(name__in=[*rules, *presets.NEW_ESPACE_RULE_NAMES]).exists()
+        and not StatementFormat.objects.exclude(name__in=[*formats, *presets.NEW_ESPACE_FORMAT_NAMES]).exists()
+    )
+
+
 def holds_only_seeds(key: str) -> bool:
     """Whether this database holds nothing of section `key` but the rows
     the migrations installed - by the names they gave them, edited or not:
@@ -625,15 +649,7 @@ def holds_only_seeds(key: str) -> bool:
         code, name = SEEDED_SOURCE
         return not InvoiceType.objects.exclude(supplier__code=code, name=name).exists()
     if key == "regles_banque":
-        from bank.models import IgnoreRule, OperationRule, StatementFormat
-
-        rules = [rule[1] for rule in _migration("bank", "0006_operation_rules").RULES]
-        layout = _migration("bank", "0007_statement_formats").NAME
-        return (
-            not IgnoreRule.objects.exists()
-            and not OperationRule.objects.exclude(name__in=rules).exists()
-            and not StatementFormat.objects.exclude(name=layout).exists()
-        )
+        return _holds_only_bank_seeds()
     if key == "types_consignes":
         from returnables.models import ReturnableType, SlipFormat
 
@@ -657,7 +673,26 @@ def _seeded_parts(stage) -> list[str]:
     present = [key for key in SEEDED_SECTIONS if key in stage.sections and key in usable]
     if not present or not _fresh_database():
         return []
-    return registry.labels(key for key in present if holds_only_seeds(key))
+    return registry.labels(key for key in present if _holds_rows(key) and holds_only_seeds(key))
+
+
+#: The tables each of `SEEDED_SECTIONS` installs rows into.
+SEEDED_MODELS = {
+    "fournisseurs": ("invoices.Supplier",),
+    "sources": ("invoices.InvoiceType",),
+    "regles_banque": ("bank.StatementFormat", "bank.OperationRule", "bank.IgnoreRule"),
+    "types_consignes": ("returnables.ReturnableType", "returnables.SlipFormat"),
+}
+
+
+def _holds_rows(key: str) -> bool:
+    """Whether this database holds a row of seeded part `key`: one holding
+    none has nothing installed for « Remplacer » to replace - a new espace
+    that is not the owner's starts without the original bar's mailbox
+    source (invoices.seeds). Read from the tables, as `holds_only_seeds`."""
+    from django.apps import apps
+
+    return any(apps.get_model(label).objects.exists() for label in SEEDED_MODELS.get(key, ()))
 
 
 def _stored_strategies(stage) -> dict[str, Strategy]:

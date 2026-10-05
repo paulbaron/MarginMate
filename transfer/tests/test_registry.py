@@ -21,6 +21,7 @@ TABLE = {
     "associations": ("Associations produits → articles", Group.CONFIG, 30, ("fournisseurs",), ("factures",)),
     "recettes": ("Recettes", Group.CONFIG, 40, ("associations",), ()),
     "liens_ventes": ("Liens recettes ↔ ventes", Group.CONFIG, 50, ("recettes",), ("ventes",)),
+    "formats_caisse": ("Formats des fichiers de caisse", Group.CONFIG, 52, (), ()),
     "regles_banque": ("Règles de la banque", Group.CONFIG, 55, (), ()),
     "types_consignes": ("Types et formats de consignes", Group.CONFIG, 58, ("fournisseurs",), ()),
     "factures": ("Factures et tickets", Group.DATA, 60, ("fournisseurs",), ("associations",)),
@@ -159,14 +160,25 @@ class ClosureTests(SimpleTestCase):
         self.assertEqual(registry.closure({"consignes"}, "export"), {"consignes", "types_consignes", "fournisseurs"})
 
     def test_clear_takes_what_requires_a_section(self):
-        self.assertEqual(registry.closure({"fournisseurs"}, "clear"), ALL - {"banque", "regles_banque"})
+        self.assertEqual(
+            registry.closure({"fournisseurs"}, "clear"), ALL - {"banque", "regles_banque", "formats_caisse"}
+        )
         self.assertEqual(registry.closure({"factures"}, "clear"), {"factures", "inventaires"})
         self.assertEqual(
             registry.closure({"associations"}, "clear"),
             {"associations", "recettes", "liens_ventes", "ventes", "inventaires"},
         )
         self.assertEqual(registry.closure({"recettes"}, "clear"), {"recettes", "liens_ventes", "ventes"})
-        for alone in ("sources", "liens_ventes", "regles_banque", "banque", "ventes", "inventaires", "consignes"):
+        for alone in (
+            "sources",
+            "liens_ventes",
+            "formats_caisse",
+            "regles_banque",
+            "banque",
+            "ventes",
+            "inventaires",
+            "consignes",
+        ):
             with self.subTest(key=alone):
                 self.assertEqual(registry.closure({alone}, "clear"), {alone})
 
@@ -219,9 +231,14 @@ class ForcingTests(SimpleTestCase):
         self.assertEqual(forcing["associations"], ["recettes", "liens_ventes", "ventes", "inventaires"])
         self.assertEqual(
             forcing["fournisseurs"],
-            [key for key in registry.ordered(ALL) if key not in ("fournisseurs", "regles_banque", "banque")],
+            [
+                key
+                for key in registry.ordered(ALL)
+                if key not in ("fournisseurs", "regles_banque", "banque", "formats_caisse")
+            ],
         )
         self.assertEqual(forcing["banque"], [])
+        self.assertEqual(forcing["formats_caisse"], [])
         self.assertEqual(forcing["regles_banque"], [])
         self.assertEqual(forcing["types_consignes"], ["consignes"])
 

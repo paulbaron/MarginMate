@@ -4,8 +4,10 @@ is one of its JOBS, called once a minute with the espace bound).
 
 What each tick does for the bound espace, in this order:
 
-- nothing at all where the server's accounts may not be used
-  (`integrations_allowed`);
+- nothing at all unbound (`integrations_allowed`: any bound espace since
+  04/10/2026 - each searches ITS mailbox, signed in with its own
+  « Identifiants »; the server's .env stands in for the platform owner's
+  espace alone, and Metro and the portals are his and never automatic);
 - every active rule, each on its own (one raising is logged and the next
   rule and the prune run all the same): its due slot is the latest instant
   of its schedule in (`last_slot_at` or `created_at`, now] - UTC arithmetic
@@ -25,6 +27,12 @@ What each tick does for the bound espace, in this order:
     or « manquée : une récupération était en cours à HH:MM » when the rule
     was waiting for another gather all that time;
   - « sautée : mise à jour du site en cours » - deploy.cmd's mark exists;
+  - « sautée : boîte mail à renseigner sur la page Identifiants » -
+    another bar whose « Identifiants » do not hold its mailbox
+    (`integrations.mailbox_offered`): nothing signs in, ever with the
+    owner's; « en attente : identifiants momentanément illisibles » when
+    they could not be read at all for a moment (accounts.vault.BUSY): the
+    slot is given back (automation.Retry), not skipped;
   - « sautée : aucune source disponible » - none of its sources is offered
     to an automatic gather any more (`workspace.gather_sources`: the
     mailbox's invoice sources and slip formats only, never Metro nor a
@@ -63,11 +71,12 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from accounts.tenancy import integrations_allowed
+from accounts import vault
+from accounts.tenancy import integrations_allowed, server_accounts_allowed
 from notifications import automation, schedule, webpush
 from notifications.automation import BUSY, DEPLOYING, DEV_SERVER, UNREADABLE, deploy_mark
 
-from . import gathering
+from . import gathering, integrations
 from .models import AutoGather, ScrapeJob
 from .workspace import gather_sources
 
@@ -88,6 +97,8 @@ ONCE_A_DAY_CATCH_UP = timedelta(hours=12)
 KEEP_RUNS = timedelta(days=30)
 
 NO_SOURCE = "sautée : aucune source disponible"
+#: Another bar's mailbox not on its « Identifiants »: its rules wait for it.
+MAILBOX_TO_FILL = "sautée : boîte mail à renseigner sur la page Identifiants"
 WAITING = "en attente : une récupération est en cours"
 
 _hhmm = automation.hhmm
@@ -141,9 +152,10 @@ def _write(rule: AutoGather, result: str) -> None:
     automation.write(GATHERS, rule, result)
 
 
-def available_codes(rule: AutoGather) -> list[str]:
-    """The rule's sources still offered to an automatic gather, in its order."""
-    sources, _ = gather_sources(for_auto=True)
+def available_codes(rule: AutoGather, state=None) -> list[str]:
+    """The rule's sources still offered to an automatic gather, in its order.
+    `state`: the « Identifiants » store already read for this slot."""
+    sources, _ = gather_sources(for_auto=True, state=state)
     allowed = {source["code"] for source in sources if source.get("allowed")}
     return [code for code in rule.source_list() if code in allowed]
 
@@ -156,8 +168,16 @@ def _unreadable(rule: AutoGather, now) -> str:
 
 def _start(rule: AutoGather, now) -> str | None:
     """The slot's gather, through the one start of a gather: None when
-    another gather is active (nothing created)."""
-    codes = available_codes(rule)
+    another gather is active (nothing created). Another bar's gather waits
+    for its mailbox on its « Identifiants » - its store read once here -,
+    and for its store to be readable (automation.Retry: a file held for a
+    moment is no mailbox missing)."""
+    state = None if server_accounts_allowed() else vault.load()
+    if state is not None and state.problem == vault.BUSY:
+        raise automation.Retry(automation.CREDENTIALS_BUSY)
+    if not integrations.mailbox_offered(state):
+        return MAILBOX_TO_FILL
+    codes = available_codes(rule, state=state)
     if not codes:
         return NO_SOURCE
     job = gathering.start_gather(

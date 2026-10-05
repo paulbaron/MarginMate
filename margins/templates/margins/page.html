@@ -77,13 +77,13 @@ that is where it says what changed (views._messages_by_place).
             ({{ report.unread_units }} unité{{ report.unread_units|pluralize }}) n'ont pas encore de prix :
             <strong>toutes les marges ci-dessous sont trop basses</strong>.
             {% comment %}
-            The command is the server's: only the tenant whose till the
-            server reads is handed it (recipes/integration.py).
+            The command is the server's: only the platform owner's espace is
+            handed it, every other one the way its pages give (recipes/integration.py).
             {% endcomment %}
-            {% if till_allowed %}
+            {% if till_commands %}
             Pour le combler : <code>manage.py laddition_backfill_revenue</code>.
             {% else %}
-            Pour le combler : {{ till_to_configure }}.
+            Pour le combler : {{ till_reimport }}.
             {% endif %}
         </div>
     {% endif %}

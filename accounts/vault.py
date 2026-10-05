@@ -28,8 +28,8 @@ passwords are typed again.
 
 **A store of named values**, keyed by the same names as the .env - METRO_EMAIL,
 INVOICE_EMAIL_APP_PASSWORD, a portal's FREEBOX_PASSWORD - so every connector
-asks one question (`setting`, `value`): the value typed on the page, else
-the .env's. A portal's names still come from its source, never from the
+asks one question (`setting`, `value`): the value typed on the page, else -
+in the owner's tenant only (`server_setting`) - the .env's. A portal's names still come from its source, never from the
 page, and never one of the application's own (`models.app_env_name`, checked
 by the page for every portal field): typed into a site, Metro's password
 would reach it.
@@ -70,7 +70,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
 
 from . import paths
-from .tenancy import require_tenant
+from .tenancy import require_tenant, server_accounts_allowed
 
 FILE_NAME = "credentials.bin"
 KEY_FILE_NAME = "credentials.key"
@@ -103,6 +103,12 @@ BUSY = "busy"
 WEAK_KEY = (
     "La clé secrète du serveur (DJANGO_SECRET_KEY) est absente ou publique : aucun identifiant ne peut être "
     "enregistré avant qu'elle soit réglée."
+)
+#: WEAK_KEY in an espace that is not the platform owner's: it names no
+#: server setting, and says who can act on it.
+WEAK_KEY_HOSTED = (
+    "La clé secrète du serveur n'est pas réglée : aucun identifiant ne peut être enregistré — prévenez "
+    "l'administrateur de MarginMate."
 )
 BUSY_MESSAGE = "Les identifiants sont momentanément inaccessibles : réessayez dans un instant."
 UNREADABLE_MESSAGE = (
@@ -276,22 +282,45 @@ def bound_host(name: str) -> str:
     return load().bindings.get(name, "")
 
 
+def server_setting(name: str) -> str:
+    """config/settings.py's value for `name` (read from the server's .env),
+    in the owner's tenant only (`tenancy.server_accounts_allowed`); "" in
+    every other espace and unbound: another bar never signs in with the
+    server's accounts."""
+    if not server_accounts_allowed():
+        return ""
+    return getattr(settings, name, "") or ""
+
+
 def settings_of(*names: str) -> tuple[str, ...]:
     """Several credentials from ONE reading of the store (Metro's login and
     password): read one at a time, a save between the two sent a new login
-    with an old password - a refused sign-in Metro's firewall counts. While
-    the store cannot be read at all, nothing: not the .env's either."""
+    with an old password - a refused sign-in Metro's firewall counts. Each is
+    the page's value, else - in the owner's tenant only - the .env's
+    (`server_setting`). While the store cannot be read at all, nothing: not
+    the .env's either."""
     state = load()
     if state.problem == BUSY:
         raise VaultError(BUSY_MESSAGE)
-    return tuple(state.values.get(name) or getattr(settings, name, "") or "" for name in names)
+    return tuple(state.values.get(name) or server_setting(name) for name in names)
 
 
 def setting(name: str) -> str:
     """A credential the application reads for itself (METRO_EMAIL,
-    INVOICE_EMAIL_ADDRESS, LADDITION_PASSWORD…): the page's value, else the
-    setting config/settings.py read from the .env."""
-    return value(name, getattr(settings, name, "") or "")
+    INVOICE_EMAIL_ADDRESS, LADDITION_PASSWORD…): the page's value, else - in
+    the owner's tenant only - the setting config/settings.py read from the
+    .env (`server_setting`)."""
+    return value(name, server_setting(name))
+
+
+def ready(*names: str, state: VaultState | None = None) -> bool:
+    """Whether every one of `names` has a value a connector would sign in
+    with: typed on the page, or - in the owner's tenant only - in the .env.
+    One reading of the store (`state`, when the caller already holds one: a
+    page asking for several accounts reads the store once). A store that
+    cannot be read counts as not ready."""
+    state = load() if state is None else state
+    return all(state.values.get(name) or server_setting(name) for name in names)
 
 
 def allowed_name(name: str) -> bool:
@@ -347,7 +376,7 @@ def save(
         if not allowed_name(name) or not isinstance(host, str) or len(host) > 253:
             raise VaultError(f"Site refusé pour {name!r}")
     if secret_key_problem(getattr(settings, "SECRET_KEY", "")):
-        raise VaultError(WEAK_KEY)
+        raise VaultError(WEAK_KEY if server_accounts_allowed() else WEAK_KEY_HOSTED)
     tenant = require_tenant()
     with _LOCK:
         state, random_key = _open(tenant)

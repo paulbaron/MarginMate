@@ -30,6 +30,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from bank import recognition
+from bank.forms import CANONICAL
 from bank.models import BankTransaction, IgnoreRule, OperationRule, StatementFormat
 from returnables.tests.test_patterns import NeverCompile
 from transfer import archive, registry
@@ -354,6 +355,7 @@ class ExportTests(RulesData, TestCase):
             {
                 "name": TAB_FORMAT,
                 **TAB_LAYOUT,
+                "file_type": "csv",
                 "amount_column": None,
                 "bank_type_column": None,
                 "created_at": "2026-07-22T16:40:05.750000+00:00",
@@ -1196,7 +1198,10 @@ class FormatCheckTests(RulesData, TestCase):
             (made("Séparateur exemple", delimiter=":"), "« delimiter » : valeur inconnue (« : »)"),
             (made("Dates exemple", date_format="jj/mm/aaaa"), "« date_format » : valeur inconnue (« jj/mm/aaaa »)"),
             (made("Décimales exemple", decimal_mark=";"), "« decimal_mark » : valeur inconnue (« ; »)"),
-            (made("Sans date", date_column=None), "« date_column » : valeur manquante"),
+            # Blank since bank/0009, for a format that names no column: a
+            # CSV without one is refused by the format's own check.
+            (made("Sans date", date_column=None), f"{refused}colonne de la date : indiquez une colonne"),
+            (made("Type inconnu", file_type="pdf"), "« file_type » : valeur inconnue (« pdf »)"),
             (without_labels, "« label_columns » : valeur manquante"),
             (made("Date en texte", date_column="1"), "« date_column » : nombre entier attendu (« 1 »)"),
             (made("Date oui", date_column=True), "« date_column » : nombre entier attendu (« True »)"),
@@ -1661,3 +1666,102 @@ class ClearTests(RulesData, TestCase):
         self.assertEqual(registry.closure({KEY}, "clear"), {KEY})
         self.assertEqual(registry.INFO[KEY].requires, ())
         self.assertIn(KEY, registry.INFO["banque"].recommends)
+
+
+#: A format that says nothing of columns (bank/0009): the file says where
+#: each datum is.
+OFX_LAYOUT = {"position": 4, "file_type": "ofx", "date_column": None, "label_columns": "", "account_pattern": ""}
+
+
+class FileTypeTests(RulesData, TestCase):
+    """The kind of file a format reads (bank/0009) travels with it - an OFX
+    format with no column comes back as it was - and an archive written
+    before it, every one of whose formats was a CSV, says so by saying
+    nothing: its formats are CSVs, never « not said »."""
+
+    @staticmethod
+    def as_before_0009(payload):
+        for item in payload["statement_formats"]:
+            del item["file_type"]
+        return payload
+
+    def test_an_ofx_format_comes_back_as_it_was(self):
+        make_statement_format("Relevé OFX", **OFX_LAYOUT)
+        for strategy in (MERGE, REPLACE):
+            with self.subTest(strategy=strategy):
+                before, after = round_trip({KEY}, strategy)
+                self.assertEqual(after, before)
+                ofx = StatementFormat.objects.get(name="Relevé OFX")
+                self.assertEqual(
+                    (ofx.file_type, ofx.date_column, ofx.label_columns, ofx.amount_column), ("ofx", None, "", None)
+                )
+
+    def test_a_csv_s_fields_said_for_an_ofx_format_are_stored_as_the_page_stores_them(self):
+        """The model's check reads none of a CSV's fields for an OFX format,
+        so an edited archive's columns and account pattern were stored as
+        said. Stored as « Format du relevé » stores them (`CANONICAL`); the
+        same format here is « inchangé »."""
+        junk = {
+            "delimiter": ",",
+            "date_format": "yyyy-mm-dd",
+            "decimal_mark": ".",
+            "date_column": 3,
+            "label_columns": "4, 5",
+            "amount_column": 6,
+            "account_pattern": r"IBAN (?P<compte>.*)",
+        }
+        make_statement_format("Relevé OFX", **OFX_LAYOUT)
+
+        def with_junk(payload):
+            next(item for item in payload["statement_formats"] if item["name"] == "Relevé OFX").update(junk)
+            return payload
+
+        merging = self.forged(with_junk)
+        run = import_archive(merging, MERGE)
+        report = rules_report(run)
+        self.assertEqual((tally(run, FORMATS).unchanged, report.conflicts, report.skipped), (3, [], []))
+        created = self.forged(with_junk)
+        StatementFormat.objects.filter(name="Relevé OFX").delete()
+        run = import_archive(created, MERGE)
+        self.assertEqual(tally(run, FORMATS).created, 1)
+        ofx = StatementFormat.objects.get(name="Relevé OFX")
+        self.assertEqual({name: getattr(ofx, name) for name in CANONICAL}, CANONICAL)
+        self.assertEqual(ofx.file_type, "ofx")
+
+    def test_an_archive_written_before_0009_merges_into_the_same_csv_formats_as_unchanged(self):
+        run = import_archive(self.forged(self.as_before_0009), MERGE)
+        report = rules_report(run)
+        self.assertEqual((tally(run, FORMATS).unchanged, report.conflicts, report.skipped), (2, [], []))
+
+    def test_its_formats_are_created_as_csv(self):
+        reader = self.forged(self.as_before_0009)
+        wipe_rules()
+        run = import_archive(reader, MERGE)
+        self.assertEqual(tally(run, FORMATS).created, 2)
+        self.assertEqual(set(StatementFormat.objects.values_list("file_type", flat=True)), {"csv"})
+
+    def test_its_csv_never_lends_its_columns_to_an_ofx_format_of_the_same_name_here(self):
+        """Merged, the difference is a conflict naming the kind of file;
+        replaced, the format is the archive's CSV again - whole."""
+        # Both written before the format here turned into an OFX one.
+        merging, replacing = self.forged(self.as_before_0009), self.forged(self.as_before_0009)
+        StatementFormat.objects.filter(pk=self.tab_format.pk).update(
+            file_type="ofx", date_column=None, label_columns="", debit_column=None, credit_column=None
+        )
+        run = import_archive(merging, MERGE)
+        self.assertEqual(
+            rules_report(run).conflicts,
+            [
+                (
+                    f"Format de relevé « {TAB_FORMAT} » : différent dans l'archive (type de fichier, colonne de la "
+                    "date, colonnes du libellé) — gardé tel quel"
+                )
+            ],
+        )
+        self.assertEqual(StatementFormat.objects.get(pk=self.tab_format.pk).file_type, "ofx")
+        run = import_archive(replacing, REPLACE)
+        self.assertEqual(tally(run, FORMATS).updated, 1)
+        tab = StatementFormat.objects.get(pk=self.tab_format.pk)
+        self.assertEqual(
+            {name: getattr(tab, name) for name in ("file_type", *TAB_LAYOUT)}, {"file_type": "csv", **TAB_LAYOUT}
+        )

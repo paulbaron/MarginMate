@@ -51,13 +51,16 @@ class Tenant(models.Model):
         validators=[RegexValidator(DIR_NAME_PATTERN)],
         help_text="Nom du dossier de l'espace sous TENANTS_ROOT : tiré au hasard, jamais le nom du bar.",
     )
-    # The owner's tenant only: Metro, the invoice mailbox, L'Addition, the
-    # LLM parser and the portals' .env credentials are the owner's accounts
-    # (accounts.tenancy.integrations_allowed). Never set by a signup.
+    # The platform owner's tenant only: the server's own accounts - the
+    # .env's Metro, mailbox and L'Addition values as a fallback -, Metro and
+    # the supplier portals, the server's names on a page
+    # (accounts.tenancy.server_accounts_allowed). Every other tenant runs the
+    # mailbox and L'Addition with its own « Identifiants »
+    # (integrations_allowed). Never set by a signup.
     uses_server_integrations = models.BooleanField(
         "utilise les accès du serveur",
         default=False,
-        help_text="Metro, la boîte aux lettres, L'Addition, l'analyse IA et les portails du fichier .env.",
+        help_text="Metro, la boîte aux lettres, L'Addition et les portails du fichier .env.",
     )
     created_at = models.DateTimeField("créé le", default=timezone.now)
     is_active = models.BooleanField("actif", default=True)

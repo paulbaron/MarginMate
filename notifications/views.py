@@ -257,7 +257,7 @@ def home(request):
         "next_send": next_send,
         "alerts": alerts,
         "auto_gathers_url": _auto_gathers_url() if integrations_allowed() else "",
-        # The till's account is the owner's too (recipes/integration.py).
+        # Any bound espace, each with its own account (recipes/integration.py).
         "auto_sales_url": _auto_sales_url() if integrations_allowed() else "",
         "history": history,
     }

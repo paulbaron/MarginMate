@@ -11,7 +11,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-from common import JobLogMixin, search_key
+from common import JobLogMixin, job_line, search_key
 from inventory.models import StockMovement, StockType, UnitChoices
 
 _costing = threading.local()
@@ -152,14 +152,14 @@ def vat_divisor(rate: Decimal | None) -> Decimal | None:
 
 def new_sale_key() -> str:
     """A new sale document's key: 16 random hex characters. A module
-    function, so migration recipes/0019 names it rather than freezing one
+    function, so migration recipes/0020 names it rather than freezing one
     value (bank.models.new_reference is the precedent)."""
     return secrets.token_hex(SALE_KEY_LENGTH // 2)
 
 
 def legacy_key(fingerprint: str, occurrence: int) -> str:
     """The key of a document known by its content - one saved before
-    recipes/0019, or read from an archive written before it: the first 16
+    recipes/0020, or read from an archive written before it: the first 16
     hex characters of sha256("<fingerprint>#<occurrence>"). Deterministic,
     so the database migrated and every older archive of it give one
     document one key (transfer/sections/sales.py)."""
@@ -886,8 +886,9 @@ class RecipeSale(models.Model):
     # sale typed by HAND is still refused below zero by ManualSaleForm:
     # nothing types a refund in, and a minus there is a slip.
     quantity = models.IntegerField()
-    # Free-form provenance ("manual", "csv", "api:lightspeed") - kept so a
-    # bad import can be found and re-run without guessing which rows it wrote.
+    # Two sources only: the till's (recipes.sales.TILL_SOURCE, « laddition »
+    # whatever the connector) and a sale typed by hand (MANUAL_SALE_SOURCE,
+    # the default) - recipes/sales.py says why. Stored, never shown.
     source = models.CharField(max_length=50, default="manual")
     recorded_at = models.DateTimeField(auto_now_add=True)
 
@@ -933,6 +934,9 @@ class SalesImportJob(JobLogMixin):
         MANUAL = "manual", "à la main"
         AUTOMATIC = "automatic", "automatique"
 
+    #: `source` of a till's file uploaded on « Ventes » (till_views.upload_sales_file).
+    FILE = "fichier"
+
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     range_start = models.DateField(null=True, blank=True)
     range_end = models.DateField(null=True, blank=True)
@@ -940,6 +944,14 @@ class SalesImportJob(JobLogMixin):
     #: The AutoSalesImport an automatic import was started for - a plain id:
     #: deleting the rule keeps its runs.
     auto_rule_id = models.PositiveIntegerField(null=True, blank=True)
+    #: What the job reads: a sales source's fetch - its key in
+    #: recipes/sales_sources.py, « laddition » for every job before the
+    #: till's file import - or a till's file uploaded on « Ventes »
+    #: (`FILE`). Only a source's own fetches tell how far its sales are
+    #: imported (recipes/auto_sales.py): a file - any till's, part of a day -
+    #: never moves L'Addition's coverage, nor makes a rule waiting behind it
+    #: skip its slot.
+    source = models.CharField(max_length=20, default="laddition")
     # A thread can't be killed safely, so cancelling is cooperative: this is
     # checked between date windows and the run stops itself.
     cancel_requested = models.BooleanField(default=False)
@@ -954,6 +966,12 @@ class SalesImportJob(JobLogMixin):
         ordering = ["-started_at"]
 
     def append_log(self, message: str) -> None:
+        # As the espace reading it may read it (common.job_line): another
+        # bar's page never shows the server's paths or tracebacks.
+        cleaned = job_line(message)
+        if message and not cleaned:
+            return
+        message = cleaned
         now = timezone.now()
         elapsed = (now - self.started_at).total_seconds()
         line = f"[+{elapsed:6.1f}s] {message}"
@@ -1232,6 +1250,98 @@ class PosDailyPayment(models.Model):
         return (1, 0, search_key(method))
 
 
+class TillFormat(models.Model):
+    """How one till lays out an export - read by recipes/pos/till_file.py
+    (« Formats des fichiers de caisse »): what the file holds, which column
+    holds what (its title, accents and case aside, or its number from 1),
+    how dates and decimals are printed, when the service ends, and how the
+    till spells its means of payment. No till is written in the code: a
+    bar's own export is read by a format of its own, checked by
+    « Tester » on the file itself before anything is stored.
+
+    `clean()` is `till_file.check_format`, each refusal on its field. The
+    choices are till_file's own (tested equal): that module is pure.
+    """
+
+    class Kind(models.TextChoices):
+        SALES = "ventes", "Ventes par produit"
+        PAYMENTS = "paiements", "Encaissements"
+
+    class Encoding(models.TextChoices):
+        AUTO = "auto", "Automatique (UTF-8, sinon Windows-1252)"
+        UTF8 = "utf-8", "UTF-8"
+        CP1252 = "cp1252", "Windows-1252"
+        LATIN1 = "iso-8859-1", "ISO-8859-1"
+        UTF16 = "utf-16", "UTF-16"
+
+    class Delimiter(models.TextChoices):
+        SEMICOLON = ";", "Point-virgule ( ; )"
+        COMMA = ",", "Virgule ( , )"
+        TAB = "\t", "Tabulation"
+        PIPE = "|", "Barre verticale ( | )"
+
+    class DateFormat(models.TextChoices):
+        DAY_MONTH_YEAR = "dd/mm/yyyy", "jj/mm/aaaa"
+        DAY_MONTH_SHORT_YEAR = "dd/mm/yy", "jj/mm/aa"
+        DAY_MONTH_YEAR_DASHES = "dd-mm-yyyy", "jj-mm-aaaa"
+        DAY_MONTH_YEAR_DOTS = "dd.mm.yyyy", "jj.mm.aaaa"
+        ISO = "yyyy-mm-dd", "aaaa-mm-jj"
+        MONTH_DAY_YEAR = "mm/dd/yyyy", "mm/jj/aaaa"
+
+    class DecimalMark(models.TextChoices):
+        COMMA = ",", "Virgule (1 234,56)"
+        POINT = ".", "Point (1,234.56)"
+
+    #: Unique whatever its case, accents and spaces (the form's check): the
+    #: upload and « Données » name a format by it.
+    name = models.CharField("nom", max_length=100, unique=True)
+    kind = models.CharField("contenu", max_length=12, choices=Kind.choices, default=Kind.SALES)
+    encoding = models.CharField("encodage", max_length=12, choices=Encoding.choices, default=Encoding.AUTO)
+    delimiter = models.CharField("séparateur", max_length=2, choices=Delimiter.choices, default=Delimiter.SEMICOLON)
+    decimal_mark = models.CharField(
+        "séparateur décimal", max_length=1, choices=DecimalMark.choices, default=DecimalMark.COMMA
+    )
+    date_format = models.CharField(
+        "format des dates", max_length=12, choices=DateFormat.choices, default=DateFormat.DAY_MONTH_YEAR
+    )
+    #: A sale timed before this hour belongs to the day before (0: the day
+    #: printed). 0 to till_file.MAX_SERVICE_HOUR.
+    service_day_end_hour = models.PositiveSmallIntegerField("fin du service", default=0)
+    #: An .xlsx's sheet, by name; blank: the first.
+    sheet = models.CharField("feuille", max_length=100, blank=True)
+    #: Each column: its title as the header prints it, or its number from 1.
+    day_column = models.CharField("colonne du jour", max_length=100, blank=True)
+    time_column = models.CharField("colonne de l'heure", max_length=100, blank=True)
+    product_column = models.CharField("colonne du produit", max_length=100, blank=True)
+    quantity_column = models.CharField("colonne de la quantité", max_length=100, blank=True)
+    amount_column = models.CharField("colonne du montant TTC", max_length=100, blank=True)
+    amount_ht_column = models.CharField("colonne du montant HT", max_length=100, blank=True)
+    rate_column = models.CharField("colonne du taux de TVA", max_length=100, blank=True)
+    category_column = models.CharField("colonne de la catégorie", max_length=100, blank=True)
+    typology_column = models.CharField("colonne de la typologie", max_length=100, blank=True)
+    method_column = models.CharField("colonne du moyen de paiement", max_length=100, blank=True)
+    paid_column = models.CharField("colonne du montant payé", max_length=100, blank=True)
+    #: The amount column holds a unit price, multiplied by the quantity.
+    amount_is_unit_price = models.BooleanField("le montant est un prix unitaire", default=False)
+    #: « texte de la caisse = Carte », one per line.
+    method_map = models.TextField("moyens de paiement", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        from .pos.till_file import FormatError, check_format
+
+        try:
+            check_format(self)
+        except FormatError as error:
+            raise ValidationError({error.field: error.message}) from None
+
+
 class RecipeIngredient(models.Model):
     """One line of a recipe: a quantity of either a stock item or another
     recipe (exactly one of the two - see the CheckConstraint below and
@@ -1390,7 +1500,7 @@ class SaleDocument(models.Model):
     prefetch is a query per document.
 
     `key` is its natural key for « Données »: random for a new document, and
-    for one saved before recipes 0019 the key its content gave it there
+    for one saved before recipes 0020 the key its content gave it there
     (`legacy_key`), so an older archive still finds it.
     """
 
@@ -1631,7 +1741,7 @@ class SaleDocumentLine(models.Model):
     **Its money** (`total_ttc`) is an electronic invoice's line HT at its
     rate when it states one (`total_ht`, BT-131 - EN 16931 states no line
     TTC), else its price times its quantity, else - a recipe line saved
-    before recipes 0019 - the recipe's menu price, else nothing.
+    before recipes 0020 - the recipe's menu price, else nothing.
 
     **What it consumed** (`consumption`) is its `consumed_quantity` - a
     « Fût 30 L » invoiced once and followed by the litre consumed 30 - else
@@ -1789,7 +1899,7 @@ class SaleDocumentLine(models.Model):
     def total_ttc(self) -> Decimal:
         """Unrounded. An electronic invoice's line is its HT at its rate (it
         states no TTC of its own), a typed line its price times its quantity.
-        Only a line saved before recipes 0019 can still fall back on its
+        Only a line saved before recipes 0020 can still fall back on its
         recipe's menu price: a save writes it. A stock item sold as itself
         has no default - there's no "price" on a stock item, only a cost."""
         if self.total_ht is not None:

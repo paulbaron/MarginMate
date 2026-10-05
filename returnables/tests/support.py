@@ -82,7 +82,12 @@ def seeded_type(name: str) -> ReturnableType:
 
 
 def seeded_format() -> SlipFormat:
-    return SlipFormat.objects.get(name=SEEDED_FORMAT_NAME)
+    """The UBA format the migration seeds - made again from the migration's
+    own literals where it is absent: a new espace that is not the owner's
+    starts without UBA (invoices.seeds), and a real tenant's test needs one
+    all the same. Under a new pk there (SQLite never reuses one)."""
+    fmt = SlipFormat.objects.filter(name=SEEDED_FORMAT_NAME).first()
+    return fmt if fmt is not None else make_format(name=SEEDED_FORMAT_NAME)
 
 
 # -- Types and formats ------------------------------------------------------------------------------------------

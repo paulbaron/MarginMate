@@ -1,5 +1,5 @@
 """A sale document and its lines as the sales invoices made them
-(recipes/models.py, migration recipes 0019): what a document counts in, the
+(recipes/models.py, migration recipes 0020): what a document counts in, the
 total it states, a line tied to nothing, the quantity a line consumes, and
 the bank credit that pays a document.
 
@@ -51,7 +51,7 @@ def credit(fingerprint: str = "vente-exemple-1", amount: str = "150.00") -> Bank
 
 class SaleDocumentModelTests(TestCase):
     def test_a_document_typed_by_hand_counts_and_states_nothing(self):
-        """What every document saved before recipes 0019 becomes: it counts
+        """What every document saved before recipes 0020 becomes: it counts
         as before, has no file, and states no total, no rate, no figure of
         an electronic invoice."""
         document = make_sale_document()
@@ -95,7 +95,7 @@ class SaleDocumentModelTests(TestCase):
             make_sale_document(key=one.key)
 
     def test_a_legacy_key_is_its_content_and_its_rank(self):
-        """What « Données » knew a document by before recipes 0019 - its
+        """What « Données » knew a document by before recipes 0020 - its
         content fingerprint, and its rank among identical documents - cut
         to a key: the same document, the same key, in the database migrated
         and in every older archive of it."""
@@ -223,7 +223,7 @@ class SaleDocumentModelTests(TestCase):
 class FreeLineTests(TestCase):
     """A line tied to nothing - « Location de salle », « Frais de service » -
     is the sales invoices' new line: money with no recipe and no article
-    behind it, which consumes nothing. Before recipes 0019 nothing could
+    behind it, which consumes nothing. Before recipes 0020 nothing could
     hold one, and the tab named every line by its recipe or its article."""
 
     def setUp(self):

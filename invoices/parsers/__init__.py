@@ -1,14 +1,9 @@
 from .base import InvoiceParser, ParsedInvoice, ParsedLine
 from .cecina import CecinaParser
 from .generic_receipt import GenericReceiptParser, TicketShop
-from .llm_fallback import LLMFallbackParser
 from .metro import MetroParser
 from .registry import PARSER_REGISTRY, get_parser
 from .uba import UBAParser
-
-# The fallback "supplier" for documents nobody has a parser for. Its reader is
-# a language model, which nothing is sent to by default and a ticket never.
-LLM_PARSER_KEY = "LLM"
 
 
 def is_ticket_shop(supplier) -> bool:
@@ -21,10 +16,36 @@ def is_ticket_shop(supplier) -> bool:
 
     if ticket_parser_for(supplier.code) is not None:
         return True
-    if supplier.parser_key == LLM_PARSER_KEY:
-        return False
     parser = get_parser(supplier.parser_key)
     return parser is None or isinstance(parser, ReceiptParser)
+
+
+GENERIC_READER_CHOICE = ("", "— Lecteur générique —")
+
+
+def layout_readers() -> dict:
+    """The readers of a PDF layout a source may choose (`InvoiceType.
+    parser_key`): the registry but the tills - a till is keyed on its
+    supplier's code, its settings are one shop's tickets."""
+    from .receipt_base import ReceiptParser
+
+    return {key: parser for key, parser in PARSER_REGISTRY.items() if not isinstance(parser, ReceiptParser)}
+
+
+def reader_label(key: str) -> str:
+    """A reader's name on screen: its `label`, else its key - a reader
+    without one, or a key no reader answers to any more."""
+    return getattr(get_parser(key), "label", "") or key
+
+
+def reader_choices(current: str = "") -> list[tuple[str, str]]:
+    """The « Lecteur » choices of a source: the generic reader, then the
+    layout readers by name - plus `current`, a key saved before (a till's,
+    one since removed), so that no saved source becomes invalid."""
+    readers = sorted(((key, reader_label(key)) for key in layout_readers()), key=lambda choice: choice[1].casefold())
+    if current and current not in dict(readers):
+        readers.append((current, reader_label(current)))
+    return [GENERIC_READER_CHOICE, *readers]
 
 
 def ticket_parser_for(supplier_code: str):
@@ -43,12 +64,11 @@ def ticket_parser_for(supplier_code: str):
 
 
 __all__ = [
-    "LLM_PARSER_KEY",
+    "GENERIC_READER_CHOICE",
     "PARSER_REGISTRY",
     "CecinaParser",
     "GenericReceiptParser",
     "InvoiceParser",
-    "LLMFallbackParser",
     "MetroParser",
     "ParsedInvoice",
     "ParsedLine",
@@ -56,5 +76,8 @@ __all__ = [
     "UBAParser",
     "get_parser",
     "is_ticket_shop",
+    "layout_readers",
+    "reader_choices",
+    "reader_label",
     "ticket_parser_for",
 ]

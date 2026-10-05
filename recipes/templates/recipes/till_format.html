@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ fmt.name }} - Formats des fichiers de caisse - MarginMate{% endblock %}
+{% block content %}
+    <div class="page-header">
+        <div>
+            <p class="breadcrumb"><a href="{% url 'recipes:till_formats' %}">← Formats des fichiers de caisse</a></p>
+            <h1>Format « {{ fmt.name }} »</h1>
+            <p class="page-subtitle">Enregistré, il vaut pour les fichiers importés ensuite.</p>
+        </div>
+    </div>
+
+    {% if problem %}
+        <div class="message message-error">{{ problem }} - aucun fichier ne se lit avec ce format : corrigez-le ci-dessous.</div>
+    {% endif %}
+
+    <div class="card" id="essai-format">
+        <form method="post" action="{% url 'recipes:till_format' fmt.pk %}#essai-format" enctype="multipart/form-data">
+            {% csrf_token %}
+            {% include "_form_fields.html" with form=form %}
+            {% include "recipes/_till_format_file.html" %}
+            {% comment %}
+            « Tester » first: Enter in a field presses the form's first submit
+            button, and it reads the file - it never saves the format.
+            {% endcomment %}
+            <div class="form-actions">
+                <button class="btn btn-secondary" type="submit" name="action" value="tester">Tester</button>
+                <button class="btn" type="submit" name="action" value="enregistrer">Enregistrer</button>
+                <a class="btn btn-secondary" href="{% url 'recipes:till_formats' %}#format-{{ fmt.pk }}">Annuler</a>
+            </div>
+        </form>
+        {% include "recipes/_till_format_test.html" %}
+        <form method="post" action="{% url 'recipes:till_format' fmt.pk %}" data-confirm="Supprimer le format « {{ fmt.name }} » ?">
+            {% csrf_token %}
+            <button class="btn btn-small btn-danger" type="submit" name="action" value="supprimer">Supprimer</button>
+        </form>
+    </div>
+
+    {% include "recipes/_till_format_help.html" %}
+{% endblock %}

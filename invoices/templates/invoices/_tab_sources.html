@@ -21,26 +21,28 @@ the reader for what it brings. The suppliers have their own tab
 
 {% if sources_refused %}
 {% comment %}
-The mailbox and the portals' credentials are the server's own accounts
-(invoices/integrations.py): in a tenant that may not use them, said here,
+Unbound, both channels are refused; in another bar's espace the portals,
+which are the platform owner's alone (invoices/integrations.py) - said here,
 where somebody comes to ask where the invoices come from.
 {% endcomment %}
 <div class="message">{{ sources_refused }}</div>
+{% elif portals_refused %}
+<p class="muted">{{ portals_refused }}</p>
 {% endif %}
 
 {% comment %}
 Said here, where somebody comes to ask where the invoices come from, because
 the app does NOT fetch them from the plateforme agréée and nothing else on
 screen would admit it. Since 1 September 2026 a supplier bills through such a
-platform; this bar's is held by its accountant, and MarginMate has no account
+platform; whoever holds a bar's (the bar, its accountant), MarginMate has no account
 on it. A page that stayed silent would let the reader believe the purchases
 arrive by themselves - and a purchase that never arrives is stock that does
 not exist and a margin that is wrong.
 {% endcomment %}
 <div class="message">
     <strong>Votre plateforme de facturation électronique n'est pas connectée.</strong>
-    Depuis le 1<sup>er</sup> septembre 2026, vos fournisseurs vous facturent par la plateforme agréée que
-    tient votre comptable : téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans
+    Depuis le 1<sup>er</sup> septembre 2026, vos fournisseurs vous facturent par votre plateforme
+    agréée : téléchargez-y vos factures (Factur-X, UBL ou CII) et déposez-les dans
     « Tickets et factures » ci-dessus, où elles sont lues au centime.
     {% if not sources_refused %}Les sources ci-dessous servent pour le reste.{% endif %}
 </div>
@@ -63,8 +65,8 @@ not exist and a margin that is wrong.
                 <td>{% if can.owner %}<a href="{% url 'invoices:invoice_type_update' invoice_type.pk %}">{{ invoice_type.name }}</a>{% else %}{{ invoice_type.name }}{% endif %}</td>
                 <td class="muted"><a href="{% url 'invoices:supplier_detail' invoice_type.supplier.pk %}">{{ invoice_type.supplier.name }}</a></td>
                 <td class="muted">{{ invoice_type.channel }}</td>
-                {# Empty means the one reader, not the AI - which is a supplier of its own. #}
-                <td class="muted">{{ invoice_type.parser_key|default:"Lecteur générique" }}</td>
+                {# Empty means the one generic reader. #}
+                <td class="muted">{{ invoice_type.reader_name }}</td>
                 <td>{% if invoice_type.is_active %}✅{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}

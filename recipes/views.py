@@ -72,6 +72,7 @@ from .models import (
     read_unit_costs,
     variation_scope,
 )
+from .pos.connectors import LADDITION
 from .sale_documents import DELETE_QUESTION, counted_twice, deposit_doubts, known_customers
 from .sale_einvoice import MAX_SALE_LINES
 from .sale_files import (
@@ -91,6 +92,9 @@ logger = logging.getLogger(__name__)
 
 #: Said when a sales import is already running (by hand or automatic).
 ALREADY_RUNNING = "Une récupération est déjà en cours."
+
+#: The fetch refused where L'Addition's account has no value to sign in with.
+LADDITION_NOT_READY = "Renseignez d'abord le compte L'Addition sur la page Identifiants."
 
 
 def _existing_categories():
@@ -344,7 +348,8 @@ def recipe_delete(request, pk):
     return redirect("recipes:recipe_list")
 
 
-# --- Till (L'Addition) -----------------------------------------------------
+# --- The till: its products to link, its sales, L'Addition's fetch ---------
+# (a file of any till, and its formats, are till_views.py's)
 
 
 def pos_product_list(request):
@@ -422,11 +427,16 @@ def sales_import(request):
 def trigger_sales_import(request):
     if request.method != "POST":
         return redirect(sales_list_url(request))
-    # The server's L'Addition account is the owner's (recipes/integration.py):
-    # the tab draws no form elsewhere, and a post from a page drawn before, or
-    # crafted, is refused here.
+    # Unbound, no espace's account may be used (recipes/integration.py): a
+    # crafted post is refused here.
     if not till_allowed():
         messages.error(request, refusal())
+        return redirect(sales_list_url(request))
+    # Its card is drawn only where the account is ready (menu._sales); a
+    # page drawn before the account was cleared, or a crafted post, is
+    # refused here - before any job, before any browser.
+    if not LADDITION.ready():
+        messages.error(request, LADDITION_NOT_READY)
         return redirect(sales_list_url(request))
     # Clear out any run that died without saying so before deciding whether
     # one is genuinely in progress - otherwise a single killed thread locks

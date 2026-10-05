@@ -49,7 +49,7 @@ from django.urls import reverse
 
 from accounts.tenancy import bound_tenant
 from accounts.tests.support import TwoTenantsTestCase
-from bank import income, recognition, reconcile
+from bank import income, presets, recognition, reconcile
 from bank.models import BankTransaction, CounterpartyAlias, IncomePayer, IncomeSource, InvoicePayment, OperationRule
 from bank.statements import parse_statement
 from bank.tests.support import (
@@ -1118,12 +1118,15 @@ class TenantTests(TwoTenantsTestCase):
     """Real espaces (accounts.provisioning): each is copied from the
     migrated _template."""
 
-    def test_every_new_espace_is_given_the_eight_rules(self):
+    def test_every_new_espace_is_given_the_eight_rules_then_the_standard_files_ones(self):
+        """A hosted espace (bank.presets.set_up_new_espace): the eight
+        first - they read a payee the codes do not -, then the OFX and
+        CAMT.053 presets' rules."""
         for bar in (self.bar_a, self.bar_b):
             with self.subTest(bar=bar.name), bound_tenant(bar):
                 self.assertEqual(
                     list(OperationRule.objects.order_by("position").values_list("name", "is_active")),
-                    [(name, True) for name in SEEDED_NAMES],
+                    [(name, True) for name in (*SEEDED_NAMES, *presets.NEW_ESPACE_RULE_NAMES)],
                 )
                 self.assertEqual(recognition.load().invalid, {})
 

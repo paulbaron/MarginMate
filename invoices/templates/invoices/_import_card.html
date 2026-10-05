@@ -60,10 +60,7 @@ parts trigger `documents-changed` when they end).
         {% endif %}
         <details class="explainer pdf-import-by-hand" data-persist="pdf-by-hand">
             <summary>Choisir le fournisseur d'une facture PDF soi-même</summary>
-            <p class="muted">
-                Pour un document qui ne dit pas de qui il vient{% if not ai_refused %}, ou pour le confier à l'analyse IA{% endif %}.
-                {% if ai_refused %}{{ ai_refused }}{% endif %}
-            </p>
+            <p class="muted">Pour un document qui ne dit pas de qui il vient.</p>
             <form method="post" action="{% url 'invoices:invoice_upload' %}" enctype="multipart/form-data" class="pdf-import">
                 {% csrf_token %}
                 {% with supplier_field=pdf_form.supplier file_field=pdf_form.source_file %}
@@ -90,7 +87,7 @@ parts trigger `documents-changed` when they end).
                 <div class="import-actions">
                     <button class="btn" type="submit" data-busy-label="Lecture de la facture…">Importer la facture</button>
                     <span class="muted">
-                        Avec un lecteur dédié (Metro, UBA…), la facture s'ouvre dans la liste.
+                        Si son fournisseur est dans le groupe « Lecteur dédié », la facture s'ouvre dans la liste.
                     </span>
                 </div>
             </form>
@@ -100,11 +97,15 @@ parts trigger `documents-changed` when they end).
     <div id="import-fetch" role="tabpanel" data-import-panel="recuperer" hidden>
         {% if gather_refused %}
         {% comment %}
-        Metro, the mailbox and the portals are the server's own accounts
-        (invoices/integrations.py): a tenant that may not use them gets the
-        sentence and no form - trigger_gather refuses a post all the same.
+        Unbound only (invoices/integrations.py): the sentence and no form -
+        trigger_gather refuses a post all the same. Another bar's card lists
+        its mailbox's sources and says what it does not search (gather_notes).
         {% endcomment %}
         <div class="message">{{ gather_refused }}</div>
+        {% elif gather_to_fill %}
+        {% comment %}Another bar with no mailbox on « Identifiants »: nothing to gather, so no form (invoices/workspace.py).{% endcomment %}
+        <div class="message">{{ gather_to_fill }}</div>
+        {% for note in gather_notes %}<p class="muted">{{ note }}</p>{% endfor %}
         {% else %}
         <form method="post" action="{% url 'invoices:gather' %}" class="inline-form">
             {% csrf_token %}
@@ -146,6 +147,7 @@ parts trigger `documents-changed` when they end).
                     {% empty %}
                         <span class="muted">Aucune source configurée : voir l'onglet « Sources ».</span>
                     {% endfor %}
+                    {% for note in gather_notes %}<p class="muted sources-panel-note">{{ note }}</p>{% endfor %}
                 </div>
             </details>
             <button class="btn" type="submit" data-job-control="gather-status"{% if latest_job.is_active %} disabled{% endif %}>Récupérer les nouvelles factures</button>

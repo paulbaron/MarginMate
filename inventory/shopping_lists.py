@@ -61,7 +61,7 @@ from django.utils import timezone
 from accounts.models import Membership
 from common import is_id, plain_number, read_amount, search_key
 from invoices.models import Supplier
-from invoices.parsers import LLM_PARSER_KEY
+from invoices.receipts import RETIRED_CODES
 
 from .models import MovementKind, ShoppingList, ShoppingListItem, StockMovement, StockType, UnitChoices
 
@@ -152,13 +152,17 @@ def _bought_at_the_store():
 
 
 def _offered() -> Q:
-    return Q(expenses_only=False) & ~Q(parser_key=LLM_PARSER_KEY) & Q(Exists(_bought_at_the_store()))
+    return Q(expenses_only=False) & ~Q(code__in=RETIRED_CODES) & Q(Exists(_bought_at_the_store()))
 
 
 def offered_stores() -> QuerySet[Supplier]:
     """The stores a list may be started for, in one query: bought at, neither
-    a supplier of charges nor the AI pseudo-supplier - « Prévoir les
-    courses »' own rule (shopping_data.offered_stores)."""
+    a supplier of charges nor the removed AI reading's - « Prévoir les
+    courses »' own rule (shopping_data.offered_stores). The AI reading is
+    gone (invoices/0038): its supplier, kept as an ordinary one where
+    something named it, its reader key emptied, is told by its code
+    (receipts.RETIRED_CODES) - a bucket of documents nobody recognised, no
+    store anybody goes to."""
     return Supplier.objects.filter(_offered())
 
 

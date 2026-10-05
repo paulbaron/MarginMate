@@ -276,7 +276,7 @@ def editing(edit):
 
 
 def give_legacy_keys() -> None:
-    """What recipes 0019 gave every document saved before it: the key its
+    """What recipes 0020 gave every document saved before it: the key its
     content gave it in « Données » (`legacy_key(fingerprint(…),
     occurrence)`, in (created_at, id) order) - here the three typed by hand,
     sold on the 6th and the 7th, whose lines all have one source."""
@@ -294,7 +294,7 @@ def give_legacy_keys() -> None:
 
 
 def written_before_the_keys(payload: dict) -> dict:
-    """ventes.json as an archive written before recipes 0019 holds it: the
+    """ventes.json as an archive written before recipes 0020 holds it: the
     documents typed by hand (sold on the 6th and the 7th), carrying what
     they carried then - no key, no new field, no file, no link."""
     payload["documents"] = [
@@ -929,7 +929,7 @@ class SalesCoverageTests(MediaMixin, LaneSectionsMixin, TestCase):
 
 class SaleInvoiceArchiveTests(MediaMixin, LaneSectionsMixin, TestCase):
     """A sale document travels by its key: random for a new one, its
-    content's for one saved before recipes 0019 and for an older archive's
+    content's for one saved before recipes 0020 and for an older archive's
     records, so an archive written before the sales invoices still finds its
     documents. What it carries since - its figures, lines, file - comes back
     as it was, and what an archive does not say is never blanked."""
