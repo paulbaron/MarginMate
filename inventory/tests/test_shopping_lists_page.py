@@ -11,12 +11,21 @@ lands; what cannot be read is said, and nothing is written. Another phone
 acting between a view's read and its write is staged by patching
 views._item_of (`read_then`): its guards fail these tests when removed.
 
-Invented data throughout (tests.test_views_smoke.make_shopping_history and
-make_shopping_lists): every store, article, product, login and figure.
+The add form and the card count in the stock take's units (SPEC_UNITS): an
+article in litres in its bottles when the size of one is known, else in
+litres; every menu entry is posted with every unit its page offers, and
+stored as its label says - and every name the server also accepts (the
+aliases' island) as its menu name is; every option a card draws, posted,
+stores what its label says.
+
+Invented data throughout (tests.test_views_smoke.make_shopping_history,
+make_shopping_lists and make_shopping_bottles): every store, article,
+product, login and figure.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from datetime import timedelta
@@ -34,8 +43,9 @@ from django.utils import timezone
 from accounts.tests.test_access import row_counts
 from common import plain_number
 from inventory import views
-from inventory.models import Product, ShoppingList, ShoppingListItem, StockMovement, UnitChoices
-from inventory.shopping_lists import Figures, Finished, finish, set_ticked
+from inventory.entries import same_name
+from inventory.models import Product, ShoppingList, ShoppingListItem, StockMovement, StockType, UnitChoices
+from inventory.shopping_lists import Figures, Finished, finish, list_entries, quantity_words, set_ticked
 from inventory.tests.test_gap_filler_page import body_rows, busy_button_of, confirm_of, table_of
 from inventory.tests.test_shopping_page import (
     fold_of,
@@ -50,12 +60,24 @@ from inventory.tests.test_shopping_page import (
 )
 from invoices.parsers import LLM_PARSER_KEY
 from margins.tests.test_page import cells_of, row_of
-from tests.factories import make_invoice, make_invoice_line, make_movement, make_product, make_supplier
+from tests.factories import (
+    make_invoice,
+    make_invoice_line,
+    make_movement,
+    make_product,
+    make_stock_type,
+    make_supplier,
+)
 from tests.runner import TEST_EMAIL, employee_of_the_test_tenant
 from tests.test_views_smoke import (
     SHOPPING_BEER_PRODUCT,
+    SHOPPING_CHEESE_PRODUCT,
+    SHOPPING_CUPS_PRODUCT,
+    SHOPPING_GIN_PRODUCT,
     SHOPPING_LIST_FINISHER,
+    SHOPPING_VODKA_PRODUCT,
     assertNoUnrenderedTemplateSyntax,
+    make_shopping_bottles,
     make_shopping_history,
     make_shopping_lists,
 )
@@ -87,11 +109,24 @@ LIST_FINISHED = "Cette liste est terminée : rien n'a changé."
 TICK_UNREADABLE = "Rien n'a changé : rechargez la page."
 ALREADY_FINISHED = "Ces courses sont déjà terminées."
 ALREADY_FINISHED_NEXT = "Ces courses étaient déjà terminées : voici la liste en cours."
-ADD_FORM_HELP = "Un nom inconnu s'ajoute tel quel. Quantité : en unités, jamais en colis ; vide : celle d'habitude ici."
+UNIT_REFUSED = "Unité : choisissez-en une de la liste proposée."
+ADD_FORM_HELP = (
+    "Un nom inconnu s'ajoute tel quel. Quantité : dans l'unité choisie, jamais en colis ; vide : celle d'habitude ici."
+)
 SYRUP_PRODUCT = "SIROP EXEMPLE PRODUIT"
 MARKUP = '<i>exemple</i> "test"'
 MARKUP_SHOWN = "&lt;i&gt;exemple&lt;/i&gt; &quot;test&quot;"
 HTMX = {"HTTP_HX_REQUEST": "true"}
+#: The add form's menu (a datalist) and what its unit select reads (a JSON island).
+ENTRIES_ID = "shopping-entries"
+ENTRY_DATA_ID = "shopping-entry-data"
+#: The names the server also accepts, for the select to follow them too.
+ENTRY_ALIASES_ID = "shopping-entry-aliases"
+#: The longest name the menu can offer (entries.ENTRY_MAX): a product's 255
+#: characters, « — » and a store's 255.
+ENTRY_MAX = 513
+#: The wholesaler's name as a product entry ends with it.
+AT_THE_WHOLESALER = " — Grossiste exemple"
 
 
 def element_at(html: str, start: int) -> str:
@@ -157,6 +192,61 @@ def value_of_field(form: str, name: str) -> str:
 def headers_of(table: str) -> list[str]:
     head = re.search(r"<thead>(.*?)</thead>", table, flags=re.DOTALL)
     return [readable(cell) for cell in re.findall(r"<th[^>]*>(.*?)</th>", head.group(1) if head else "", re.DOTALL)]
+
+
+def options_of(form: str, name: str) -> list[tuple[str, str, bool]]:
+    """The options of the form's select `name` as drawn: (value, label,
+    selected); none when the form has no such select."""
+    found = re.search(r'<select name="' + name + r'"[^>]*>(.*?)</select>', form, flags=re.DOTALL)
+    if found is None:
+        return []
+    return [
+        (unescape(value), unescape(label), bool(selected))
+        for value, selected, label in re.findall(
+            r'<option value="([^"]*)"( selected)?>([^<]*)</option>', found.group(1), flags=re.DOTALL
+        )
+    ]
+
+
+def menu_of(html: str) -> list[str]:
+    """The add form's menu (its datalist), each name as read, in its order."""
+    found = re.search(rf'<datalist id="{ENTRIES_ID}">(.*?)</datalist>', html, flags=re.DOTALL)
+    return [unescape(name) for name in re.findall(r'<option value="([^"]*)">', found.group(1))] if found else []
+
+
+def entry_data_of(html: str) -> dict:
+    """The island the add form's unit select reads, parsed as its script
+    parses it (JSON.parse of the element's text); {} when there is none."""
+    found = re.search(rf'<script id="{ENTRY_DATA_ID}" type="application/json">(.*?)</script>', html, re.DOTALL)
+    return json.loads(found.group(1)) if found else {}
+
+
+def entry_aliases_of(html: str) -> dict:
+    """The names the server accepts beside the island's own, each to the
+    island name it resolves to ({"exact": {...}, "folded": {...}}), parsed
+    as the script parses it; {} when there is none."""
+    found = re.search(rf'<script id="{ENTRY_ALIASES_ID}" type="application/json">(.*?)</script>', html, re.DOTALL)
+    return json.loads(found.group(1)) if found else {}
+
+
+def alias_of(aliases: dict, typed: str) -> str | None:
+    """The island name entry_units.js reaches for `typed` through the
+    aliases: exactly, else folded (`same_name`'s fold)."""
+    return aliases["exact"].get(typed.strip()) or aliases["folded"].get(same_name(typed))
+
+
+def sizes_of(item: ShoppingListItem) -> tuple:
+    """What an item counts, as stored: its quantity, unit, product, pack,
+    and the size of one item with its unit."""
+    item.refresh_from_db()
+    size = plain_number(item.item_size) if item.item_size is not None else None
+    return (plain_number(item.quantity), item.unit, item.product_name, item.pack_size, size, item.size_unit)
+
+
+def words_of(item: ShoppingListItem) -> str:
+    """What the pages say an item counts (shopping_lists.quantity_words)."""
+    item.refresh_from_db()
+    return quantity_words(item.quantity, item.unit, item.item_size, item.size_unit, product_name=item.product_name)
 
 
 def figures_of(item: ShoppingListItem) -> tuple:
@@ -258,9 +348,12 @@ class SentencesTests(SimpleTestCase):
             ("TICK_UNREADABLE", TICK_UNREADABLE),
             ("ALREADY_FINISHED", ALREADY_FINISHED),
             ("ALREADY_FINISHED_NEXT", ALREADY_FINISHED_NEXT),
+            ("UNIT_REFUSED", UNIT_REFUSED),
         ):
             with self.subTest(name=name):
                 self.assertEqual(getattr(views, name), said)
+        # The unit posted: the HTTP interface, French.
+        self.assertEqual(views.UNIT_PARAM, "unite")
 
     def test_the_sentences_carrying_figures(self):
         self.assertEqual(
@@ -317,6 +410,31 @@ class SentencesTests(SimpleTestCase):
             with self.subTest(counted=counted):
                 self.assertEqual(views._counted_words(*counted), said)
 
+    def test_what_a_message_says_items_of_a_size_count(self):
+        """Bottles of a size say so, their packs after them; a UNIT size of 1
+        is the piece the article counts: the beer's « 24 » stays."""
+        litre, unit = UnitChoices.LITRE, UnitChoices.UNIT
+        for counted, said in (
+            (
+                (Decimal("6"), "", SHOPPING_GIN_PRODUCT, 6, Decimal("0.7"), litre),
+                "6 bouteilles de 70 cl · 1 colis de 6",
+            ),
+            (
+                (Decimal("3"), "", SHOPPING_GIN_PRODUCT, 6, Decimal("0.7000"), litre),
+                "3 bouteilles de 70 cl · à l'unité · colis de 6",
+            ),
+            ((Decimal("3"), "", "", None, Decimal("0.7"), litre), "3 bouteilles de 70 cl"),
+            ((Decimal("1"), "", "", None, Decimal("0.7"), litre), "1 bouteille de 70 cl"),
+            ((Decimal("1"), "", "", None, Decimal("30"), litre), "1 fût de 30 L"),
+            # A carton of six bottles is a pack, never a keg.
+            ((Decimal("1"), "", "ROSE EXEMPLE CARTON 6X75CL", None, Decimal("4.5"), litre), "1 pack de 4.5 L"),
+            ((Decimal("24"), "", SHOPPING_BEER_PRODUCT, 24, Decimal("1"), unit), "24 · 1 colis de 24"),
+            ((Decimal("2"), "", SHOPPING_CUPS_PRODUCT, None, Decimal("50"), unit), "2 paquets de 50 u."),
+            ((Decimal("4.2"), litre, SHOPPING_GIN_PRODUCT, None, None, ""), "4.2 L"),
+        ):
+            with self.subTest(counted=counted):
+                self.assertEqual(views._counted_words(*counted), said)
+
     def test_the_shopping_done(self):
         for done, said in (
             (Finished(2, 3, 0), "Courses terminées chez Grossiste exemple : 2 / 3 pris."),
@@ -337,14 +455,16 @@ class ListPageTestCase(TestCase):
     """The pages and their forms as the tests below drive them - no test of
     its own. `made` is make_shopping_history()'s stores and articles,
     `lists` make_shopping_lists()' (empty for a class with `WITH_LISTS`
-    off)."""
+    off), `bottles` make_shopping_bottles()' (with `WITH_BOTTLES` on)."""
 
     WITH_LISTS = True
+    WITH_BOTTLES = False
 
     @classmethod
     def setUpTestData(cls):
         cls.made = make_shopping_history()
         cls.lists = make_shopping_lists(cls.made) if cls.WITH_LISTS else SimpleNamespace()
+        cls.bottles = make_shopping_bottles(cls.made) if cls.WITH_BOTTLES else SimpleNamespace()
         cls.wholesaler, cls.grocer, cls.market = cls.made.wholesaler, cls.made.grocer, cls.made.market
 
     def html(self, name=LIST_PAGE, client=None, **params) -> str:
@@ -383,13 +503,23 @@ class ListPageTestCase(TestCase):
         return self.html(client=client, fournisseur=(store or self.wholesaler).pk, mode="courses")
 
     def add_form(self, store) -> dict:
-        """What the list page's « Ajouter » form carries hidden."""
+        """What the list page's « Ajouter » form posts untouched: its hidden
+        fields, and the option its unit select is drawn with (« habituelle »,
+        the entry's own unit, until a script fills it)."""
         (form,) = forms_to(self.html(fournisseur=store.pk), ADD)
-        return hidden_of(form)
+        (drawn,) = [value for value, _label, selected in options_of(form, "unite") if selected]
+        return {**hidden_of(form), "unite": drawn}
 
     def add(self, store, **typed):
-        """« Ajouter » on the list page, as drawn, with what is typed."""
+        """« Ajouter » on the list page, as drawn, with what is typed (and
+        `unite` chosen)."""
         return self.post(ADD, {**self.add_form(store), "nom": "", "quantite": "", "note": "", **typed})
+
+    def card_of(self, item, store=None) -> str:
+        """The « Modifier » card's form of `item`, as drawn."""
+        html = self.html(fournisseur=(store or self.wholesaler).pk, ligne=item.pk)
+        (form,) = forms_to(edit_card(html), EDIT)
+        return form
 
     def tick_form(self, item, client=None, store=None) -> dict:
         """The hidden fields of the item's tick form, as the tick page draws it."""
@@ -613,43 +743,113 @@ class EditPageTests(ListPageTestCase):
                 self.assertIn('<button class="btn btn-small btn-secondary" type="submit">Retirer</button>', form)
 
     def test_the_add_form_and_its_menu(self):
+        """The stock take's three parts: a name from a menu offering the
+        articles AND the store's products under the stock take's names, a
+        quantity, a unit select - one « habituelle » option until
+        entry_units.js fills it from the island, which is list_entries'
+        very data."""
         html = self.html(fournisseur=self.wholesaler.pk)
         (form,) = forms_to(html, ADD)
         self.assertIn('class="inline-form shopping-add"', form)
         self.assertEqual(hidden_of(form), {"fournisseur": str(self.wholesaler.pk)})
+        # As long as the longest name the menu can offer: a pick is never cut.
         self.assertIn(
-            '<input type="text" name="nom" list="shopping-articles" required maxlength="255" autocomplete="off">',
+            '<label class="inline-label">Article ou produit <input type="text" name="nom" list="shopping-entries" '
+            f'required maxlength="{ENTRY_MAX}" autocomplete="off"></label>',
             form,
         )
         self.assertIn('<input type="text" name="quantite" inputmode="decimal" size="6" placeholder="habituelle">', form)
+        self.assertIn(
+            '<label class="inline-label">Unité <select name="unite" data-entry-units="shopping-entry-data" '
+            'data-entry-aliases="shopping-entry-aliases" data-entry-field="nom">'
+            '<option value="" selected>habituelle</option></select></label>',
+            form,
+        )
         self.assertIn('<input type="text" name="note" maxlength="200">', form)
+        # In the order they are filled: the name, the quantity, its unit, a note.
+        self.assertLess(form.index('name="nom"'), form.index('name="quantite"'))
+        self.assertLess(form.index('name="quantite"'), form.index('name="unite"'))
+        self.assertLess(form.index('name="unite"'), form.index('name="note"'))
         self.assertEqual(busy_button_of(form), ("Ajout…", "Ajouter"))
-        menu = re.search(r'<datalist id="shopping-articles">(.*?)</datalist>', html, flags=re.DOTALL).group(1)
-        # The store's own articles first, then the others, each as read.
+        # The articles bought here, then the store's products, then the other
+        # articles - each group as read, accents and case aside.
         self.assertEqual(
-            [unescape(name) for name in re.findall(r'<option value="([^"]*)">', menu)],
+            menu_of(html),
             [
-                "Bière exemple",
-                "Café exemple",
-                "Chips exemple",
-                "Fût exemple",
-                "Olives exemple",
-                "Rhum exemple",
-                "Sirop exemple",
-                "Citron exemple",
-                "Fraises exemple",
+                "Bière exemple (article)",
+                "Café exemple (article)",
+                "Chips exemple (article)",
+                "Fût exemple (article)",
+                "Olives exemple (article)",
+                "Rhum exemple (article)",
+                "Sirop exemple (article)",
+                f"{SHOPPING_BEER_PRODUCT}{AT_THE_WHOLESALER}",
+                f"CAFÉ EXEMPLE PRODUIT{AT_THE_WHOLESALER}",
+                f"CHIPS EXEMPLE PRODUIT{AT_THE_WHOLESALER}",
+                f"FÛT EXEMPLE PRODUIT{AT_THE_WHOLESALER}",
+                f"OLIVES EXEMPLE PRODUIT{AT_THE_WHOLESALER}",
+                f"RHUM EXEMPLE PRODUIT{AT_THE_WHOLESALER}",
+                f"{SYRUP_PRODUCT}{AT_THE_WHOLESALER}",
+                "Citron exemple (article)",
+                "Fraises exemple (article)",
             ],
         )
-        # What a typed quantity counts: units, never packs.
-        self.assertIn(ADD_FORM_HELP, readable(html.split(menu)[1]))
+        # The island: the select's choices for each name of the menu, in its order.
+        data = entry_data_of(html)
+        expected = {entry.name: entry.as_data() for entry in list_entries(timezone.localdate(), self.wholesaler)}
+        self.assertEqual(data, expected)
+        self.assertEqual(list(data), menu_of(html))
+        for name, shipped in (
+            # Its usual product here is a bottle of 1 L: counted in bottles.
+            (
+                "Sirop exemple (article)",
+                {"kind": "stock_type", "unit_choices": [["UNIT", "bouteilles de 1 L"], ["L", "litres"]]},
+            ),
+            ("Bière exemple (article)", {"kind": "stock_type", "unit_choices": [["UNIT", "unités"]]}),
+            (
+                "Olives exemple (article)",
+                {"kind": "stock_type", "unit_choices": [["UNIT", "paquets de 1 kg"], ["KG", "kg"]]},
+            ),
+            # Never bought here: its packet is the one bought elsewhere; in kilos by default.
+            (
+                "Citron exemple (article)",
+                {"kind": "stock_type", "unit_choices": [["UNIT", "paquets de 1 kg"], ["KG", "kg"]]},
+            ),
+            (f"{SHOPPING_BEER_PRODUCT}{AT_THE_WHOLESALER}", {"kind": "product", "unit_choices": [["UNIT", "unités"]]}),
+            (
+                f"{SYRUP_PRODUCT}{AT_THE_WHOLESALER}",
+                {"kind": "product", "unit_choices": [["UNIT", "bouteilles de 1 L"], ["L", "litres"]]},
+            ),
+        ):
+            with self.subTest(entry=name):
+                self.assertEqual({key: data[name][key] for key in shipped}, shipped)
+        self.assertEqual(
+            {name: data[name]["default_unit"] for name in ("Sirop exemple (article)", "Citron exemple (article)")},
+            {"Sirop exemple (article)": "UNIT", "Citron exemple (article)": "KG"},
+        )
+        # The script filling the select: deferred, drawn after the islands it reads.
+        script = re.search(r'<script src="/static/js/entry_units\.js\?v=[^"]*" defer></script>', html)
+        self.assertIsNotNone(script)
+        self.assertLess(html.index(f'id="{ENTRY_DATA_ID}"'), script.start())
+        self.assertLess(html.index(f'id="{ENTRY_ALIASES_ID}"'), script.start())
+        # Each alias names an island entry.
+        aliases = entry_aliases_of(html)
+        self.assertEqual(set(aliases), {"exact", "folded"})
+        self.assertLessEqual({*aliases["exact"].values(), *aliases["folded"].values()}, set(data))
+        self.assertEqual(alias_of(aliases, "sirop exemple"), "Sirop exemple (article)")
+        # What a typed quantity counts: the unit chosen, never packs.
+        self.assertIn(ADD_FORM_HELP, readable(html.split("</datalist>")[1]))
 
     def test_the_card_changing_one_item(self):
-        """Beside the quantity, what it counts - and, for a product sold in
-        packs, how many packs it makes or « à l'unité »."""
-        for item, quantity, counts in (
-            (self.lists.beer, "24", f"{SHOPPING_BEER_PRODUCT} · 1 colis de 24"),
-            (self.lists.syrup, "2", "L"),
-            (self.lists.bread, "2", ""),
+        """Beside the quantity, the unit it counts - a select drawn by the
+        server, its present terms selected: the beer (a UNIT article) its
+        one choice, the syrup in litres its bottles of 1 L (its usual
+        product here) or litres; a free text none. Then what the number
+        counts: the product, and the packs it makes or « à l'unité »."""
+        for item, quantity, units, counts in (
+            (self.lists.beer, "24", [("UNIT", "unités", True)], f"{SHOPPING_BEER_PRODUCT} · 1 colis de 24"),
+            (self.lists.syrup, "2", [("UNIT", "bouteilles de 1 L", False), ("L", "litres", True)], ""),
+            (self.lists.bread, "2", [], ""),
         ):
             with self.subTest(item=item.label):
                 html = self.html(fournisseur=self.wholesaler.pk, ligne=item.pk)
@@ -660,19 +860,74 @@ class EditPageTests(ListPageTestCase):
                 self.assertEqual(hidden_of(form), {"ligne": str(item.pk), "fournisseur": str(self.wholesaler.pk)})
                 self.assertIn(
                     f'<input type="text" name="quantite" value="{quantity}" inputmode="decimal" size="6" required '
-                    "autofocus>",
+                    "autofocus></label>",
                     form,
                 )
-                said = re.search(r'autofocus></label>\s*(?:<span class="muted small">([^<]*)</span>)?', form)
-                self.assertEqual(unescape(said.group(1) or ""), counts)
+                self.assertEqual(options_of(form, "unite"), units)
+                if units:
+                    self.assertIn('<label class="inline-label">Unité <select name="unite">', form)
+                    self.assertLess(form.index('name="quantite"'), form.index('name="unite"'))
+                else:
+                    self.assertNotIn("<select", form)
+                said = re.findall(r'<span class="muted small">([^<]*)</span>', form)
+                self.assertEqual([unescape(words) for words in said], [counts] if counts else [])
+                if counts:
+                    # Beside the select, before the note.
+                    span = form.index('<span class="muted small">')
+                    self.assertLess(form.index("</select></label>"), span)
+                    self.assertLess(span, form.index('name="note"'))
                 self.assertIn('<input type="text" name="note" value="" maxlength="200">', form)
                 self.assertEqual(busy_button_of(form), ("Enregistrement…", "Enregistrer"))
                 self.assertIn((self.page_of(self.wholesaler), "Annuler"), links_of(form))
                 self.assertEqual(warnings_of(html), [])
         ShoppingListItem.objects.filter(pk=self.lists.beer.pk).update(quantity=Decimal("30"))
-        card = edit_card(self.html(fournisseur=self.wholesaler.pk, ligne=self.lists.beer.pk))
-        said = re.search(r'autofocus></label>\s*<span class="muted small">([^<]*)</span>', card)
-        self.assertEqual(unescape(said.group(1)), f"{SHOPPING_BEER_PRODUCT} · à l'unité · colis de 24")
+        said = re.findall(r'<span class="muted small">([^<]*)</span>', self.card_of(self.lists.beer))
+        self.assertEqual([unescape(words) for words in said], [f"{SHOPPING_BEER_PRODUCT} · à l'unité · colis de 24"])
+
+    def test_the_card_of_a_free_text_says_what_it_counts(self):
+        """An article deleted (SET_NULL), or merged beside a twin counting
+        something else, leaves a free text holding its unit or its size: its
+        card draws no select, and says beside the quantity what the number
+        counts - as the list's row does. A free text typed counts what it
+        names: nothing said."""
+        ShoppingListItem.objects.filter(pk=self.lists.syrup.pk).update(stock_type=None)
+        bottles = ShoppingListItem.objects.create(
+            shopping_list=self.lists.open,
+            label="Vin exemple",
+            quantity=Decimal("1"),
+            item_size=Decimal("0.7"),
+            size_unit=UnitChoices.LITRE,
+        )
+        cartons = ShoppingListItem.objects.create(
+            shopping_list=self.lists.open,
+            label="Gin exemple",
+            quantity=Decimal("6"),
+            product_name="GIN EXEMPLE 70CL X6",
+            pack_size=6,
+            item_size=Decimal("0.7"),
+            size_unit=UnitChoices.LITRE,
+        )
+        for item, counts in (
+            (self.lists.syrup, "L"),
+            (bottles, "bouteilles de 70 cl"),
+            (cartons, "bouteilles de 70 cl · GIN EXEMPLE 70CL X6 · 1 colis de 6"),
+            (self.lists.bread, ""),
+        ):
+            with self.subTest(item=item.label):
+                form = self.card_of(item)
+                self.assertNotIn("<select", form)
+                said = re.findall(r'<span class="muted small">([^<]*)</span>', form)
+                self.assertEqual([unescape(words) for words in said], [counts] if counts else [])
+
+    def test_the_run_page_and_a_finished_list_ship_no_entries(self):
+        """The menu, its island and its script are the add form's: the tick
+        page and a finished list have none, and read nothing for them."""
+        with patch("inventory.views.list_entries", side_effect=AssertionError("the menu read")):
+            for page, html in (("tick", self.run_page()), ("finished", self.html(liste=self.lists.finished.pk))):
+                with self.subTest(page=page):
+                    self.assertNotIn(ENTRIES_ID, html)
+                    self.assertNotIn(ENTRY_DATA_ID, html)
+                    self.assertNotIn("entry_units.js", html)
 
     def test_a_line_not_in_the_list_is_said_in_the_page(self):
         for asked in ("abc", "999999", "\N{SUPERSCRIPT TWO}", str(self.lists.lemon.pk)):
@@ -869,6 +1124,41 @@ class AddTests(ListPageTestCase):
                 self.assertEqual(row_counts(), before)
         self.assertFalse(ShoppingList.objects.exists())
 
+    def test_a_long_name_the_menu_offers_is_added(self):
+        """The length is judged by what is stored: a menu name longer than
+        the label's column - a long product at the store, a long article and
+        its suffix - names an article, whose own name always fits. Only a
+        free text, stored as typed, is held to LABEL_MAX; anything longer
+        than any menu name is refused before it is read."""
+        article = make_stock_type(name="A" * 250, unit=UnitChoices.LITRE)
+        make_product(self.wholesaler, "P" * 240, article, unit=UnitChoices.LITRE)
+        product_entry, article_entry = f"{'P' * 240}{AT_THE_WHOLESALER}", f"{'A' * 250} (article)"
+        html = self.html(fournisseur=self.wholesaler.pk)
+        menu = menu_of(html)
+        for name in (product_entry, article_entry):
+            self.assertIn(name, menu)
+            self.assertGreater(len(name), 255)
+        drawn = re.search(r'name="nom" list="shopping-entries" required maxlength="(\d+)"', html)
+        self.assertGreaterEqual(int(drawn.group(1)), max(len(name) for name in menu))
+        for name, product_name in ((product_entry, "P" * 240), (article_entry, "")):
+            with self.subTest(name=name[-30:]):
+                ShoppingListItem.objects.all().delete()
+                response = self.add(self.wholesaler, nom=name)
+                item = ShoppingListItem.objects.get()
+                self.assertEqual((item.stock_type, item.label, item.product_name), (article, "A" * 250, product_name))
+                (said,) = said_at_the_top(response.content.decode())
+                self.assertTrue(said.startswith(f"« {'A' * 250} » ajouté à la liste ("), said[-40:])
+        # A free text is stored as typed: 255 characters at most.
+        ShoppingListItem.objects.all().delete()
+        for typed in ("x" * 256, "x" * (ENTRY_MAX + 1), article_entry + "x" * 300):
+            with self.subTest(length=len(typed)):
+                before = row_counts()
+                response = self.add(self.wholesaler, nom=typed, quantite="0")
+                self.assertEqual(said_at_the_top(response.content.decode()), [NAME_TOO_LONG, QUANTITY_REFUSED])
+                self.assertEqual(row_counts(), before)
+        self.add(self.wholesaler, nom="x" * 255)
+        self.assertEqual(ShoppingListItem.objects.get().label, "x" * 255)
+
     def test_a_store_that_cannot_be_read(self):
         charges = make_supplier(name="Assurance exemple", expenses_only=True)
         for asked in ("", "abc", "999999", "\N{SUPERSCRIPT TWO}", str(charges.pk)):
@@ -905,6 +1195,331 @@ class AddTests(ListPageTestCase):
         self.assertEqual(item[:3], ("Café exemple", "1", ""))
 
 
+class AddUnitsTests(ListPageTestCase):
+    """« Ajouter » in the unit chosen (`unite`, the stock take's values:
+    « UNIT » counts items - bottles, kegs, packets -, « L » / « KG » the
+    article's own measure): an article in litres in its bottles when the
+    size of one is known (its usual product here, else the format it is
+    most bought in anywhere), a product of the store in its items or its
+    article's measure. Every post is the form as the page draws it, its unit
+    one the page's island offers. make_shopping_bottles' data (invented)."""
+
+    WITH_LISTS = False
+    WITH_BOTTLES = True
+
+    def menu(self) -> tuple[list[str], dict]:
+        html = self.html(fournisseur=self.wholesaler.pk)
+        return menu_of(html), entry_data_of(html)
+
+    def added(self, **typed) -> tuple[ShoppingListItem, list[str]]:
+        """The one item `typed` adds to an empty list, and what was said."""
+        ShoppingListItem.objects.all().delete()
+        response = self.add(self.wholesaler, **typed)
+        self.assertEqual(self.landing(response), self.page_of(self.wholesaler))
+        return ShoppingListItem.objects.get(), said_at_the_top(response.content.decode())
+
+    def refused(self, said, **typed) -> None:
+        """`typed` refused with `said`, nothing written."""
+        ShoppingListItem.objects.all().delete()
+        before = row_counts()
+        response = self.add(self.wholesaler, **typed)
+        self.assertEqual(self.landing(response), self.page_of(self.wholesaler))
+        self.assertEqual(said_at_the_top(response.content.decode()), said)
+        self.assertEqual(row_counts(), before)
+
+    def test_the_menu_offers_what_one_item_is(self):
+        names, data = self.menu()
+        gin, vodka, juice = "Gin exemple (article)", "Vodka exemple (article)", "Jus exemple (article)"
+        for name, choices, default in (
+            # Its usual product here: 70 cl bottles, in bottles by default.
+            (gin, [["UNIT", "bouteilles de 70 cl"], ["L", "litres"]], "UNIT"),
+            # Never bought here: the 70 cl it is bought in elsewhere, in bottles.
+            (vodka, [["UNIT", "bouteilles de 70 cl"], ["L", "litres"]], "UNIT"),
+            # Bought by measure, its volumes never alike: no format known.
+            (juice, [["L", "litres (format inconnu)"]], "L"),
+            ("Bière pression exemple (article)", [["UNIT", "fûts de 30 L"], ["L", "litres"]], "UNIT"),
+            ("Gobelets exemple (article)", [["UNIT", "paquets de 50 u."]], "UNIT"),
+            (f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}", [["UNIT", "bouteilles de 70 cl"], ["L", "litres"]], "UNIT"),
+            # Weighed at the counter: in kilos, the stock take's rule.
+            (f"{SHOPPING_CHEESE_PRODUCT}{AT_THE_WHOLESALER}", [["UNIT", "unités"], ["KG", "kg"]], "KG"),
+        ):
+            with self.subTest(entry=name):
+                self.assertIn(name, names)
+                self.assertEqual(data[name]["unit_choices"], choices)
+                self.assertEqual(data[name]["default_unit"], default)
+        # Another store's product is no entry here.
+        self.assertFalse([name for name in names if name.startswith(SHOPPING_VODKA_PRODUCT)])
+
+    def test_each_post_and_what_it_stores(self):
+        """SPEC_UNITS §6.1, row by row: what is stored (quantity, unit,
+        product, pack, size of one, its unit) and what is said."""
+        for typed, stored, said in (
+            (
+                {"nom": "Gin exemple (article)"},
+                ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"),
+                "« Gin exemple » ajouté à la liste (6 bouteilles de 70 cl · 1 colis de 6).",
+            ),
+            (
+                {"nom": "gin exemple", "quantite": "3"},
+                ("3", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"),
+                "« Gin exemple » ajouté à la liste (3 bouteilles de 70 cl · à l'unité · colis de 6).",
+            ),
+            (
+                {"nom": "Gin exemple (article)", "unite": "L"},
+                ("4.2", "L", "", None, None, ""),
+                "« Gin exemple » ajouté à la liste (4.2 L).",
+            ),
+            (
+                {"nom": "Vodka exemple (article)"},
+                ("1", "", "", None, "0.7", "L"),
+                "« Vodka exemple » ajouté à la liste (1 bouteille de 70 cl).",
+            ),
+            (
+                {"nom": "Vodka exemple (article)", "quantite": "2", "unite": "L"},
+                ("2", "L", "", None, None, ""),
+                "« Vodka exemple » ajouté à la liste (2 L).",
+            ),
+            (
+                {"nom": "Jus exemple (article)"},
+                ("2.5", "L", "", None, None, ""),
+                "« Jus exemple » ajouté à la liste (2.5 L).",
+            ),
+            (
+                {"nom": f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}", "quantite": "12"},
+                ("12", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"),
+                "« Gin exemple » ajouté à la liste (12 bouteilles de 70 cl · 2 colis de 6).",
+            ),
+            (
+                {"nom": "Bière pression exemple (article)"},
+                ("1", "", "BIERE PRESSION EXEMPLE FUT 30L", None, "30", "L"),
+                "« Bière pression exemple » ajouté à la liste (1 fût de 30 L).",
+            ),
+            (
+                {"nom": "Gobelets exemple (article)", "unite": "UNIT"},
+                ("2", "", SHOPPING_CUPS_PRODUCT, None, "50", "UNIT"),
+                "« Gobelets exemple » ajouté à la liste (2 paquets de 50 u.).",
+            ),
+            # A product counted in its article's measure keeps its name (« mesuré directement »).
+            (
+                {"nom": f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}", "quantite": "1.5", "unite": "L"},
+                ("1.5", "L", SHOPPING_GIN_PRODUCT, None, None, ""),
+                "« Gin exemple » ajouté à la liste (1.5 L).",
+            ),
+            # Nothing typed, the usual product here: its usual bottles in
+            # litres - as the article entry says « celle d'habitude ici ».
+            (
+                {"nom": f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}", "unite": "L"},
+                ("4.2", "L", SHOPPING_GIN_PRODUCT, None, None, ""),
+                "« Gin exemple » ajouté à la liste (4.2 L).",
+            ),
+            # Weighed: in kilos unless items are asked for.
+            (
+                {"nom": f"{SHOPPING_CHEESE_PRODUCT}{AT_THE_WHOLESALER}"},
+                ("1", "KG", SHOPPING_CHEESE_PRODUCT, None, None, ""),
+                "« Fromage exemple » ajouté à la liste (1 kg).",
+            ),
+        ):
+            with self.subTest(typed=typed):
+                item, message = self.added(**typed)
+                self.assertEqual(sizes_of(item), stored)
+                self.assertEqual(message, [said])
+        # A product entry adds its article: one item per article per list.
+        item, _said = self.added(nom=f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}")
+        self.assertEqual((item.stock_type, item.label), (self.bottles.gin, "Gin exemple"))
+
+    def test_a_unit_not_offered_is_refused_and_nothing_written(self):
+        for typed in (
+            # No format known: litres only.
+            {"nom": "Jus exemple (article)", "unite": "UNIT"},
+            # A free text counts what it names: no unit.
+            {"nom": "Pain exemple", "unite": "L"},
+            {"nom": "Pain exemple", "unite": "UNIT"},
+            # A UNIT article counts its items alone.
+            {"nom": "Gobelets exemple (article)", "unite": "L"},
+            {"nom": "Bière exemple (article)", "unite": "KG"},
+            # Never another article's measure, nor a value the app does not know.
+            {"nom": "Gin exemple (article)", "unite": "KG"},
+            {"nom": "Gin exemple (article)", "unite": "l"},
+            {"nom": "Gin exemple (article)", "unite": " L"},
+            {"nom": "Gin exemple (article)", "unite": "bouteilles"},
+            {"nom": f"{SHOPPING_CHEESE_PRODUCT}{AT_THE_WHOLESALER}", "unite": "L"},
+        ):
+            with self.subTest(typed=typed):
+                self.refused([UNIT_REFUSED], **typed)
+        # Said with the other refusals, in the form's order.
+        self.refused(
+            [QUANTITY_REFUSED, UNIT_REFUSED, NOTE_TOO_LONG],
+            nom="Pain exemple",
+            quantite="0",
+            unite="L",
+            note="n" * 201,
+        )
+        self.refused([NAME_MISSING, QUANTITY_REFUSED], nom="", quantite="0", unite="L")
+
+    def test_an_empty_or_missing_unit_is_the_entry_s_default(self):
+        _item, said = self.added(nom="Gin exemple (article)", unite="")
+        self.assertEqual(said, ["« Gin exemple » ajouté à la liste (6 bouteilles de 70 cl · 1 colis de 6)."])
+        ShoppingListItem.objects.all().delete()
+        (form,) = forms_to(self.html(fournisseur=self.wholesaler.pk), ADD)
+        # An old page, or no JavaScript: no `unite` at all.
+        self.post(ADD, {**hidden_of(form), "nom": "Gin exemple (article)", "quantite": "", "note": ""})
+        self.assertEqual(sizes_of(ShoppingListItem.objects.get()), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+
+    def test_the_beer_reads_as_before(self):
+        """A UNIT article whose usual product is a piece: its one unit asked
+        for, or none, it counts as it always did - « 24 », never « 24
+        paquets »."""
+        for unite in ("", "UNIT"):
+            with self.subTest(unite=unite):
+                item, said = self.added(nom="Bière exemple", unite=unite)
+                self.assertEqual(said, ["« Bière exemple » ajouté à la liste (24 · 1 colis de 24)."])
+                self.assertEqual(sizes_of(item)[:4], ("24", "", SHOPPING_BEER_PRODUCT, 24))
+                self.assertEqual(words_of(item), "24")
+
+    def test_another_store_s_product_is_a_free_text_here(self):
+        item, said = self.added(nom=f"{SHOPPING_VODKA_PRODUCT} — Épicerie exemple")
+        self.assertIsNone(item.stock_type)
+        self.assertEqual(sizes_of(item), ("1", "", "", None, None, ""))
+        self.assertEqual(said, [f"« {SHOPPING_VODKA_PRODUCT} — Épicerie exemple » ajouté à la liste (1)."])
+
+    def test_every_entry_with_every_unit_it_offers(self):
+        """The page and the add agree: each name of the menu, posted with
+        each unit its island offers - nothing typed, then 2 - adds its
+        article, counted as its label says."""
+        names, data = self.menu()
+        self.assertEqual(set(names), set(data))
+        products = {
+            f"{product.raw_name}{AT_THE_WHOLESALER}": product
+            for product in Product.objects.filter(supplier=self.wholesaler)
+        }
+        posted = 0
+        for name in names:
+            article = products[name].stock_type if data[name]["kind"] == "product" else None
+            if article is None:
+                article = StockType.objects.get(name=name.removesuffix(" (article)"))
+            for value, label in data[name]["unit_choices"]:
+                for quantite in ("", "2"):
+                    with self.subTest(entry=name, unite=value, quantite=quantite):
+                        item, said = self.added(nom=name, quantite=quantite, unite=value)
+                        posted += 1
+                        self.assertEqual(item.stock_type, article)
+                        words = words_of(item)
+                        self.assertTrue(said[0].startswith(f"« {article.name} » ajouté à la liste ({words}"), said)
+                        if data[name]["kind"] == "product":
+                            self.assertEqual(item.product_name, products[name].raw_name)
+                        if value != "UNIT":
+                            # A measure: « litres », « litres (format inconnu) », « kg ».
+                            self.assertEqual(item.unit, value)
+                            self.assertTrue(label.startswith({"L": "litres", "KG": "kg"}[value]), label)
+                        elif label == "unités":
+                            # Items with no size said: a bare number, or the article's pieces.
+                            self.assertNotIn(" de ", words)
+                        else:
+                            # « bouteilles de 70 cl »: the items of that size.
+                            self.assertEqual((item.unit, item.size_unit), ("", article.unit))
+                            self.assertTrue(words.endswith(" de " + label.split(" de ", 1)[1]), (words, label))
+                            if quantite:
+                                self.assertEqual(words, f"2 {label}")
+        self.assertGreater(posted, 50)
+
+    def test_a_carton_is_a_pack_never_a_keg(self):
+        """An article in litres bought at the store by the carton (one
+        invoice unit, six 75 cl bottles, 4.5 L): its item is that carton -
+        « packs de 4.5 L » in the select, « 1 pack de 4.5 L » in the message,
+        the list, the tick page and the forecast; never « fût »."""
+        rose = make_stock_type(name="Rosé carton exemple", unit=UnitChoices.LITRE)
+        carton = make_product(self.wholesaler, "ROSE EXEMPLE CARTON 6X75CL", rose, stock_equivalent="4.5")
+        today = timezone.localdate()
+        for weeks in (3, 2, 1):
+            line = make_invoice_line(
+                invoice=make_invoice(supplier=self.wholesaler, invoice_date=today - timedelta(days=7 * weeks)),
+                product=carton,
+                quantity=Decimal("1"),
+                total_ht="45.00",
+            )
+            make_movement(stock_type=rose, quantity="4.5", unit_cost_ht="10", invoice_line=line)
+        _names, data = self.menu()
+        for name in ("Rosé carton exemple (article)", f"ROSE EXEMPLE CARTON 6X75CL{AT_THE_WHOLESALER}"):
+            with self.subTest(entry=name):
+                self.assertEqual(data[name]["unit_choices"], [["UNIT", "packs de 4.5 L"], ["L", "litres"]])
+        item, said = self.added(nom="Rosé carton exemple (article)")
+        self.assertEqual(sizes_of(item), ("1", "", "ROSE EXEMPLE CARTON 6X75CL", None, "4.5", "L"))
+        self.assertEqual(said, ["« Rosé carton exemple » ajouté à la liste (1 pack de 4.5 L)."])
+        row = row_of(table_of(self.html(fournisseur=self.wholesaler.pk), "articles"), "Rosé carton exemple")
+        self.assertEqual(cells_of(row)[2], "1 pack de 4.5 L")
+        (tick,) = ticks_of(run_block(self.run_page()))
+        self.assertEqual(tick["quantity"], "1 pack de 4.5 L")
+        forecast = self.html(FORECAST, fournisseur=self.wholesaler.pk)
+        self.assertIn("Dans la liste (1 pack de 4.5 L)", forecast)
+        self.assertNotIn("fût de 4.5 L", forecast)
+
+    def test_the_names_the_server_accepts_are_the_select_s_too(self):
+        """A name typed the way the lists always took it - an article's own
+        name in any case, a product's raw name - is no island name; the page
+        ships it beside the island (`shopping-entry-aliases`), so the select
+        follows it: exactly, then folded. Only names the server resolves to
+        that very entry: never another store's product, never a name two
+        articles read alike."""
+        make_stock_type(name="Cafe exemple", unit=UnitChoices.KILOGRAM)
+        html = self.html(fournisseur=self.wholesaler.pk)
+        data, aliases = entry_data_of(html), entry_aliases_of(html)
+        gin_product = f"{SHOPPING_GIN_PRODUCT}{AT_THE_WHOLESALER}"
+        for typed, name in (
+            ("vodka exemple", "Vodka exemple (article)"),
+            ("Vodka exemple", "Vodka exemple (article)"),
+            ("  VODKA  Exemple ", "Vodka exemple (article)"),
+            ("gin exemple", "Gin exemple (article)"),
+            ("gin exemple (article)", "Gin exemple (article)"),
+            ("Bière pression exemple", "Bière pression exemple (article)"),
+            ("biere pression exemple", "Bière pression exemple (article)"),
+            (SHOPPING_GIN_PRODUCT, gin_product),
+            ("gin exemple 70cl x6", gin_product),
+            (gin_product.lower(), gin_product),
+            # Two articles read alike: each by its exact name.
+            ("Café exemple", "Café exemple (article)"),
+            ("Cafe exemple", "Cafe exemple (article)"),
+        ):
+            with self.subTest(typed=typed):
+                self.assertEqual(alias_of(aliases, typed), name)
+                self.assertIn(name, data)
+        for typed in (
+            # Read alike by two articles: no entry, as the server finds none.
+            "cafe exemple",
+            "CAFÉ EXEMPLE",
+            # Another store's product is no name here.
+            SHOPPING_VODKA_PRODUCT,
+            same_name(SHOPPING_VODKA_PRODUCT),
+            "Pain exemple",
+        ):
+            with self.subTest(typed=typed):
+                self.assertIsNone(alias_of(aliases, typed))
+        # The island's own names are its own: no alias repeats one.
+        self.assertFalse(set(aliases["exact"]) & set(data))
+
+    def test_every_alias_with_every_unit_stores_as_its_entry(self):
+        """The select follows an alias with its entry's units: posting the
+        alias with each of them stores what posting the island's name does."""
+        make_stock_type(name="Cafe exemple", unit=UnitChoices.KILOGRAM)
+        html = self.html(fournisseur=self.wholesaler.pk)
+        data, aliases = entry_data_of(html), entry_aliases_of(html)
+        stored: dict = {}
+
+        def posted(nom, unite) -> tuple:
+            item, _said = self.added(nom=nom, quantite="2", unite=unite)
+            return item.stock_type_id, sizes_of(item)
+
+        checked = 0
+        for kind in ("exact", "folded"):
+            for typed, name in aliases[kind].items():
+                for value, _label in data[name]["unit_choices"]:
+                    with self.subTest(kind=kind, typed=typed, unite=value):
+                        if (name, value) not in stored:
+                            stored[name, value] = posted(name, value)
+                        self.assertEqual(posted(typed, value), stored[name, value])
+                        checked += 1
+        self.assertGreater(checked, 50)
+
+
 class ForecastAddTests(ListPageTestCase):
     """« Ajouter » on a line of « Prévoir les courses »: one redirect back to
     the forecast of that store, its days kept, opened on the section the line
@@ -931,10 +1546,14 @@ class ForecastAddTests(ListPageTestCase):
                     response = self.post(ADD, data)
                     self.assertEqual(self.landing(response), self.forecast_of(self.wholesaler, anchor, **query))
                     html = response.content.decode()
-                    counted = data["quantite"]
+                    words = counted = data["quantite"]
                     if article == self.made.beer:
                         # Its product comes in cartons of 24: how many, said.
                         counted += f" · {int(counted) // 24} colis de 24"
+                    elif article == self.made.olives:
+                        # Its product is a packet of 1 kg (the fixture's sizes are 1).
+                        noun = "paquet" if Decimal(words) < 2 else "paquets"
+                        words = counted = f"{words} {noun} de 1 kg"
                     said = [f"« {article.name} » ajouté à la liste ({counted})."]
                     if anchor == "a-acheter":
                         self.assertEqual(said_above_the_list(html), said)
@@ -943,9 +1562,9 @@ class ForecastAddTests(ListPageTestCase):
                         self.assertTrue(opened(fold), anchor)
                         self.assertEqual(said_in(fold), said)
                     self.assertEqual(said_at_the_top(html), [])
-                    # The line now says it is on the list.
+                    # The line now says it is on the list, in the words the list says it.
                     row = row_of(table_of(html, label), article.name)
-                    self.assertIn((self.page_of(self.wholesaler), f"Dans la liste ({data['quantite']})"), links_of(row))
+                    self.assertIn((self.page_of(self.wholesaler), f"Dans la liste ({words})"), links_of(row))
 
     def test_the_line_s_figures_reach_the_list(self):
         html = self.html(FORECAST, fournisseur=self.wholesaler.pk)
@@ -959,6 +1578,61 @@ class ForecastAddTests(ListPageTestCase):
             ],
         )
         self.assertEqual(ShoppingListItem.objects.get(label="Bière exemple").stock_type, self.made.beer)
+
+    def test_the_product_s_size_reaches_the_list(self):
+        """The line counts the store's product: the item keeps the size of
+        one, in the article's unit - six bottles of the gin are « 6
+        bouteilles de 70 cl », on the list and on the forecast."""
+        bottles = make_shopping_bottles(self.made)
+        html = self.html(FORECAST, fournisseur=self.wholesaler.pk)
+        data = self.line_form(html, "à acheter", "Gin exemple")
+        self.assertEqual((data["produit"], data["quantite"]), (str(bottles.gin_product.pk), "6"))
+        response = self.post(ADD, data)
+        html = response.content.decode()
+        self.assertEqual(
+            said_above_the_list(html), ["« Gin exemple » ajouté à la liste (6 bouteilles de 70 cl · 1 colis de 6)."]
+        )
+        gin = ShoppingListItem.objects.get(label="Gin exemple")
+        self.assertEqual(sizes_of(gin), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+        row = row_of(table_of(html, "à acheter"), "Gin exemple")
+        self.assertIn((self.page_of(self.wholesaler), "Dans la liste (6 bouteilles de 70 cl)"), links_of(row))
+        # The fixture's: the syrup's bottle of 1 L, the beer's piece (a bare number).
+        self.post(ADD, self.line_form(html, "à acheter", "Sirop exemple"))
+        self.post(ADD, self.line_form(html, "à acheter", "Bière exemple"))
+        self.assertEqual(
+            sizes_of(ShoppingListItem.objects.get(label="Sirop exemple")), ("2", "", SYRUP_PRODUCT, None, "1", "L")
+        )
+        beer = ShoppingListItem.objects.get(label="Bière exemple")
+        self.assertEqual(sizes_of(beer), ("24", "", SHOPPING_BEER_PRODUCT, 24, "1", "UNIT"))
+        self.assertEqual(words_of(beer), "24")
+
+    def test_a_product_of_another_store_is_refused(self):
+        """The line names the store's product: one of the same article bought
+        at another store is no product of this list - refused, nothing
+        written."""
+        elsewhere = make_product(supplier=self.grocer, raw_name="BIERE EXEMPLE AUTRE", stock_type=self.made.beer)
+        beer = self.line_form(self.html(FORECAST, fournisseur=self.wholesaler.pk), "à acheter", "Bière exemple")
+        before = row_counts()
+        response = self.post(ADD, {**beer, "produit": str(elsewhere.pk)})
+        self.assertEqual(self.landing(response), self.forecast_of(self.wholesaler, "a-acheter"))
+        self.assertEqual(said_above_the_list(response.content.decode()), [PRODUCT_NOT_FOUND])
+        self.assertEqual(row_counts(), before)
+
+    def test_unite_is_not_read(self):
+        """The line's number counts its product, or its article's measure
+        with none: a `unite` posted with it changes nothing."""
+        beer = self.line_form(self.html(FORECAST, fournisseur=self.wholesaler.pk), "à acheter", "Bière exemple")
+        for unite in ("L", "KG", "abc"):
+            with self.subTest(unite=unite):
+                ShoppingListItem.objects.all().delete()
+                response = self.post(ADD, {**beer, "unite": unite})
+                self.assertEqual(
+                    said_above_the_list(response.content.decode()),
+                    ["« Bière exemple » ajouté à la liste (24 · 1 colis de 24)."],
+                )
+                self.assertEqual(
+                    open_items(self.wholesaler), [("Bière exemple", "24", "", SHOPPING_BEER_PRODUCT, 24, "", False)]
+                )
 
     def test_what_the_line_cannot_carry_is_refused(self):
         html = self.html(FORECAST, fournisseur=self.wholesaler.pk)
@@ -1028,7 +1702,7 @@ class ForecastAddTests(ListPageTestCase):
         self.post(ADD, olives)
         response = self.post(ADD, {**olives, "quantite": "5"})
         fold = fold_of(response.content.decode(), "peut-etre")
-        self.assertEqual(said_in(fold), ["« Olives exemple » est déjà dans la liste (1)."])
+        self.assertEqual(said_in(fold), ["« Olives exemple » est déjà dans la liste (1 paquet de 1 kg)."])
         self.assertIn('<li class="message message-warning">', fold)
         self.assertEqual(open_items(self.wholesaler)[0][1], "1")
 
@@ -1120,8 +1794,8 @@ class AddAllTests(ListPageTestCase):
         page still draws."""
         real = views.line_figures
 
-        def figures(line):
-            found = real(line)
+        def figures(line, sizes=None):
+            found = real(line, sizes)
             if line.article_id != self.made.beer.pk:
                 return found
             return Figures(Decimal("10000000"), found.unit, found.product_id, found.product_name, found.pack_size)
@@ -1137,6 +1811,18 @@ class AddAllTests(ListPageTestCase):
         self.html(fournisseur=self.wholesaler.pk)
         self.run_page()
         self.html(FORECAST, fournisseur=self.wholesaler.pk)
+
+    def test_the_sizes_reach_the_list(self):
+        """Each line counting the store's product keeps the size of one item,
+        as « Ajouter » does: the syrup's bottles of 1 L read so on the list;
+        the beer's pieces of 1 stay a bare number."""
+        response = self.post(ADD_ALL, self.add_all_form())
+        self.assertEqual(said_above_the_list(response.content.decode()), ["2 articles ajoutés à la liste."])
+        beer, syrup = (ShoppingListItem.objects.get(label=name) for name in ("Bière exemple", "Sirop exemple"))
+        self.assertEqual(sizes_of(beer), ("24", "", SHOPPING_BEER_PRODUCT, 24, "1", "UNIT"))
+        self.assertEqual(sizes_of(syrup), ("2", "", SYRUP_PRODUCT, None, "1", "L"))
+        rows = body_rows(table_of(self.html(fournisseur=self.wholesaler.pk), "articles"))
+        self.assertEqual([cells_of(row)[2] for row in rows], ["24", "2 bouteilles de 1 L"])
 
     def test_a_second_submit_adds_nothing(self):
         hidden = self.add_all_form()
@@ -1158,6 +1844,26 @@ class AddAllTests(ListPageTestCase):
 
 class EditDeleteTests(ListPageTestCase):
     """« Modifier » (the card) and « Retirer »."""
+
+    WITH_BOTTLES = True
+
+    def gin_in_bottles(self) -> ShoppingListItem:
+        """The gin added from the list page as drawn: six bottles of 70 cl."""
+        self.add(self.wholesaler, nom="Gin exemple (article)")
+        gin = ShoppingListItem.objects.get(label="Gin exemple")
+        self.assertEqual(sizes_of(gin), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+        return gin
+
+    def drawn_card(self, item) -> tuple[dict, list[tuple[str, str, bool]]]:
+        """The card's form as drawn: what it posts untouched (its hidden
+        fields, its quantity, its selected unit), and its unit's options."""
+        form = self.card_of(item)
+        options = options_of(form, "unite")
+        posted = {**hidden_of(form), "quantite": value_of_field(form, "quantite"), "note": ""}
+        for value, _label, selected in options:
+            if selected:
+                posted["unite"] = value
+        return posted, options
 
     def card_form(self, item) -> dict:
         (form,) = forms_to(edit_card(self.html(fournisseur=self.wholesaler.pk, ligne=item.pk)), EDIT)
@@ -1283,6 +1989,114 @@ class EditDeleteTests(ListPageTestCase):
         self.assertEqual(figures_of(self.lists.bread), ("Pain exemple", "2", "", "", None, "", False))
         carried = ShoppingListItem.objects.get(shopping_list__finished_at__isnull=True, label="Pain exemple")
         self.assertEqual(figures_of(carried), ("Pain exemple", "2", "", "", None, "", False))
+
+    def test_the_unit_changed(self):
+        """The card's select: posted as drawn, only the number changes; then
+        bottles to litres - the number never converted, the product's name
+        kept, its packs and size gone -, and litres back to the bottles of
+        the usual product here. A unit the card does not offer, or any for a
+        free text, is refused in the card, nothing written."""
+        gin = self.gin_in_bottles()
+        posted, options = self.drawn_card(gin)
+        self.assertEqual(options, [("UNIT", "bouteilles de 70 cl", True), ("L", "litres", False)])
+        response = self.post(EDIT, {**posted, "quantite": "12"})
+        self.assertEqual(
+            said_at_the_top(response.content.decode()),
+            ["Modifié : « Gin exemple » (12 bouteilles de 70 cl · 2 colis de 6)."],
+        )
+        self.assertEqual(sizes_of(gin), ("12", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+        # Bottles to litres: what is typed counts litres.
+        posted, _options = self.drawn_card(gin)
+        response = self.post(EDIT, {**posted, "quantite": "4.2", "unite": "L"})
+        self.assertEqual(said_at_the_top(response.content.decode()), ["Modifié : « Gin exemple » (4.2 L)."])
+        self.assertEqual(sizes_of(gin), ("4.2", "L", SHOPPING_GIN_PRODUCT, None, None, ""))
+        self.assertEqual(
+            cells_of(row_of(table_of(self.html(fournisseur=self.wholesaler.pk), "articles"), "Gin exemple"))[1:3],
+            [SHOPPING_GIN_PRODUCT, "4.2 L"],
+        )
+        # Litres to bottles: those of the usual product here.
+        posted, options = self.drawn_card(gin)
+        self.assertEqual(options, [("UNIT", "bouteilles de 70 cl", False), ("L", "litres", True)])
+        response = self.post(EDIT, {**posted, "quantite": "6", "unite": "UNIT"})
+        self.assertEqual(
+            said_at_the_top(response.content.decode()),
+            ["Modifié : « Gin exemple » (6 bouteilles de 70 cl · 1 colis de 6)."],
+        )
+        self.assertEqual(sizes_of(gin), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+        # Refused in the card, nothing written.
+        bread, _options = self.drawn_card(self.lists.bread)
+        self.assertNotIn("unite", bread)
+        for item, data in (
+            (gin, {**self.drawn_card(gin)[0], "unite": "KG"}),
+            (gin, {**self.drawn_card(gin)[0], "unite": "abc"}),
+            (self.lists.beer, {**self.drawn_card(self.lists.beer)[0], "unite": "L"}),
+            (self.lists.bread, {**bread, "unite": "L"}),
+            (self.lists.bread, {**bread, "unite": "UNIT"}),
+        ):
+            with self.subTest(item=item.label, unite=data["unite"]):
+                before = everything_listed()
+                sizes = sizes_of(item)
+                response = self.post(EDIT, {**data, "quantite": "9"})
+                self.assertEqual(self.landing(response), self.page_of(self.wholesaler, "modifier", ligne=item.pk))
+                html = response.content.decode()
+                self.assertEqual(said_in(edit_card(html)), [UNIT_REFUSED])
+                self.assertEqual(said_at_the_top(html), [])
+                self.assertEqual(everything_listed(), before)
+                self.assertEqual(sizes_of(item), sizes)
+        # Said with the card's other refusals, in its order.
+        response = self.post(EDIT, {**self.drawn_card(gin)[0], "quantite": "0", "unite": "KG", "note": "n" * 201})
+        self.assertEqual(said_in(edit_card(response.content.decode())), [QUANTITY_REFUSED, UNIT_REFUSED, NOTE_TOO_LONG])
+
+    def test_the_card_s_items_option_says_what_saving_it_stores(self):
+        """A product of the store that is not the usual one, « GIN EXEMPLE
+        1L », added in litres: the card's items option is that product's
+        bottles, found again at the store with their size - never the usual
+        product's 70 cl -, and every option the card draws, posted as drawn,
+        stores what its label says. The product gone from the store, the
+        option is a bare number of it, « unités », and stores one."""
+        gin_litre = make_product(self.wholesaler, "GIN EXEMPLE 1L", self.bottles.gin, unit=UnitChoices.LITRE)
+        line = make_invoice_line(
+            invoice=make_invoice(supplier=self.wholesaler, invoice_date=timezone.localdate() - timedelta(days=10)),
+            product=gin_litre,
+            quantity=Decimal("6"),
+            total_ht="90.00",
+            total_volume="6",
+        )
+        make_movement(stock_type=self.bottles.gin, quantity="6", unit_cost_ht="15", invoice_line=line)
+        self.add(self.wholesaler, nom=f"GIN EXEMPLE 1L{AT_THE_WHOLESALER}", quantite="2", unite="L")
+        gin = ShoppingListItem.objects.get(label="Gin exemple")
+        self.assertEqual(sizes_of(gin), ("2", "L", "GIN EXEMPLE 1L", None, None, ""))
+        posted, options = self.drawn_card(gin)
+        self.assertEqual(options, [("UNIT", "bouteilles de 1 L", False), ("L", "litres", True)])
+        for value, label, _selected in options:
+            with self.subTest(unite=value):
+                response = self.post(EDIT, {**self.drawn_card(gin)[0], "quantite": "3", "unite": value})
+                words = "3 L" if value == "L" else f"3 {label}"
+                self.assertEqual(said_at_the_top(response.content.decode()), [f"Modifié : « Gin exemple » ({words})."])
+                self.assertEqual(words_of(gin), words)
+                if value == "UNIT":
+                    self.assertEqual(sizes_of(gin), ("3", "", "GIN EXEMPLE 1L", None, "1", "L"))
+        self.assertEqual(sizes_of(gin), ("3", "L", "GIN EXEMPLE 1L", None, None, ""))
+        # The product no longer at the store under that name: a bare number of it.
+        Product.objects.filter(pk=gin_litre.pk).update(raw_name="GIN EXEMPLE 1L ANCIEN")
+        posted, options = self.drawn_card(gin)
+        self.assertEqual(options, [("UNIT", "unités", False), ("L", "litres", True)])
+        response = self.post(EDIT, {**posted, "quantite": "3", "unite": "UNIT"})
+        self.assertEqual(said_at_the_top(response.content.decode()), ["Modifié : « Gin exemple » (3)."])
+        self.assertEqual(sizes_of(gin), ("3", "", "GIN EXEMPLE 1L", None, None, ""))
+
+    def test_a_unit_change_while_another_phone_finishes_the_list(self):
+        """Bottles changed to litres as another phone presses « Courses
+        terminées »: nothing written on the finished list - read-only -, nor
+        on the copy carried over, which keeps its bottles; said « terminée »."""
+        gin = self.gin_in_bottles()
+        posted, _options = self.drawn_card(gin)
+        with patch("inventory.views._item_of", side_effect=read_then(finish_its_list)):
+            response = self.post(EDIT, {**posted, "quantite": "4.2", "unite": "L"})
+        self.assertEqual(said_at_the_top(response.content.decode()), [LIST_FINISHED])
+        self.assertEqual(sizes_of(gin), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+        carried = ShoppingListItem.objects.get(shopping_list__finished_at__isnull=True, label="Gin exemple")
+        self.assertEqual(sizes_of(carried), ("6", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
 
     def test_an_edit_while_another_phone_removes_the_item(self):
         hidden = self.card_form(self.lists.bread)
@@ -1660,6 +2474,37 @@ class RunPageTests(ListPageTestCase):
                 self.assertNotIn("data-busy-label", form)
                 self.assertIn('<button type="submit" class="shopping-tick-button"', form)
 
+    def test_an_item_in_bottles_reads_so(self):
+        """In the store, on the list and once finished: the number and what
+        it counts - « 3 bouteilles de 70 cl » -, the product and its packs
+        under it."""
+        gin = ShoppingListItem.objects.create(
+            shopping_list=self.lists.open,
+            stock_type=make_stock_type(name="Gin exemple", unit=UnitChoices.LITRE),
+            label="Gin exemple",
+            quantity=Decimal("3"),
+            product_name=SHOPPING_GIN_PRODUCT,
+            pack_size=6,
+            item_size=Decimal("0.7"),
+            size_unit=UnitChoices.LITRE,
+        )
+        (tick,) = [tick for tick in ticks_of(run_block(self.run_page())) if tick["name"] == "Gin exemple"]
+        self.assertEqual(
+            (tick["quantity"], tick["under"]),
+            ("3 bouteilles de 70 cl", [f"{SHOPPING_GIN_PRODUCT} · à l'unité · colis de 6"]),
+        )
+        row = row_of(table_of(self.html(fournisseur=self.wholesaler.pk), "articles"), "Gin exemple")
+        self.assertEqual(
+            [unescape(cell) for cell in cells_of(row)[1:3]],
+            [f"{SHOPPING_GIN_PRODUCT} à l'unité · colis de 6", "3 bouteilles de 70 cl"],
+        )
+        # Sorted by its bare number, never by its words.
+        self.assertIn('data-label="Quantité" data-sort="3">3 bouteilles de 70 cl</td>', row)
+        finish(self.lists.open, keep=False, by=TEST_EMAIL, now=timezone.now())
+        row = row_of(table_of(self.html(liste=self.lists.open.pk), "courses terminées"), "Gin exemple")
+        self.assertEqual(cells_of(row)[2], "3 bouteilles de 70 cl")
+        self.assertEqual(sizes_of(gin), ("3", "", SHOPPING_GIN_PRODUCT, 6, "0.7", "L"))
+
     def test_a_note_is_under_its_item(self):
         ShoppingListItem.objects.filter(pk=self.lists.bread.pk).update(note="Complet")
         (bread,) = [tick for tick in ticks_of(run_block(self.run_page())) if tick["name"] == "Pain exemple"]
@@ -1736,6 +2581,33 @@ class PageCostTests(ListPageTestCase):
         more = [self.queries(url) for url in pages] + [self.queries(reverse(TICK), tick, **HTMX)]
         self.assertEqual(more, few)
 
+    def test_the_list_page_costs_no_more_with_more_history(self):
+        """The add form's menu - every article, the store's products, each
+        with its units - and a card counting in bottles read the same
+        queries whatever was bought: more articles, at every store, in
+        litres, kilos and units, bottles and weighed, week after week."""
+        pages = (self.page_of(self.wholesaler), self.page_of(self.wholesaler, ligne=self.lists.syrup.pk))
+        few = [self.queries(url) for url in pages]
+        today = timezone.localdate()
+        for number in range(6):
+            store = (self.wholesaler, self.grocer, self.market)[number % 3]
+            unit = (UnitChoices.LITRE, UnitChoices.KILOGRAM, UnitChoices.UNIT)[number % 3]
+            article = make_stock_type(name=f"Article {number} exemple", unit=unit)
+            bottle = make_product(
+                supplier=store, raw_name=f"ARTICLE {number} EXEMPLE 70CL", stock_type=article, unit=unit
+            )
+            weighed = make_product(
+                supplier=store, raw_name=f"ARTICLE {number} EXEMPLE VRAC", stock_type=article, unit=unit
+            )
+            for week in range(1, 12):
+                invoice = make_invoice(supplier=store, invoice_date=today - timedelta(days=7 * week + number))
+                for product, volume in ((bottle, "4.2"), (weighed, f"{3 + week}.1")):
+                    line = make_invoice_line(
+                        invoice=invoice, product=product, quantity=6, total_ht="44.00", total_volume=volume
+                    )
+                    make_movement(stock_type=article, quantity=volume, invoice_line=line)
+        self.assertEqual([self.queries(url) for url in pages], few)
+
 
 class MarkupTests(ListPageTestCase):
     """A name or a note comes from whoever typed it, or from a supplier's
@@ -1748,6 +2620,14 @@ class MarkupTests(ListPageTestCase):
         self.made.syrup.save(update_fields=["name"])
         self.made.grocer.name = f"Épicerie {MARKUP}"
         self.made.grocer.save(update_fields=["name"])
+        # A product of the store read off a supplier's document: in the menu
+        # and in its island, as text and as data.
+        make_product(supplier=self.wholesaler, raw_name=MARKUP, stock_type=self.made.olives)
+        html = self.html(fournisseur=self.wholesaler.pk)
+        self.assertIn(f"{MARKUP}{AT_THE_WHOLESALER}", menu_of(html))
+        self.assertIn(f'<option value="{MARKUP_SHOWN}{AT_THE_WHOLESALER}">', html)
+        self.assertEqual(entry_data_of(html)[f"{MARKUP}{AT_THE_WHOLESALER}"]["kind"], "product")
+        self.assertEqual(entry_data_of(html)[f"{MARKUP} (article)"]["kind"], "stock_type")
         pages = [
             self.html(INDEX),
             self.html(fournisseur=self.wholesaler.pk),

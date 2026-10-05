@@ -24,6 +24,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from inventory.models import MovementKind, StockMovement, UnitChoices
+from inventory.services import bulk_product_counting_units, is_discrete_count, product_is_discrete_count
 from inventory.variance import (
     MOVEMENT_DAY_COLUMNS,
     allocate_choices,
@@ -39,6 +40,7 @@ from inventory.variance import (
     recipe_pool_groups,
     recipe_usage_terms,
     stock_units_per_item,
+    typical_item_sizes,
 )
 from invoices.models import Invoice
 from recipes.models import Recipe, RecipeIngredient
@@ -1285,3 +1287,102 @@ class AllocationReadsOnlyTests(TestCase):
         # already), 7 of the other up to its own (3,2, rounded up); round two:
         # 2 and 1 more to the brim; the 4 left on the dearer, past it.
         self.assertEqual(allocated, {1: D("11"), 2: D("4")})
+
+
+def _bought(product, *pairs, lines_each=1):
+    """`lines_each` invoice lines per (quantity, total_volume) pair."""
+    invoice = make_invoice(supplier=product.supplier, invoice_date=date(2026, 1, 5))
+    for quantity, volume in pairs:
+        for _ in range(lines_each):
+            make_invoice_line(invoice=invoice, product=product, quantity=quantity, total_volume=volume, total_ht="40")
+    return product
+
+
+class TypicalItemSizesTests(TestCase):
+    """`typical_item_sizes(discrete_only=True)`: a weighed product's « size »
+    is 1 × its factor, no bottle - the shopping lists leave it out, the
+    variance's « ≈ bouteilles » does not (its default)."""
+
+    def setUp(self):
+        self.supplier = make_supplier(name="Grossiste exemple")
+        self.juice = make_stock_type(name="Jus exemple", unit=UnitChoices.LITRE)
+        # Bought on the most lines, and weighed: two ratios, its size 1 x 1.
+        self.loose = _bought(
+            make_product(supplier=self.supplier, raw_name="JUS VRAC", stock_type=self.juice, unit=UnitChoices.LITRE),
+            (1, "2.4"),
+            (1, "2.7"),
+            lines_each=3,
+        )
+        self.bottle = _bought(
+            make_product(
+                supplier=self.supplier,
+                raw_name="JUS EXEMPLE 1.5L",
+                stock_type=self.juice,
+                unit=UnitChoices.UNIT,
+                stock_equivalent="1.5",
+            ),
+            (6, "0"),
+            (12, "0"),
+        )
+        self.lemon = make_stock_type(name="Citron exemple", unit=UnitChoices.KILOGRAM)
+        _bought(
+            make_product(supplier=self.supplier, raw_name="CITRON VRAC", stock_type=self.lemon, unit="KG"),
+            (1, "2.5"),
+            (1, "3.1"),
+        )
+
+    def test_the_default_is_unchanged(self):
+        sizes = typical_item_sizes()
+        self.assertEqual(sizes, {self.juice.pk: Decimal("1"), self.lemon.pk: Decimal("1")})
+        self.assertEqual(typical_item_sizes(discrete_only=False), sizes)
+        self.assertEqual(typical_item_sizes([self.juice.pk]), {self.juice.pk: Decimal("1")})
+
+    def test_discrete_only_leaves_a_weighed_product_out(self):
+        self.assertEqual(typical_item_sizes(discrete_only=True), {self.juice.pk: Decimal("1.5")})
+        self.assertEqual(typical_item_sizes([self.juice.pk], discrete_only=True), {self.juice.pk: Decimal("1.5")})
+        # An article bought weighed only has no format at all.
+        self.assertEqual(typical_item_sizes([self.lemon.pk], discrete_only=True), {})
+
+    def test_still_three_queries(self):
+        for discrete_only in (False, True):
+            with self.subTest(discrete_only=discrete_only):
+                with self.assertNumQueries(3):
+                    typical_item_sizes(discrete_only=discrete_only)
+                with self.assertNumQueries(3):
+                    typical_item_sizes([self.juice.pk, self.lemon.pk], discrete_only=discrete_only)
+
+
+class IsDiscreteCountTests(TestCase):
+    """`services.is_discrete_count`: the one rule saying a product is counted
+    in items - at most one distinct ratio of measured volume to quantity."""
+
+    def test_no_ratio_one_ratio_two_ratios(self):
+        ratios = {1: {Decimal("0.7")}, 2: {Decimal("0.7"), Decimal("0.75")}, 3: set()}
+        self.assertTrue(is_discrete_count(ratios, 1))
+        self.assertFalse(is_discrete_count(ratios, 2))
+        self.assertTrue(is_discrete_count(ratios, 3))
+        self.assertTrue(is_discrete_count(ratios, 4))
+        self.assertTrue(is_discrete_count({}, 1))
+
+    def test_the_two_callers_are_unchanged(self):
+        supplier = make_supplier(name="Grossiste exemple")
+        vodka = make_stock_type(name="Vodka exemple", unit=UnitChoices.LITRE)
+        never = make_product(supplier=supplier, raw_name="SANS VOLUME", stock_type=vodka, unit=UnitChoices.LITRE)
+        bottle = _bought(
+            make_product(supplier=supplier, raw_name="VODKA 70CL", stock_type=vodka, unit=UnitChoices.LITRE),
+            (6, "4.2"),
+        )
+        loose = _bought(
+            make_product(supplier=supplier, raw_name="VODKA VRAC", stock_type=vodka, unit=UnitChoices.LITRE),
+            (1, "1.234"),
+            (1, "0.987"),
+        )
+        unfiled = _bought(make_product(supplier=supplier, raw_name="A CLASSER"), (1, "1.1"), (1, "1.2"))
+        self.assertEqual(
+            [product_is_discrete_count(product) for product in (never, bottle, loose, unfiled)],
+            [True, True, False, False],
+        )
+        self.assertEqual(
+            bulk_product_counting_units([never, bottle, loose, unfiled]),
+            {never.pk: "Unité", bottle.pk: "Unité", loose.pk: "Litre", unfiled.pk: "Unité"},
+        )

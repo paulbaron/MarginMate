@@ -4,8 +4,23 @@ from django import forms
 from django.forms import BaseInlineFormSet, inlineformset_factory
 from django.utils import timezone
 
+# The entry vocabulary and matcher live in entries.py, shared with the
+# shopping lists; every name taken here is used here (the stock take's tests
+# also import product_display_name, stock_type_entry_name and EntryResolver
+# from this module).
+from .entries import (
+    ARTICLE_KIND,
+    ITEMS,
+    PRODUCT_KIND,
+    EntryResolver,
+    article_units,
+    is_stock_type_entry,
+    product_display_name,
+    product_units,
+    stock_type_entry_name,
+)
 from .models import Product, StockTake, StockTakeLine, StockType, UnitChoices
-from .services import first_purchase_dates, product_counting_ratios
+from .services import first_purchase_dates, is_discrete_count, product_counting_ratios
 
 
 class StockTypeForm(forms.ModelForm):
@@ -30,33 +45,6 @@ class StockTypeForm(forms.ModelForm):
         error_messages = {"name": {"unique": "Un article porte déjà ce nom."}}
 
 
-def product_display_name(product: Product) -> str:
-    return f"{product.raw_name} — {product.supplier.name}"
-
-
-STOCK_TYPE_ENTRY_SUFFIX = " (article)"
-# What the suffix read before a StockType became an « article » (19/09). A
-# count in progress is kept in the browser as it was typed (the draft net of
-# stock_take_form.html), so an entry carrying it has to keep resolving.
-OLD_STOCK_TYPE_ENTRY_SUFFIXES = (" (type de stock)",)
-
-
-def stock_type_entry_name(stock_type: StockType) -> str:
-    return f"{stock_type.name}{STOCK_TYPE_ENTRY_SUFFIX}"
-
-
-def current_entry_name(name: str) -> str:
-    """`name` with an old stock-item suffix put back to today's one."""
-    for old in OLD_STOCK_TYPE_ENTRY_SUFFIXES:
-        if name.endswith(old):
-            return name[: -len(old)] + STOCK_TYPE_ENTRY_SUFFIX
-    return name
-
-
-def is_stock_type_entry(name: str) -> bool:
-    return current_entry_name(name).endswith(STOCK_TYPE_ENTRY_SUFFIX)
-
-
 def _unit_choices_for_product(product: Product, is_discrete: bool) -> tuple[list[list[str]], str]:
     """(unit_choices, default_unit) for one product - UNIT is always
     offered (any product can be counted as discrete items), plus the
@@ -64,88 +52,18 @@ def _unit_choices_for_product(product: Product, is_discrete: bool) -> tuple[list
     count can instead be entered as a direct measurement, e.g. "roughly
     0.3L left in an open bottle" - see StockTakeLine.unit). Defaults to
     whichever product_is_discrete_count/bulk_product_counting_units would
-    have auto-picked, but the user can still choose the other option."""
-    stock_unit = product.stock_type.unit
-    if stock_unit == UnitChoices.UNIT:
-        return [[UnitChoices.UNIT, "Unité"]], UnitChoices.UNIT
-    choices = [
-        [UnitChoices.UNIT, "Unité (bouteilles/packs)"],
-        [stock_unit, f"{product.stock_type.get_unit_display()} (mesuré directement)"],
-    ]
-    default = UnitChoices.UNIT if is_discrete else stock_unit
-    return choices, default
+    have auto-picked, but the user can still choose the other option.
 
-
-class EntryResolver:
-    """Turns the text typed into a stock-take row back into the Product or
-    StockType it names.
-
-    Loaded once and shared by every row of a formset. Resolving one row at a
-    time meant a query per row, so a 400-line inventory spent 400 queries
-    just deciding what the user had typed, before a single line was valued.
-
-    It also answers "did this exist yet", which is the same question asked of
-    every row against the same date - see first_purchase_dates.
-    """
-
-    def __init__(self):
-        self._products = None
-        self._product_ids = None
-        self._stock_types = None
-        self._first_purchases = None
-
-    def _load(self):
-        if self._products is not None:
-            return
-        # A product's suggestion and its supplier's identifiers are never
-        # read from here: decoded for every product, they were a third of
-        # what loading took - on every row priced live as it is typed.
-        products = list(
-            Product.objects.select_related("supplier", "stock_type")
-            .filter(stock_type__isnull=False)
-            .defer(
-                "ai_suggestion",
-                "supplier__ticket_identifiers",
-                "supplier__refused_identifiers",
-                "supplier__typed_identifiers",
-            )
-        )
-        self._products = {product_display_name(product): product for product in products}
-        self._product_ids = [product.id for product in products]
-        self._stock_types = {stock_type_entry_name(st): st for st in StockType.objects.all()}
-
-    def _first_purchase_dates(self) -> dict:
-        """Read the first time a row is judged against a date - a row priced
-        live (value_stock_take_line) never is."""
-        if self._first_purchases is None:
-            self._load()
-            self._first_purchases = first_purchase_dates(self._product_ids)
-        return self._first_purchases
-
-    def product(self, name: str) -> Product | None:
-        self._load()
-        return self._products.get(name)
-
-    def stock_type(self, name: str) -> StockType | None:
-        self._load()
-        return self._stock_types.get(current_entry_name(name))
-
-    def first_purchase(self, product: Product):
-        """When this product was first delivered, or None if nothing dated
-        says - in which case there is no ground to call it too new."""
-        return self._first_purchase_dates().get(product.id)
-
-    def stock_type_first_purchase(self, stock_type: StockType):
-        """The earliest delivery of ANY product under this stock item: the
-        stock item existed from the moment its first bottle arrived,
-        whichever brand that was."""
-        first_purchases = self._first_purchase_dates()
-        dates = [
-            first_purchases[product.id]
-            for product in self._products.values()
-            if product.stock_type_id == stock_type.id and product.id in first_purchases
-        ]
-        return min(dates) if dates else None
+    The rule is `entries.product_units`, shared with the shopping lists;
+    the labels are the stock take's own."""
+    units = product_units(product, is_discrete=is_discrete)
+    if units.choices == (ITEMS,):
+        return [[ITEMS, "Unité"]], units.default
+    labels = {
+        ITEMS: "Unité (bouteilles/packs)",
+        product.stock_type.unit: f"{product.stock_type.get_unit_display()} (mesuré directement)",
+    }
+    return [[value, labels[value]] for value in units.choices], units.default
 
 
 def stock_take_entry_lookup() -> dict[str, dict]:
@@ -178,11 +96,10 @@ def stock_take_entry_lookup() -> dict[str, dict]:
     first_purchases = first_purchase_dates([product.id for product in products])
     entries = {}
     for product in products:
-        is_discrete = len(ratios.get(product.id, set())) <= 1
-        choices, default = _unit_choices_for_product(product, is_discrete)
+        choices, default = _unit_choices_for_product(product, is_discrete_count(ratios, product.id))
         first = first_purchases.get(product.id)
         entries[product_display_name(product)] = {
-            "kind": "product",
+            "kind": PRODUCT_KIND,
             "unit_choices": choices,
             "default_unit": default,
             "available_from": first.isoformat() if first else None,
@@ -199,10 +116,13 @@ def stock_take_entry_lookup() -> dict[str, dict]:
             earliest_by_type[product.stock_type_id] = first
     for stock_type in StockType.objects.all():
         first = earliest_by_type.get(stock_type.id)
+        # Counted in its own unit only (no flag passed), so each choice is
+        # labelled the way the article's unit reads.
+        units = article_units(stock_type)
         entries[stock_type_entry_name(stock_type)] = {
-            "kind": "stock_type",
-            "unit_choices": [[stock_type.unit, stock_type.get_unit_display()]],
-            "default_unit": stock_type.unit,
+            "kind": ARTICLE_KIND,
+            "unit_choices": [[value, stock_type.get_unit_display()] for value in units.choices],
+            "default_unit": units.default,
             "available_from": first.isoformat() if first else None,
         }
     return entries

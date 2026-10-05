@@ -26,10 +26,15 @@ from unittest import mock
 from django.conf import settings
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from inventory.forms import product_display_name, stock_take_entry_lookup, stock_type_entry_name
 from inventory.models import UnitChoices
+from inventory.shopping_lists import list_entries
 from tests.factories import (
+    make_invoice,
+    make_invoice_line,
+    make_movement,
     make_product,
     make_stock_take,
     make_stock_take_line,
@@ -100,6 +105,42 @@ class StockTakeFormTests(NoLiveMarkupMixin, TestCase):
         self.assertNoBreakout(page)
         self.assertEqual(island(page, "saved-values"), {str(line.pk): "12.34"})
         self.assertIn(product_display_name(self.product), island(page, "entry-data"))
+
+
+class ShoppingListPageTests(NoLiveMarkupMixin, TestCase):
+    """A store's shopping list to prepare (inventory/templates/inventory/
+    shopping_list_page.html): `shopping-entry-data` holds the add form's
+    every name - the store's products with ITS name, each article's - and
+    the unit labels its select offers."""
+
+    def setUp(self):
+        self.store = make_supplier(name=f"Grossiste {PAYLOAD}")
+        self.article = make_stock_type(name=f"Rhum{PAYLOAD}", unit=UnitChoices.LITRE)
+        self.product = make_product(
+            supplier=self.store, raw_name=f"RHUM {PAYLOAD} 70CL", stock_type=self.article, unit=UnitChoices.LITRE
+        )
+        invoice = make_invoice(supplier=self.store, invoice_date=timezone.localdate())
+        line = make_invoice_line(
+            invoice=invoice, product=self.product, quantity=6, total_ht="84.00", total_volume="4.2"
+        )
+        make_movement(stock_type=self.article, quantity="4.2", unit_cost_ht="20", invoice_line=line)
+
+    def test_the_add_form_carries_the_names_as_data_only(self):
+        page = self.client.get(reverse("inventory:shopping_list_page"), {"fournisseur": self.store.pk})
+        self.assertEqual(page.status_code, 200)
+        page = page.content.decode()
+        self.assertNoBreakout(page)
+        entries = island(page, "shopping-entry-data")
+        expected = {entry.name: entry.as_data() for entry in list_entries(timezone.localdate(), self.store)}
+        self.assertEqual(entries, expected)
+        self.assertEqual(entries[product_display_name(self.product)]["kind"], "product")
+        self.assertEqual(
+            entries[stock_type_entry_name(self.article)]["unit_choices"][0], ["UNIT", "bouteilles de 70 cl"]
+        )
+        # The names the server also accepts: data too, read back unchanged.
+        aliases = island(page, "shopping-entry-aliases")
+        self.assertEqual(aliases["exact"][self.product.raw_name], product_display_name(self.product))
+        self.assertEqual(aliases["exact"][self.article.name], stock_type_entry_name(self.article))
 
 
 class RecipeFormTests(NoLiveMarkupMixin, TestCase):

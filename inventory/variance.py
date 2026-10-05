@@ -49,7 +49,7 @@ from .models import (
     UnitChoices,
     loss_fraction,
 )
-from .services import product_counting_ratios
+from .services import is_discrete_count, product_counting_ratios
 
 ZERO = Decimal("0")
 DEFAULT_LOSS_FRACTION = DEFAULT_LOSS_PERCENT / Decimal("100")
@@ -696,7 +696,7 @@ def _cheapest_member(
     return stock_type, unit_cost, item_sizes.get(stock_type.id)
 
 
-def typical_item_sizes(stock_type_ids=None) -> dict[int, Decimal]:
+def typical_item_sizes(stock_type_ids=None, *, discrete_only: bool = False) -> dict[int, Decimal]:
     """{stock_type_id: the size of the container it is usually bought in}.
 
     "How many bottles are missing" is only a useful sentence if "bottle"
@@ -705,6 +705,12 @@ def typical_item_sizes(stock_type_ids=None) -> dict[int, Decimal]:
     in a 3-litre box - so this picks the format bought most often, by number
     of invoice lines, rather than the largest (which would quietly divide
     the answer by four) or the smallest.
+
+    `discrete_only` leaves out the products that are weighed or measured
+    (`services.is_discrete_count` false): their « size » is 1 x their
+    factor, no container at all. The shopping lists ask it that way (an
+    article counted in bottles there, `entries`); the default is the
+    variance's « ≈ bouteilles » and `_cheapest_member`, unchanged.
 
     Batched deliberately: the per-stock-type version ran three queries per
     stock type (its products, each product's counting ratio, each product's
@@ -726,6 +732,8 @@ def typical_item_sizes(stock_type_ids=None) -> dict[int, Decimal]:
 
     counts: dict[int, dict[Decimal, int]] = {}
     for product in products:
+        if discrete_only and not is_discrete_count(ratios, product.id):
+            continue
         size = stock_units_per_item(product, ratios)
         if not size or size <= 0:
             continue
