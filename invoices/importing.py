@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal
 
 from django.core.files import File
 from django.db import transaction
 from django.utils import timezone
 
-from common import group_thousands
+from common import fits_column, group_thousands
 from inventory.matching import resolve_products
 from inventory.models import Product, StockMovement, StockTake, StockTakeLineSource
 from inventory.services import create_stock_movement_for_line, expense_product, movement_refusal
@@ -601,16 +601,11 @@ def _fitting(values: dict) -> dict:
     exactly."""
     for name, what in _LINE_FIGURES.items():
         value = values[name]
-        if value is None:
-            continue
-        field = InvoiceLine._meta.get_field(name)
-        try:
-            Decimal(value).quantize(Decimal(1).scaleb(-field.decimal_places), context=field.context)
-        except InvalidOperation:
+        if not fits_column(InvoiceLine, name, value):
             raise LineTooWideError(
                 f"« {values['raw_name']} » : {what} ({group_thousands(value)}) dépasse ce que MarginMate peut "
                 "enregistrer - vérifiez la quantité et le montant de la ligne."
-            ) from None
+            )
     return values
 
 

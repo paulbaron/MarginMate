@@ -3,6 +3,13 @@ hands them (§5.2 of the spec - frozen: the lanes code against it).
 
 A section is one checkbox. What it depends on, its label and its
 description live in `registry.INFO`, not here, so the graph is one table.
+
+And what two sections share lives here, never in one of them: no section
+module imports another's helpers both ways. `registry.load_sections` imports
+« Ventes » before « Banque », and with each importing the other - « Ventes »
+the moments' and deletes' helpers, « Banque » the label it counts the sale
+links it deletes under - one of them was a partly initialised module when
+the other asked it for a name: an ImportError, « Données » down.
 """
 
 from __future__ import annotations
@@ -10,6 +17,8 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
+import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +43,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     )
 
 logger = logging.getLogger(__name__)
+
+#: Rows deleted per query: a replace of a few thousand rows must not meet
+#: SQLite's limit on a statement's parameters.
+DELETE_BATCH = 500
+#: How long `stored_bytes` keeps a section's size.
+SIZE_CACHE_SECONDS = 60
+#: « Ventes »' row for the bank credits paying its documents
+#: (recipes.SaleDocumentPayment): « Banque » counts into it the links its
+#: deletes take with them (CASCADE), so the label is the two sections'.
+SALE_LINKS = "règlements bancaires des bons de vente"
 
 
 class Group(enum.StrEnum):
@@ -118,6 +137,68 @@ class Section(ABC):
         """Remove everything this section covers, with the app's own deletion
         rules. Called in reverse order, after every section that depends on
         it has been cleared (the closure guarantees they are all in)."""
+
+
+def restore_moments(objects_and_moments, field_name: str) -> None:
+    """auto_now_add overwrites the value on insert - bulk_create included -
+    and bulk_update does not call pre_save: the archive's moment goes back
+    after the insert (§4.3)."""
+    restored = []
+    for obj, moment in objects_and_moments:
+        if moment is not None:
+            setattr(obj, field_name, moment)
+            restored.append(obj)
+    if restored:
+        type(restored[0]).objects.bulk_update(restored, [field_name])
+
+
+def delete_ids(model, ids, cascaded: dict[str, int] | None = None) -> int:
+    """By batches (`DELETE_BATCH`); the rows of `model` deleted. `cascaded`,
+    when given, adds up every model's count of each batch's delete - the
+    rows a CASCADE took with them, which belong to whichever section's
+    report says them, read off the deletes themselves rather than counted
+    before."""
+    ids = list(ids)
+    deleted = 0
+    for start in range(0, len(ids), DELETE_BATCH):
+        _total, per_model = model.objects.filter(pk__in=ids[start : start + DELETE_BATCH]).delete()
+        deleted += per_model.get(model._meta.label, 0)
+        if cascaded is not None:
+            for label, count in per_model.items():
+                cascaded[label] = cascaded.get(label, 0) + count
+    return deleted
+
+
+#: (tenant, media folder, section) → (hash of the names, when, bytes). Per
+#: tenant: two tenants restored from one archive name the same files, and
+#: one slot for the process gave bar B the size kept for bar A a minute
+#: before. Per section too: in one slot per tenant, « Factures et tickets »
+#: and « Ventes » recomputed each other's sizes at every visit of the page.
+_SIZES: dict[tuple[str, str, str], tuple[int, float, int]] = {}
+
+
+def stored_bytes(names: frozenset[str], *, kind: str) -> int:
+    """These stored files' total size on disk, a missing one counting
+    nothing - `count()`'s « Mo de fichiers », drawn on every visit of the
+    page: 1 520 stat calls, kept a minute, for the bound tenant's media
+    folder only. `kind` is the section asking."""
+    from accounts import paths
+    from accounts.tenancy import tenant_key
+
+    where = (tenant_key(), os.fspath(paths.media_root()), kind)
+    token = hash(names)
+    now = time.monotonic()
+    kept = _SIZES.get(where)
+    if kept is not None and kept[0] == token and now - kept[1] < SIZE_CACHE_SECONDS:
+        return kept[2]
+    total = 0
+    for name in names:
+        try:
+            total += os.path.getsize(default_storage.path(name))
+        except (OSError, SuspiciousFileOperation, NotImplementedError, ValueError):
+            continue
+    _SIZES[where] = (token, now, total)
+    return total
 
 
 def _report_for(reports: dict[str, SectionReport], key: str) -> SectionReport:

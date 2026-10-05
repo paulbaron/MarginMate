@@ -44,7 +44,7 @@ from transfer.archive import ArchiveError, ArchiveReader
 from transfer.runner import run_clear, run_export
 from transfer.sections import invoices as invoices_section
 from transfer.sections import sales as sales_section
-from transfer.sections.base import ImportContext, Strategy
+from transfer.sections.base import ImportContext, Strategy, stored_bytes
 from transfer.tests.support import export_archive, import_archive
 from transfer.tests.test_sources_section import ENV_NOTE, build_sources, portal_note
 from transfer.tests.test_views import shown_preview
@@ -299,12 +299,29 @@ class FilesTests(TenantTestCase):
         names = frozenset({self.NAME})
         with bound_tenant(self.bar_a):
             default_storage.save(self.NAME, ContentFile(b"a" * 10))
-            self.assertEqual(invoices_section._bytes_of(names), 10)
+            self.assertEqual(stored_bytes(names, kind="factures"), 10)
         with bound_tenant(self.bar_b):
             default_storage.save(self.NAME, ContentFile(b"b" * 25))
-            self.assertEqual(invoices_section._bytes_of(names), 25)
+            self.assertEqual(stored_bytes(names, kind="factures"), 25)
         with bound_tenant(self.bar_a):
-            self.assertEqual(invoices_section._bytes_of(names), 10)
+            self.assertEqual(stored_bytes(names, kind="factures"), 10)
+
+    def test_the_size_cache_is_per_section_too(self):
+        """« Factures et tickets » and « Ventes » each keep their own slot: in
+        one per tenant, drawing the page recomputed the other's sizes at
+        every visit."""
+        sale = "ventes/2026/09/meme-nom-essai.pdf"
+        with bound_tenant(self.bar_a):
+            default_storage.save(self.NAME, ContentFile(b"a" * 10))
+            default_storage.save(sale, ContentFile(b"v" * 7))
+            self.assertEqual(stored_bytes(frozenset({self.NAME}), kind="factures"), 10)
+            self.assertEqual(stored_bytes(frozenset({sale}), kind="ventes"), 7)
+            with mock.patch("transfer.sections.base.os.path.getsize", side_effect=AssertionError("recomputed")):
+                self.assertEqual(stored_bytes(frozenset({self.NAME}), kind="factures"), 10)
+                self.assertEqual(stored_bytes(frozenset({sale}), kind="ventes"), 7)
+        with bound_tenant(self.bar_b):
+            default_storage.save(sale, ContentFile(b"w" * 3))
+            self.assertEqual(stored_bytes(frozenset({sale}), kind="ventes"), 3)
 
 
 def no_folder_named(test, response, *tenants):

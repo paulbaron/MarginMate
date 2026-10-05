@@ -238,6 +238,18 @@ class ItIsNotOfferedOnASaleDocumentTests(Fixtures, TestCase):
         syrup = self.syrup()
         self.assertIn(f"recipe:{syrup.pk}", self.source_values(keep=syrup.pk))
 
+    def test_every_line_of_a_document_keeps_its_own(self):
+        """The formset and the tie grid build the choices once, for every
+        recipe the document's lines hold (recipes/tests/
+        test_sale_document_pages.py::KeptPreparationTests goes through the
+        page)."""
+        syrup = self.syrup()
+        infusion = self.syrup(name="Infusion maison")
+        offered = self.source_values(keep=[syrup.pk, infusion.pk])
+        self.assertIn(f"recipe:{syrup.pk}", offered)
+        self.assertIn(f"recipe:{infusion.pk}", offered)
+        self.assertNotIn(f"recipe:{infusion.pk}", self.source_values(keep={syrup.pk}))
+
 
 class ItSaysOnlyWhatItKnowsTests(Fixtures, TestCase):
     """A blank price says « not sold ». It says nothing about what uses the

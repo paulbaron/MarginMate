@@ -1,8 +1,10 @@
+import hashlib
 import itertools
 import math
+import secrets
 import threading
 from contextlib import contextmanager
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -105,6 +107,14 @@ def _read_unit_costs(stock_type_ids, costs: dict) -> None:
         costs[pk] = (values[pk] / quantity) if quantity else Decimal("0")
 
 
+def read_unit_costs(stock_type_ids) -> dict[int, Decimal]:
+    """{article id: current_unit_cost_ht} for these articles, one query
+    (`_read_unit_costs`) - what « Marges » costs an article sold with."""
+    costs: dict[int, Decimal] = {}
+    _read_unit_costs(stock_type_ids, costs)
+    return costs
+
+
 def _bounds(low, high) -> tuple | None:
     """(low, high) unless either end is undefined, in which case there's no
     range to state - matching how a single variation with no computable
@@ -112,6 +122,48 @@ def _bounds(low, high) -> tuple | None:
     if low is None or high is None:
         return None
     return (low, high)
+
+
+#: A sale document's natural key: 16 hexadecimal characters.
+SALE_KEY_LENGTH = 16
+CENTS = Decimal("0.01")
+#: Where a sale document's file is stored (upload_to), served from (the file
+#: view refuses any other folder) and carried by « Données ».
+SALE_FILES_FOLDER = "ventes/"
+
+
+def cents(value: Decimal) -> Decimal:
+    """Money to the cent, half away from zero - the house rule
+    (margins.computation.cents is the same; recipes cannot import margins)."""
+    return value.quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+def vat_divisor(rate: Decimal | None) -> Decimal | None:
+    """1 + rate, never zero; None for no rate. THE one guarded divisor:
+    Recipe._vat_divisor and SaleDocumentLine.divisor both call it, and
+    margins/computation.py divides by nothing else. A rate of exactly -1,
+    written past the validators by a raw update, must not be able to 500
+    every page that divides by it."""
+    if rate is None:
+        return None
+    divisor = Decimal("1") + rate
+    return divisor if divisor else Decimal("1")
+
+
+def new_sale_key() -> str:
+    """A new sale document's key: 16 random hex characters. A module
+    function, so migration recipes/0020 names it rather than freezing one
+    value (bank.models.new_reference is the precedent)."""
+    return secrets.token_hex(SALE_KEY_LENGTH // 2)
+
+
+def legacy_key(fingerprint: str, occurrence: int) -> str:
+    """The key of a document known by its content - one saved before
+    recipes/0020, or read from an archive written before it: the first 16
+    hex characters of sha256("<fingerprint>#<occurrence>"). Deterministic,
+    so the database migrated and every older archive of it give one
+    document one key (transfer/sections/sales.py)."""
+    return hashlib.sha256(f"{fingerprint}#{occurrence}".encode()).hexdigest()[:SALE_KEY_LENGTH]
 
 
 class Recipe(models.Model):
@@ -251,9 +303,9 @@ class Recipe(models.Model):
         """1 + VAT, never zero. The validators keep vat_rate in range for
         anything saved through a form, but a row written before they existed
         (or through a raw update) must not be able to 500 every page that
-        merely LISTS this recipe."""
-        divisor = Decimal("1") + self.vat_rate
-        return divisor if divisor else Decimal("1")
+        merely LISTS this recipe. `vat_divisor`'s, the one guarded divisor -
+        a recipe always has a rate."""
+        return vat_divisor(self.vat_rate)  # ty: ignore[invalid-return-type] - vat_rate is NOT NULL, so is this
 
     @property
     def is_sold_directly(self) -> bool:
@@ -1390,85 +1442,468 @@ class RecipeIngredient(models.Model):
         return self.sub_recipe.get_yield_unit_display()
 
 
+#: EN 16931's document types (BT-3) a sale document names in words: a
+#: commercial invoice, and a prepayment invoice (« facture d'acompte »). The
+#: credit notes' are invoices.einvoice.CREDIT_NOTE_TYPE_CODES.
+INVOICE_TYPE_CODE = "380"
+DEPOSIT_TYPE_CODE = "386"
+
+
+def fallback_total_ttc(lines, adjustment_ht=None, adjustment_vat_rate=None) -> Decimal:
+    """A sale document's total when it states none: its lines' TTC plus its
+    charges and allowances (`adjustment_ht`) at their own rate, to the cent
+    - the one rule the tab, the bank and « Marges » read. An electronic
+    invoice whose sender states no BT-112 beside a document-level charge was
+    otherwise 110 € on the tab and at the bank, 134 € in « Marges ». A typed
+    document's adjustment is always 0."""
+    adjustment_ttc = (adjustment_ht or Decimal("0")) * (Decimal("1") + (adjustment_vat_rate or Decimal("0")))
+    return cents(sum((line.total_ttc for line in lines), start=Decimal("0")) + adjustment_ttc)
+
+
+def document_to_pay(
+    stated_total_ttc, payable_ttc, prepaid_ttc, lines, *, adjustment_ht=None, adjustment_vat_rate=None
+) -> Decimal:
+    """THE amount a sale document asks of the bank: its own « reste à
+    payer » (BT-115) when it states one, else its total - the one it states,
+    else its lines' and its adjustment's to the cent (`fallback_total_ttc`)
+    - less what it says was already paid. One rule, for
+    `SaleDocument.to_pay_of` and for recipes.sale_payments, which reads the
+    columns and the lines of every linked document at once and has no
+    instance to ask."""
+    if payable_ttc is not None:
+        return payable_ttc
+    total = stated_total_ttc
+    if total is None:
+        total = fallback_total_ttc(lines, adjustment_ht, adjustment_vat_rate)
+    return total - (prepaid_ttc or Decimal("0"))
+
+
 class SaleDocument(models.Model):
-    """Something sold, recorded by hand: a bar tab settled off the books, a
-    private event, a case sold to a friend at cost.
+    """Something sold off the till - a « facture de vente »: a bar tab settled
+    off the books, a private event, a case sold to a friend at cost. Typed by
+    hand, or read from the bar's own electronic invoice, whose figures are
+    then its own data (`einvoice_*`, `seller_*`, the stated totals, its lines'
+    HT and rate) - never a reading.
 
     Separate from RecipeSale because a line here can be a stock item sold
     AS ITSELF - a bottle over the counter - which is not a recipe and has no
-    ingredients to expand. Both kinds feed the variance report: a recipe line
-    consumes whatever the recipe consumes, a stock line consumes itself.
+    ingredients to expand, or tied to nothing at all (« Location de salle »).
+    Both tied kinds feed the variance report: a recipe line consumes whatever
+    the recipe consumes, a stock line consumes itself - each by its
+    `consumption`, and only while the document counts (`counting`).
+
+    **Its money is one rule**: the total it STATES - an electronic invoice's
+    BT-112, or a total typed on the page - else the sum of its lines, to the
+    cent (`total_ttc_of`). The tab, the bank and « Marges » all read it. The
+    `*_of(lines)` forms take a prefetched list, and are what a reader of many
+    documents calls: a property reading `self.lines.all()` on a `to_attr`
+    prefetch is a query per document.
+
+    `key` is its natural key for « Données »: random for a new document, and
+    for one saved before recipes 0020 the key its content gave it there
+    (`legacy_key`), so an older archive still finds it.
     """
 
-    reference = models.CharField(max_length=100, blank=True, help_text="Optionnel — votre propre numéro.")
-    sold_on = models.DateField()
+    class Counting(models.TextChoices):
+        """What a sale document counts in (D5, completed). Stored values are
+        English; the labels are what the page says."""
+
+        COUNTED = "counted", "Compte dans les marges et le stock"
+        #: It documents sales the till already rang up (a tab paid by
+        #: transfer): its figures, file and bank link, no margin, no stock.
+        TILL = "till", "Déjà comptée par la caisse"
+        #: Its final invoice counts the whole sale, stating it « déjà réglé ».
+        DEPOSIT = "deposit", "Acompte : la facture finale la comptera"
+
+    #: Its natural key - what « Données » names it by. Never shown.
+    key = models.CharField("clé", max_length=16, unique=True, default=new_sale_key, editable=False)
+    reference = models.CharField(
+        "numéro", max_length=100, blank=True, help_text="Le numéro de la facture, tel qu'imprimé."
+    )
+    sold_on = models.DateField(
+        "date de vente", help_text="Le jour où la vente compte, dans les marges et dans le stock."
+    )
     note = models.CharField(max_length=255, blank=True)
+    customer = models.CharField(
+        "client", max_length=255, blank=True, help_text="Le client, tel qu'écrit sur la facture."
+    )
+    #: BT-47, else BT-48, as the electronic invoice states it: shown, never
+    #: matched.
+    customer_identifier = models.CharField("identifiant du client", max_length=40, blank=True)
+    counting = models.CharField("compte", max_length=10, choices=Counting.choices, default=Counting.COUNTED)
+    #: BT-112, signed, or typed. Blank: the sum of the lines.
+    stated_total_ttc = models.DecimalField(
+        "total TTC",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Le total imprimé sur la facture. Vide : la somme des lignes.",
+    )
+    #: BT-109, signed, or typed beside a typed TTC: the document then counts
+    #: in HT at it (`states_its_ht`).
+    stated_total_ht = models.DecimalField(
+        "total HT",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Le total HT imprimé, à taper avec le total TTC.",
+    )
+    #: BT-113, signed, or typed: a deposit its total deducts.
+    prepaid_ttc = models.DecimalField(
+        "déjà réglé",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Un acompte que la facture déduit de son total.",
+    )
+    #: BT-115, signed - what the bank is to receive (`to_pay`).
+    payable_ttc = models.DecimalField("reste à payer", max_digits=12, decimal_places=2, null=True, blank=True)
+    #: The document-level charges (BG-21, positive) and allowances (BG-20,
+    #: negative), net, as `ParsedInvoice.reconciliation_adjustment` has them.
+    adjustment_ht = models.DecimalField("frais et remises (HT)", max_digits=12, decimal_places=2, default=Decimal("0"))
+    #: Their own rate (BT-96/BT-103) when the invoice states one.
+    adjustment_vat_rate = models.DecimalField(
+        "taux des frais et remises",
+        max_digits=5,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("1"))],
+    )
+    #: « Factur-X », « CII », « UBL » - blank for a document typed by hand.
+    einvoice_format = models.CharField("facture électronique", max_length=16, blank=True)
+    #: BT-3 as stated (380, 386, 381...).
+    einvoice_type_code = models.CharField("type de document", max_length=10, blank=True)
+    #: BT-2 as stated: kept beside `sold_on`, which may be the delivery's.
+    einvoice_issued_on = models.DateField("date de la facture électronique", null=True, blank=True)
+    einvoice_delivered_on = models.DateField(
+        "date de livraison déclarée",
+        null=True,
+        blank=True,
+        help_text="La date de livraison de la facture électronique, sinon le début de sa période de facturation.",
+    )
+    #: BT-25 as stated: the invoice a credit note corrects.
+    einvoice_preceding_number = models.CharField("facture corrigée", max_length=100, blank=True)
+    #: [{"label", "passed", "detail"}], the invoice's own checks
+    #: (`ParsedInvoice.checks`): said, never repaired.
+    einvoice_checks = models.JSONField("contrôles de la facture électronique", default=list, blank=True)
+    #: BT-27: the bar, normally.
+    seller_name = models.CharField("vendeur", max_length=255, blank=True)
+    #: Nine digits (BT-30/BT-31), "" when none - what Achats' guard reads to
+    #: refuse filing the bar's own invoices as purchases.
+    seller_siren = models.CharField("SIREN du vendeur", max_length=9, blank=True, db_index=True)
+    #: The file exactly as received.
+    source_file = models.FileField(
+        "fichier", upload_to=f"{SALE_FILES_FOLDER}%Y/%m/", max_length=100, blank=True, null=True
+    )
+    #: The stored file's sha256, "" without a file: one document per file.
+    source_sha256 = models.CharField("empreinte du fichier", max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-sold_on", "-created_at"]
+        constraints = [
+            # Also what makes two posts of one file, in flight at once, one
+            # document.
+            models.UniqueConstraint(
+                fields=["source_sha256"], condition=~models.Q(source_sha256=""), name="saledocument_one_per_file"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(counting__in=["counted", "till", "deposit"]), name="saledocument_counting_known"
+            ),
+        ]
 
     def __str__(self):
-        return f"Vente du {self.sold_on:%d/%m/%Y}" + (f" ({self.reference})" if self.reference else "")
+        return f"Vente du {self.sold_on:%d/%m/%Y}" + (f" (n° {self.reference})" if self.reference else "")
+
+    @property
+    def is_einvoice(self) -> bool:
+        return bool(self.einvoice_format)
+
+    @property
+    def counts(self) -> bool:
+        """Whether it counts in « Marges » and in every reader of stock."""
+        return self.counting == self.Counting.COUNTED
+
+    @property
+    def states_its_ht(self) -> bool:
+        """An electronic invoice states its HT whole (BT-109), and so does a
+        document typed with « Total HT » beside « Total TTC »: « Marges »
+        books such a document at it, as stated."""
+        return self.is_einvoice or self.stated_total_ht is not None
+
+    @staticmethod
+    def lines_ttc_of(lines) -> Decimal:
+        """Its lines' TTC, to the cent."""
+        return cents(sum((line.total_ttc for line in lines), start=Decimal("0")))
+
+    def total_ttc_of(self, lines) -> Decimal:
+        """The total it states, else its lines' and its adjustment's
+        (`fallback_total_ttc`) - never the lines over a stated total: they
+        may carry only part of it."""
+        if self.stated_total_ttc is not None:
+            return self.stated_total_ttc
+        return fallback_total_ttc(lines, self.adjustment_ht, self.adjustment_vat_rate)
 
     @property
     def total_ttc(self) -> Decimal:
-        return sum((line.total_ttc for line in self.lines.all()), start=Decimal("0"))
+        return self.total_ttc_of(self.lines.all())
+
+    def to_pay_of(self, lines) -> Decimal:
+        """What the bank is to receive: the invoice's own « reste à payer »
+        when it states one, else its total less what was already paid
+        (`document_to_pay`, which the bank's reading of the links calls on
+        the columns it read)."""
+        return document_to_pay(
+            self.stated_total_ttc,
+            self.payable_ttc,
+            self.prepaid_ttc,
+            lines,
+            adjustment_ht=self.adjustment_ht,
+            adjustment_vat_rate=self.adjustment_vat_rate,
+        )
+
+    @property
+    def to_pay(self) -> Decimal:
+        return self.to_pay_of(self.lines.all())
+
+    def lines_differ_of(self, lines) -> bool:
+        """Whether its lines miss a stated total by more than a cent a line
+        - only what the page SAYS: « Marges » books the difference whatever
+        its size."""
+        lines = list(lines)
+        if self.stated_total_ttc is None or not lines:
+            return False
+        return abs(self.stated_total_ttc - self.lines_ttc_of(lines)) > CENTS * len(lines)
+
+    @property
+    def label(self) -> str:
+        """« n° F-12 · Exemple SARL · 05/03/2026 » - what Banque and the
+        bank's messages name a document by; « sans numéro », and no customer
+        part, when blank."""
+        parts = [f"n° {self.reference}" if self.reference else "sans numéro"]
+        if self.customer:
+            parts.append(self.customer)
+        parts.append(f"{self.sold_on:%d/%m/%Y}")
+        return " · ".join(parts)
+
+    def kind_label_of(self, total: Decimal) -> str:
+        """« Avoir », « Facture d'acompte », « Facture » or « Type 751 », by
+        its type (BT-3) and its `total` - a list passes the total it already
+        has. A credit note's code, or a total below zero, is an « Avoir »
+        whatever else it says."""
+        # Imported here: recipes reads nothing else of invoices, and a model
+        # module is the last place to start.
+        from invoices.einvoice import CREDIT_NOTE_TYPE_CODES
+
+        code = self.einvoice_type_code
+        if code in CREDIT_NOTE_TYPE_CODES or total < 0:
+            return "Avoir"
+        if code == DEPOSIT_TYPE_CODE:
+            return "Facture d'acompte"
+        if code in ("", INVOICE_TYPE_CODE):
+            return "Facture"
+        return f"Type {code}"
+
+    @property
+    def kind_label(self) -> str:
+        return self.kind_label_of(self.total_ttc)
+
+
+#: What `SaleDocumentLine.clean` says (French: LANGUAGE_CODE is en-us).
+LINE_TWO_SOURCES = "Choisissez une recette ou un article, pas les deux."
+LINE_NEEDS_A_LABEL = "Donnez un libellé à une ligne sans recette ni article."
+LINE_CONSUMED_UNTIED = "Quantité consommée : seulement pour une ligne reliée à une recette ou un article."
+LINE_REBUILT_TIED = "Une ligne reconstituée depuis la table de TVA ne se relie pas."
+
+
+def line_consumption(consumed_quantity: Decimal | None, quantity: Decimal) -> Decimal:
+    """THE quantity a sale document line consumed: its consumed quantity - 0
+    included, nothing left the stock - else the invoiced one. One rule, for
+    `SaleDocumentLine.consumption` and for the readers of stock, which read
+    the two columns in their one query (recipes.sales, inventory.gaps,
+    inventory.shopping_data): read as columns, each comes back quantized as
+    stored, where a Coalesce in SQL comes back from SQLite unquantized
+    (« 0.700000000000000 »)."""
+    return consumed_quantity if consumed_quantity is not None else quantity
 
 
 class SaleDocumentLine(models.Model):
-    """One line of a sale document: a recipe OR a stock item, never both and
-    never neither - the same exactly-one-source shape as RecipeIngredient and
-    StockTakeLine, and enforced the same way."""
+    """One line of a sale document: a recipe, a stock item - or, since the
+    sales invoices, nothing at all (« Location de salle », a service charge:
+    money with no recipe or article behind it, which says what it is by its
+    `label`). Never both, the same at-most-one-source shape as
+    RecipeIngredient and StockTakeLine, enforced the same way.
+
+    **Its money** (`total_ttc`) is an electronic invoice's line HT at its
+    rate when it states one (`total_ht`, BT-131 - EN 16931 states no line
+    TTC), else its price times its quantity, else - a recipe line saved
+    before recipes 0020 - the recipe's menu price, else nothing.
+
+    **What it consumed** (`consumption`) is its `consumed_quantity` - a
+    « Fût 30 L » invoiced once and followed by the litre consumed 30 - else
+    its quantity: what every reader of stock and the cost read, never the
+    money. It has the money's sign (a credit note's tied line gives stock
+    back); the mirror shape, stock leaving on a refund, is never costed
+    (`consumption_agrees`). A line tied to nothing consumes nothing.
+    """
 
     document = models.ForeignKey(SaleDocument, related_name="lines", on_delete=models.CASCADE)
     recipe = models.ForeignKey(Recipe, null=True, blank=True, on_delete=models.PROTECT, related_name="sale_lines")
     stock_type = models.ForeignKey(
         StockType, null=True, blank=True, on_delete=models.PROTECT, related_name="sale_lines"
     )
+    #: BT-153, or typed. Required when the line is tied to nothing.
+    label = models.CharField("libellé", max_length=255, blank=True, help_text="Ce que dit la ligne de la facture.")
     # Decimal rather than an integer count: a recipe is sold by the serving,
-    # but a stock item can be sold by the litre.
-    quantity = models.DecimalField(max_digits=10, decimal_places=4)
+    # but a stock item can be sold by the litre. Signed: a credit note.
+    quantity = models.DecimalField("quantité facturée", max_digits=10, decimal_places=4)
     unit_price_ttc = models.DecimalField(
+        "prix unitaire TTC",
         max_digits=8,
         decimal_places=2,
         null=True,
         blank=True,
-        help_text="Optionnel — laissez vide pour le prix de vente de la recette.",
+        help_text="Vide : le prix de vente de la recette, écrit à l'enregistrement.",
     )
+    #: BT-146/BT-149, positive, an electronic invoice's: shown, never summed.
+    unit_price_ht = models.DecimalField("prix unitaire HT", max_digits=10, decimal_places=4, null=True, blank=True)
+    #: BT-131, signed, an electronic invoice's: with `vat_rate`, the line's
+    #: money.
+    total_ht = models.DecimalField("montant HT", max_digits=12, decimal_places=2, null=True, blank=True)
+    #: A fraction (BT-152 is a percentage in the file), or typed.
+    vat_rate = models.DecimalField(
+        "taux de TVA",
+        max_digits=5,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("1"))],
+        help_text="Ex : 0.20 pour 20 %.",
+    )
+    #: Only on a tied line, with the sign of the line's money; 0 allowed -
+    #: nothing left the stock, and the line is then uncosted.
+    consumed_quantity = models.DecimalField(
+        "quantité consommée",
+        max_digits=10,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        help_text="Vide : la quantité facturée. Un « Fût 30 L » vendu 1 et suivi au litre : 30.",
+    )
+    #: A MINIMUM / BASIC WL invoice's line, rebuilt from its VAT table: it
+    #: says what was charged at a rate, never what was sold - never tied.
+    rebuilt = models.BooleanField("reconstituée", default=False)
 
     class Meta:
         ordering = ["id"]
         constraints = [
             models.CheckConstraint(
-                check=(
-                    models.Q(recipe__isnull=False, stock_type__isnull=True)
-                    | models.Q(recipe__isnull=True, stock_type__isnull=False)
-                ),
-                name="saledocumentline_exactly_one_source",
-            )
+                condition=models.Q(recipe__isnull=True) | models.Q(stock_type__isnull=True),
+                name="saledocumentline_at_most_one_source",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(recipe__isnull=False) | models.Q(stock_type__isnull=False) | ~models.Q(label=""),
+                name="saledocumentline_untied_has_a_label",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total_ht__isnull=True) | models.Q(vat_rate__isnull=False),
+                name="saledocumentline_ht_has_its_rate",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(consumed_quantity__isnull=True)
+                | models.Q(recipe__isnull=False)
+                | models.Q(stock_type__isnull=False),
+                name="saledocumentline_consumed_needs_a_source",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(rebuilt=False) | (models.Q(recipe__isnull=True) & models.Q(stock_type__isnull=True)),
+                name="saledocumentline_rebuilt_is_untied",
+            ),
         ]
 
     def __str__(self):
-        return f"{self.quantity} x {self.source_name}"
+        return f"{self.quantity} x {self.shown_name}"
 
     def clean(self):
-        if bool(self.recipe_id) == bool(self.stock_type_id):
-            raise ValidationError("Choisissez soit une recette, soit un article — pas les deux.")
+        refusals = []
+        if self.recipe_id and self.stock_type_id:
+            refusals.append(LINE_TWO_SOURCES)
+        if not self.is_tied and not (self.label or "").strip():
+            refusals.append(LINE_NEEDS_A_LABEL)
+        if not self.is_tied and self.consumed_quantity is not None:
+            refusals.append(LINE_CONSUMED_UNTIED)
+        if self.is_tied and self.rebuilt:
+            refusals.append(LINE_REBUILT_TIED)
+        if refusals:
+            raise ValidationError(refusals)
+
+    @property
+    def is_tied(self) -> bool:
+        return bool(self.recipe_id or self.stock_type_id)
 
     @property
     def source_name(self) -> str:
-        return self.recipe.name if self.recipe_id else self.stock_type.name
+        """The recipe's name, the article's, else the line's own label - never
+        a None source dereferenced."""
+        if self.recipe_id:
+            return self.recipe.name
+        if self.stock_type_id:
+            return self.stock_type.name
+        return self.label
+
+    @property
+    def shown_name(self) -> str:
+        """What the invoice says the line is, else what it is tied to."""
+        return self.label or self.source_name
 
     @property
     def unit_display(self) -> str:
-        return self.recipe.get_yield_unit_display() if self.recipe_id else self.stock_type.get_unit_display()
+        if self.recipe_id:
+            return self.recipe.get_yield_unit_display()
+        if self.stock_type_id:
+            return self.stock_type.get_unit_display()
+        return ""
+
+    @property
+    def consumption(self) -> Decimal:
+        """THE quantity stock and cost read: what was consumed, else what was
+        invoiced (`line_consumption`)."""
+        return line_consumption(self.consumed_quantity, self.quantity)
+
+    @property
+    def rate(self) -> Decimal | None:
+        """Its own rate, else its recipe's; an article or a free line typed
+        without one has none."""
+        if self.vat_rate is not None:
+            return self.vat_rate
+        if self.recipe_id:
+            return self.recipe.vat_rate
+        return None
+
+    @property
+    def divisor(self) -> Decimal | None:
+        return vat_divisor(self.rate)
+
+    @property
+    def has_own_price(self) -> bool:
+        """A stated HT or a typed price: money of its own. The recipe's menu
+        price is not the line's own - an article needs one to come into the
+        margins."""
+        return self.total_ht is not None or self.unit_price_ttc is not None
 
     @property
     def total_ttc(self) -> Decimal:
-        """The line's own price when given, else the recipe's own selling
-        price. A stock item sold as itself has no default - there's no
-        "price" on a stock item, only a cost."""
+        """Unrounded. An electronic invoice's line is its HT at its rate (it
+        states no TTC of its own), a typed line its price times its quantity.
+        Only a line saved before recipes 0020 can still fall back on its
+        recipe's menu price: a save writes it. A stock item sold as itself
+        has no default - there's no "price" on a stock item, only a cost."""
+        if self.total_ht is not None:
+            return self.total_ht * (Decimal("1") + (self.vat_rate or Decimal("0")))
         if self.unit_price_ttc is not None:
             return self.unit_price_ttc * self.quantity
         if self.recipe_id and self.recipe.selling_price_ttc is not None:
@@ -1476,3 +1911,55 @@ class SaleDocumentLine(models.Model):
         # A preparation that is not sold has no price to fall back on, no
         # more than a stock item sold as itself does.
         return Decimal("0")
+
+    @property
+    def money_sign(self) -> int:
+        """-1, 0 or 1: the sign of its stated HT when it has one, else of its
+        TTC."""
+        money = self.total_ht if self.total_ht is not None else self.total_ttc
+        return (money > 0) - (money < 0)
+
+    @property
+    def consumption_agrees(self) -> bool:
+        """Whether what it consumed goes the money's way: stock out on a sale,
+        back on a credit note. Consuming while refunding - the mirror shape -
+        is neither, and is never costed nor accepted."""
+        consumption, sign = self.consumption, self.money_sign
+        if consumption == 0 or sign == 0:
+            return True
+        return (consumption > 0) == (sign > 0)
+
+
+class SaleDocumentPayment(models.Model):
+    """One sales invoice paid, wholly or in part, by one CREDIT of the bank
+    statement - and neither side is exclusive: a deposit then the balance
+    are two credits on one invoice, one transfer can pay two invoices. The
+    pair cannot repeat. How much of a credit goes to which invoice is never
+    stored: recipes/sale_payments.allocate works it out (oldest invoice
+    first, never beyond what it asks). Never `bank.InvoicePayment` (whose
+    invoice is a PURCHASE, read by every spending figure), and never
+    `related_name="payments"` on the bank line (`reconcile.open_lines`,
+    `views.classify`, `invoice_files.paid_by` read that name as purchases).
+    A debit is refused by the code that links (`bank.sale_reconcile.link`);
+    no constraint can see a sign across two tables.
+
+    Here rather than in `bank`: the link is the sale's fact, and « Ventes »
+    (which « Données » applies after « Banque ») carries it, finding both its
+    ends. Its methods are `InvoicePayment.Method`'s on purpose - one
+    vocabulary on screen - declared here so recipes never imports bank.
+    """
+
+    class Method(models.TextChoices):
+        AUTO = "AUTO", "Automatique"
+        MANUAL = "MANUAL", "À la main"
+
+    document = models.ForeignKey(SaleDocument, on_delete=models.CASCADE, related_name="bank_payments")
+    transaction = models.ForeignKey("bank.BankTransaction", on_delete=models.CASCADE, related_name="sale_payments")
+    method = models.CharField(max_length=10, choices=Method.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["transaction", "document"], name="unique_transaction_sale_document")
+        ]

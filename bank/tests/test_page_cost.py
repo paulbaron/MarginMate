@@ -27,7 +27,15 @@ from common import DateRange
 from invoices.models import Invoice, Supplier
 from recipes.models import PosProduct, PosProductDailyQuantity
 from returnables.patterns import PatternError
-from tests.factories import make_invoice, make_invoice_line, make_product, make_supplier
+from tests.factories import (
+    make_invoice,
+    make_invoice_line,
+    make_product,
+    make_sale_document,
+    make_sale_line,
+    make_sale_payment,
+    make_supplier,
+)
 
 #: Patterns with a leading « .* » - and the shapes around it that must not
 #: be taken for one - against labels with the edges a search has.
@@ -131,6 +139,8 @@ class ByPkTests(SimpleTestCase):
         "bank:income_source",
         "bank:treasury_point",
         "bank:treasury_adjustment",
+        "bank:sale_document_search",
+        "recipes:sale_document_update",
     )
     PKS = (1, 7, 10, 99, 123456789, int(views.URL_PLACEHOLDER), 10**20)
 
@@ -205,7 +215,11 @@ class Statement:
     def statement(self, count):
         """`count` of each kind: a linked debit (every other invoice paid
         twice), an open one with unpaid invoices beside it, one a rule
-        covers, one marked by hand, and a credit."""
+        covers, one marked by hand, and a credit - and a typed sale document
+        a credit pays, an electronic one a credit's amount matches. Sale
+        documents and links on EVERY call: Django skips a prefetch on an
+        empty list, and a fixture holding them on one side only would count
+        different queries for nothing."""
         for _ in range(count):
             self.made += 1
             n = self.made
@@ -230,6 +244,38 @@ class Statement:
                 amount=Decimal("50.00"),
                 fingerprint=f"page-cost-c{n}",
             )
+            typed = make_sale_document(reference=f"FV-COUT-{n}", customer=SALE_CUSTOMER, sold_on=day)
+            make_sale_line(typed, label="Location de salle", unit_price_ttc="70.00")
+            make_sale_payment(typed, sale_credit(day, "70.00", f"s{n}"))
+            read = make_sale_document(
+                reference=f"FE-COUT-{n}",
+                customer=SALE_CUSTOMER,
+                sold_on=day,
+                stated_total_ttc="120.00",
+                einvoice_format="CII",
+                einvoice_type_code="380",
+                seller_name="Bar des tests",
+            )
+            make_sale_line(read, label="Formule cocktail", quantity="1", total_ht="100.00", vat_rate="0.20")
+            sale_credit(day, "120.00", f"e{n}")
+
+
+#: The customer of the sale documents `Statement` makes, and its credits'
+#: payer as the bank prints it.
+SALE_CUSTOMER = "Exemple Événements SARL"
+SALE_PAYER = "EXEMPLE EVENEMENTS SARL"
+
+
+def sale_credit(day, amount, n) -> BankTransaction:
+    return BankTransaction.objects.create(
+        operation_date=day,
+        bank_type="VIREMENT",
+        kind=BankTransaction.Kind.TRANSFER,
+        label=f"VIR SEPA RECU /FRM {SALE_PAYER} /REF {n}",
+        counterparty=SALE_PAYER,
+        amount=Decimal(amount),
+        fingerprint=f"page-cost-{n}",
+    )
 
 
 class BankPageQueriesTests(Statement, TestCase):

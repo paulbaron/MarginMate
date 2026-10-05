@@ -1554,7 +1554,7 @@ class QueryTests(TestCase):
         it); here, that they are read once however many credits there are."""
         for number in range(5):
             self.credit(number)
-        self.assertEqual(income.QUERIES, 7)
+        self.assertEqual(income.QUERIES, 9)
         with self.assertNumQueries(income.QUERIES):
             report = income.income_for(DateRange())
         self.assertEqual(len(report.payouts), 5)

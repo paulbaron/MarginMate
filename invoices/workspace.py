@@ -558,8 +558,12 @@ _AN_AMOUNT = re.compile(r"-?\d{1,6}(?:[.,]\d{1,2})?")
 _A_GROUPED_AMOUNT = re.compile(r"(?<![\d.,/-])-?\d{1,3}(?:\s\d{3})+[.,]\d{1,2}(?![\d.,])")
 
 
-def _a_date(term: str) -> dict | None:
-    """The date lookups `term` means, or None when it is not exactly a date.
+def a_date(term: str, field: str = "invoice_date") -> dict | None:
+    """The lookups on the date `field` that `term` means, or None when it is
+    not exactly a date: a day (12/07/2026), a month (07/2026) or a year
+    (2026), as a page writes them. Achats' documents by their
+    `invoice_date`, the sale documents (recipes/sale_documents.py) by their
+    `sold_on` - one reading of a date typed in a search.
 
     A day that is no day (« 32/07/2026 ») and a month that is no month
     (« 13/2025 ») are not dates either: they fall through to being matched
@@ -573,7 +577,7 @@ def _a_date(term: str) -> dict | None:
             date(year, month, day)
         except ValueError:
             return None
-        return {"invoice_date__day": day, "invoice_date__month": month, "invoice_date__year": year}
+        return {f"{field}__day": day, f"{field}__month": month, f"{field}__year": year}
     month_of = _A_MONTH.fullmatch(term)
     if month_of:
         month, year = (int(part) for part in month_of.groups())
@@ -583,10 +587,14 @@ def _a_date(term: str) -> dict | None:
             date(year, month, 1)
         except ValueError:
             return None
-        return {"invoice_date__month": month, "invoice_date__year": year}
+        return {f"{field}__month": month, f"{field}__year": year}
     if _A_YEAR.fullmatch(term):
-        return {"invoice_date__year": int(term)}
+        return {f"{field}__year": int(term)}
     return None
+
+
+#: The name it had while Achats alone asked it (a document's `invoice_date`).
+_a_date = a_date
 
 
 def _suppliers_named(term: str) -> list[int]:
@@ -628,7 +636,7 @@ def documents_matching(invoices, query: str):
         named = _suppliers_named(term)
         if named:
             matches |= Q(supplier_id__in=named)
-        day = _a_date(term)
+        day = a_date(term)
         if day:
             matches |= Q(**day)
         if _AN_AMOUNT.fullmatch(term):

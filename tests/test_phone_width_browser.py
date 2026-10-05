@@ -26,7 +26,10 @@ up at the bar, were tables two to three times as wide as the screen.
   space, its « Modifier » card, the tick page - a ticked item, the sticky
   « Courses terminées » - and a finished list; then (05/10) the add form's
   unit select filled by its script, a card's select for an item counted in
-  bottles, and « 3 bouteilles de 70 cl » in the store.
+  bottles, and « 3 bouteilles de 70 cl » in the store. « Factures de
+  vente » (05/10): the tab's list, an electronic invoice whose line is tied
+  to a recipe of 60 letters - each select of its grid as wide as that
+  option - and a typed one whose line's label is one word of 60 letters.
 * **A table's search box sits before the box it scrolls in**, never inside
   it, where it scrolled away with the columns (static/js/datatable.js).
 * **A ticket's photo is part of the page** once stacked above its lines:
@@ -107,6 +110,9 @@ TERMINAL = "TERMINAL EXEMPLE ENCAISSEMENTS"
 #: A shopping list item's note typed as one word of 60 letters: in its cell,
 #: under its tick in the store.
 LIST_NOTE = f"{ONE_WORD}{ONE_WORD[:20]}"
+#: A recipe's name of 60 letters, in a « facture de vente »'s select of what
+#: a line sold (a <select> is as wide as its longest option).
+LONG_RECIPE = ("Formule cocktail signature de la maison exemple " * 2)[:60]
 
 
 def credit_row(day, bank_type, label, amount):
@@ -474,6 +480,29 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         self.list_run = f"{self.list_edit}&mode=courses"
         self.list_finished = f"{list_page}?liste={lists.finished.pk}"
         self.wholesaler_name = shopping.wholesaler.name
+        # « Factures de vente » (05/10): the tab listing them, an electronic
+        # invoice whose line is tied to a recipe of 60 letters, and a typed
+        # one whose line's label is one word of 60 letters (all invented).
+        from recipes.models import SaleDocument
+        from tests.factories import make_sale_document, make_sale_line
+
+        signature = make_recipe(name=LONG_RECIPE, selling_price_ttc="9.50")
+        sale = make_sale_document(
+            reference="FV-2026-0101",
+            customer=ONE_WORD,
+            sold_on=date(2026, 6, 20),
+            einvoice_format="CII",
+            einvoice_type_code="380",
+            stated_total_ttc="202.80",
+            stated_total_ht="169.00",
+            counting=SaleDocument.Counting.COUNTED,
+        )
+        make_sale_line(sale, label=LONG_RECIPE, quantity="2", total_ht="169.00", vat_rate="0.20", recipe=signature)
+        typed = make_sale_document(reference="FV-2026-0102", customer="Mariage Exemple", sold_on=date(2026, 6, 21))
+        make_sale_line(typed, label=LIST_NOTE, unit_price_ttc="150")
+        self.sales = f"{reverse('recipes:sales_list')}?du=2026-06-01&au=2026-06-30"
+        self.sale_einvoice = reverse("recipes:sale_document_update", args=[sale.pk])
+        self.sale_typed = reverse("recipes:sale_document_update", args=[typed.pk])
 
     def test_no_page_is_wider_than_the_phone(self):
         """Measured on the code of 29/09 with this data, every page but
@@ -509,6 +538,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "une ligne en bouteilles à modifier": self.list_gin_card,
             "les courses à cocher": self.list_run,
             "une liste terminée": self.list_finished,
+            "les factures de vente": self.sales,
+            "une facture de vente électronique": self.sale_einvoice,
+            "une facture de vente saisie": self.sale_typed,
         }
         problems = []
         for width in WIDTHS:
@@ -586,11 +618,17 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             (self.list_run, "#courses .shopping-tick.is-ticked", "Sirop exemple"),
             (self.list_run, "form.shopping-finish", "Garder les articles non pris"),
             (self.list_finished, "table[data-table-label='courses terminées']", "Citron exemple"),
+            (self.sales, "table[data-table-label='factures de vente']", ONE_WORD),
+            (self.sale_einvoice, "table[data-table-label='lignes'] select", LONG_RECIPE),
+            (self.sale_typed, "#sale-line-rows input[name$='-label']", LIST_NOTE),
+            (self.sale_typed, "#sale-line-rows select", LONG_RECIPE),
         ):
             with self.subTest(page=path, css=css):
                 self.open(path)
+                # A field's text is its value: a typed line's « Libellé ».
                 texts = self.script(
-                    "return Array.from(document.querySelectorAll(arguments[0])).map(function (e) { return e.textContent; });",
+                    "return Array.from(document.querySelectorAll(arguments[0]))"
+                    ".map(function (e) { return e.tagName === 'INPUT' ? e.value : e.textContent; });",
                     css,
                 )
                 self.assertTrue(any(words in text for text in texts), f"{css}: no « {words} » in {texts!r:.300}")

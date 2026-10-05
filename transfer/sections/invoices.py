@@ -32,7 +32,6 @@ section's prune, after it.
 from __future__ import annotations
 
 import os
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
@@ -42,10 +41,9 @@ from django.core.files.storage import default_storage
 from django.utils import timezone
 
 from accounts import paths
-from accounts.tenancy import tenant_key
 from transfer import codec, keys, registry
 from transfer.archive import ArchiveError
-from transfer.sections.base import FileRefused, Section
+from transfer.sections.base import FileRefused, Section, stored_bytes
 from transfer.sections.suppliers import day, plural, said
 
 KEY = "factures"
@@ -107,7 +105,11 @@ LINE_KNOWN = ("product", *LINE_FIELDS)
 PRODUCT_KNOWN = ("supplier", *PRODUCT_FIELDS, "created_at", "classified")
 
 BATCH = 500
-SIZE_CACHE_SECONDS = 60
+#: Where this section's files live: an invoice's or a ticket's. The archive
+#: takes every folder documents live in (`archive.STORAGE_FOLDERS`): a
+#: record naming one of « Consignes »' or of the sales invoices' would take
+#: their file over.
+FOLDERS = ("invoices/", "receipts/")
 
 LABELS = {
     "supplier": "fournisseur",
@@ -272,33 +274,7 @@ def _stored(name: str) -> bool:
         return False
 
 
-# -- sizes, for count() ------------------------------------------------------------------
-
-#: (tenant, media folder) → (hash of the names, when, bytes). Per tenant:
-#: two tenants restored from one archive name the same files, and one slot
-#: for the process gave bar B the size kept for bar A a minute before (and
-#: two bars taking turns recounted every time). One small entry per tenant.
-_SIZES: dict[tuple[str, str], tuple[int, float, int]] = {}
-
-
-def _bytes_of(names: frozenset[str]) -> int:
-    """Their total size on disk, a missing one counting nothing. Drawn on
-    every visit of the page: 1 520 stat calls, kept a minute - for the
-    bound tenant's media folder only."""
-    where = (tenant_key(), os.fspath(paths.media_root()))
-    token = hash(names)
-    now = time.monotonic()
-    kept = _SIZES.get(where)
-    if kept is not None and kept[0] == token and now - kept[1] < SIZE_CACHE_SECONDS:
-        return kept[2]
-    total = 0
-    for name in names:
-        try:
-            total += os.path.getsize(default_storage.path(name))
-        except (OSError, SuspiciousFileOperation, NotImplementedError, ValueError):
-            continue
-    _SIZES[where] = (token, now, total)
-    return total
+# -- files, for count() and clear() -----------------------------------------------------
 
 
 def _named_files() -> set[str]:
@@ -339,7 +315,7 @@ class InvoicesSection(Section):
             "documents": Invoice.objects.count(),
             "lignes": InvoiceLine.objects.count(),
             "fichiers": len(names),
-            "Mo de fichiers": round(_bytes_of(names) / 1_000_000),
+            "Mo de fichiers": round(stored_bytes(names, kind=KEY) / 1_000_000),
         }
 
     def snapshot(self):
@@ -611,6 +587,8 @@ class InvoicesSection(Section):
         if ref.get("missing"):
             return _Missing(ref["name"])
         self._ctx.check_file(ref, ref["name"])
+        if not ref["name"].startswith(FOLDERS):
+            raise FileRefused(f"fichier hors des dossiers des factures et des tickets (« {ref['name'][:80]} »)")
         return ref
 
     def _lines(self, record: dict, line_model) -> list | None:

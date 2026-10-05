@@ -7,10 +7,10 @@ so nothing here blends them:
   INVOICED over the window, goods and charges alike. It is the only one that
   answers « have I made money this month ».
 * **the products margin** - everything that came in against what the recipes
-  sold actually consumed, plus the articles flagged « compter dans la marge
-  produits » (the paper towels: no recipe eats them, so what was bought of
-  them over the window is the only measure there is). It answers « am I
-  selling dear enough ».
+  and the articles sold actually consumed, plus the articles flagged
+  « compter dans la marge produits » (the paper towels: no recipe eats them,
+  so what was bought of them over the window is the only measure there is).
+  It answers « am I selling dear enough ».
 * **the margins by category**, on both dimensions the till already stores:
   `PosProduct.category` (Bières, Cocktails, Planches…) and
   `PosProduct.typology` (the owner's « food, drinks »).
@@ -64,7 +64,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import NamedTuple
 
 from django.db.models import Prefetch, Q, Sum
@@ -77,10 +77,13 @@ from recipes.models import (
     Recipe,
     RecipeIngredient,
     RecipeSale,
+    SaleDocument,
     SaleDocumentLine,
+    read_unit_costs,
     scoped_unit_cost,
     variation_scope,
 )
+from recipes.sale_documents import deposits_counted_twice
 
 ZERO = Decimal("0")
 CENTS = Decimal("0.01")
@@ -445,9 +448,26 @@ class MarginReport:
     revenue_documents: Money = Money()
     revenue: Money = Money()
     #: The part of `revenue.ttc` with no HT behind it: a till line whose rate
-    #: the export did not state, and a sale document line on an article,
-    #: which carries no rate at all. Never converted at an assumed rate.
+    #: the export did not state, and a sale document's money with no rate (an
+    #: article typed without one, a line tied to nothing typed without one,
+    #: the part of a typed total no line carries). Never converted at an
+    #: assumed rate.
     revenue_without_rate_ttc: Decimal = ZERO
+    #: What the sale documents took with no recipe or article behind it - lines
+    #: tied to nothing, the part of a stated total no tied line carries, an
+    #: electronic invoice's charges - TTC. In `revenue` and in
+    #: `revenue_uncosted` already; named in the foot of the page.
+    document_free_ttc: Decimal = ZERO
+    #: The part of `document_free_ttc` with no rate either - also in
+    #: `revenue_without_rate_ttc`: the foot says it once, as « dont ».
+    document_free_without_rate_ttc: Decimal = ZERO
+    #: Sale documents of the window that count in nothing - « Déjà comptée par
+    #: la caisse », « Acompte » (SaleDocument.counting): listed on « Ventes »,
+    #: out of every figure here, named in the foot.
+    documents_set_aside: int = 0
+    #: (deposit, final) labels of a deposit counted here AND deducted by its
+    #: final invoice (`_deposits_counted_twice`): the same sale twice.
+    deposits_counted_twice: list[tuple[str, str]] = field(default_factory=list)
 
     spend_goods: Money = Money()
     spend_charges: Money = Money()
@@ -478,14 +498,20 @@ class MarginReport:
     #: What those take out of `spend`, each place counted once.
     spend_left_out: Money = Money()
 
-    #: What the recipes sold consumed, HT: every one at its cheapest
-    #: variation, and every one at its dearest.
+    #: What the recipes and the articles sold consumed, HT: every recipe at
+    #: its cheapest variation, and every one at its dearest (an article costs
+    #: one price, the same at both ends).
     cogs_low: Decimal = ZERO
     cogs_high: Decimal = ZERO
     #: Servings costed off the till (a sale document's recipe lines). They
     #: are in the cogs and in no unit count, so a note dividing the cogs by
     #: `costed_units` alone prices a serving at several times what it costs.
     document_costed_units: Decimal = ZERO
+    #: Distinct articles of sale documents costed (a rate, a price of the
+    #: line's own and a purchase price): counted apart from
+    #: `document_costed_units`, whose units are servings - an article's
+    #: quantity is in its own unit.
+    document_costed_articles: int = 0
     #: The flagged articles, bought over the window. One number, not a range:
     #: an invoice charges what it charges.
     extra_products_ht: Decimal = ZERO
@@ -606,10 +632,12 @@ class MarginReport:
     def revenue_coverage(self) -> Decimal | None:
         """The same thing in money rather than in units, over the till AND
         the sale documents: a category selling four planches at 18 € weighs
-        far more here than in the unit count."""
+        far more here than in the unit count. Never above all of it: an
+        uncosted amount below zero (a credit note's line nobody costed) is
+        no part costed beyond the whole."""
         if self.revenue.ht <= 0:
             return None
-        return (self.revenue.ht - self.revenue_uncosted.ht) / self.revenue.ht
+        return min((self.revenue.ht - self.revenue_uncosted.ht) / self.revenue.ht, Decimal("1"))
 
 
 def margins_for(window: DateRange, left_out: Iterable[str] = ()) -> MarginReport:
@@ -618,8 +646,12 @@ def margins_for(window: DateRange, left_out: Iterable[str] = ()) -> MarginReport
     made by `supplier_key` and its siblings; one the page does not know is
     ignored).
 
-    One pass over the till's days, one over the sale documents, one over the
-    recipes they sold and one per level of sub-recipes below them, one over
+    One pass over the till's days, two over the sale documents (the
+    documents, then their lines), one over the recipes they sold and one per
+    level of sub-recipes below them, one for the purchase prices of the
+    articles sold with a rate and a price of their own (none without such a
+    line), two at most for the deposits a final invoice deducts (none unless
+    a counted document of the window states an amount already paid), one over
     the invoices and their lines, three for the articles (every article,
     every recipe line naming one, every purchase) and at most one per KIND of
     key left out.
@@ -629,13 +661,16 @@ def margins_for(window: DateRange, left_out: Iterable[str] = ()) -> MarginReport
     report = MarginReport(window=window)
 
     till_rows = _till_rows(window)
-    document_lines = _document_lines(window)
+    documents = _documents(window)
+    counted = [document for document in documents if document.counts]
+    report.documents_set_aside = len(documents) - len(counted)
     sold_recipes = {row[_RECIPE_OF_ROW] for row in till_rows if row[_RECIPE_OF_ROW]}
-    sold_recipes |= {line.recipe_id for line in document_lines if line.recipe_id}
+    sold_recipes |= {line.recipe_id for document in counted for line in document.line_list if line.recipe_id}
     costs, why_not = _recipe_costs(sold_recipes)
 
     _read_the_till(report, till_rows, costs, why_not)
-    _read_the_documents(report, document_lines, costs)
+    _read_the_documents(report, counted, costs)
+    _deposits_counted_twice(report, counted)
     _read_the_invoices(report, window)
     _leave_out(report, _resolve(left_out))
     _read_the_flagged_articles(report, window)
@@ -680,10 +715,16 @@ def _till_rows(window: DateRange) -> list[tuple]:
     return list(window.limit(PosProductDailyQuantity.objects.all(), "sold_on").values_list(*_TILL_COLUMNS))
 
 
-def _document_lines(window: DateRange) -> list:
-    return list(
-        window.limit(SaleDocumentLine.objects.all(), "document__sold_on").select_related("recipe", "stock_type")
+def _documents(window: DateRange) -> list[SaleDocument]:
+    """The window's sale documents with their lines (`line_list`) - two
+    queries, whatever they hold. A document with no line (a typed total
+    alone) still has money to count."""
+    lines = Prefetch(
+        "lines",
+        queryset=SaleDocumentLine.objects.select_related("recipe", "stock_type").order_by("id"),
+        to_attr="line_list",
     )
+    return list(window.limit(SaleDocument.objects.all(), "sold_on").order_by().prefetch_related(lines))
 
 
 def _recipe_costs(recipe_ids: set[int]) -> tuple[dict[int, tuple[Decimal, Decimal]], dict[int, str]]:
@@ -888,61 +929,342 @@ def _ordered(slices: dict[str, Slice]) -> list[Slice]:
 # -- sales made off the till -------------------------------------------------
 
 
-def _read_the_documents(report: MarginReport, lines: list, costs: dict) -> None:
-    """SaleDocument's own lines: a tab settled by hand, a private event.
+class LineCost(NamedTuple):
+    """What one line of a sale document consumed, HT: at the recipe's
+    cheapest and dearest variation (an article is one price, both ends
+    alike), the servings it counts (a recipe line's; an article's quantity
+    is in its own unit) and the article it was (None for a recipe)."""
 
-    Their HT is worked out per VAT RATE over the whole window rather than per
-    line, the same rule the till import follows: a receipt rounds per line,
-    a VAT return does not, and three coupes at 3,50 € are 9,55 € HT, not
-    9,54 €.
+    low: Decimal
+    high: Decimal
+    servings: Decimal
+    article_id: int | None
 
-    **An article sold as itself is income no margin can be stated on.** It
-    carries no VAT rate anywhere - a recipe has one, an article does not - so
-    its money stays TTC, is declared in `revenue_without_rate_ttc` and never
-    reaches `revenue.ht`. Its purchase price is therefore left out of the
-    cogs too: taken in, that cost comes off an HT its revenue never joined,
-    and two bottles bought at 3 € and sold at 10 € each printed a products
-    margin of **-6,00 €** - a profitable sale shown as a loss. Both sides out
-    or neither; the amount is named at the foot of the page instead.
 
-    They hold no till category, so they are in no slice; they are in
-    `revenue_documents` and in the cogs, and the page says so.
+def _both_sides_out(line: SaleDocumentLine) -> bool:
+    """An article line with no VAT rate, or no price of its own: its money
+    stays TTC and its purchase price stays out of the cogs (the article
+    rule, `_read_the_documents`)."""
+    return bool(line.stock_type_id) and (line.rate is None or not line.has_own_price)
+
+
+def _costs_its_article(line: SaleDocumentLine) -> bool:
+    """Whether a line's article is costed by its purchase price: both sides
+    in, and not an article ticked « compter dans la marge produits », whose
+    PURCHASES are already its cost (`extra_products_ht`, by invoice date)."""
+    return bool(line.stock_type_id) and not _both_sides_out(line) and not line.stock_type.count_in_products_margin
+
+
+def _line_cost(line: SaleDocumentLine, costs: dict, unit_costs: dict) -> LineCost | None:
+    """What one line consumed (`SaleDocumentLine.consumption`), HT - or None,
+    the line uncosted:
+
+    * nothing left the stock (consumed 0): a « 0 » typed on a keg must not
+      make its 150 € « chiffrés » at 0 €;
+    * a consumption against the money's sign (the mirror shape): never
+      booked, whatever brought it - a form refuses it;
+    * a recipe with no cost (`_recipe_costs` says why), a line tied to
+      nothing;
+    * an article both sides out, one ticked « compter dans la marge
+      produits » (costed at 0 it printed a 100 % margin and inflated « Part
+      chiffrée »), one never bought - no price behind it, and costed it
+      would print its whole amount as margin.
     """
-    # Keyed by the recipe's own `_vat_divisor` rather than by its rate: a
-    # rate of exactly -1 makes (1 + rate) zero, and dividing by it here is
-    # the same ZeroDivisionError the model already guards every page that
-    # merely LISTS a recipe against (a row written by a raw update, past the
-    # form's validators). One definition, and this page cannot be the one
-    # that reintroduces it.
-    ttc_by_rate: dict[Decimal, Decimal] = {}
-    uncosted_ttc_by_rate: dict[Decimal, Decimal] = {}
+    consumption = line.consumption
+    if consumption == 0 or not line.consumption_agrees:
+        return None
+    if line.recipe_id:
+        cost_range = costs.get(line.recipe_id)
+        if cost_range is None:
+            return None
+        return LineCost(cost_range[0] * consumption, cost_range[1] * consumption, consumption, None)
+    if not _costs_its_article(line):
+        return None
+    unit = unit_costs.get(line.stock_type_id, ZERO)
+    if unit <= 0:
+        return None
+    return LineCost(unit * consumption, unit * consumption, ZERO, line.stock_type_id)
+
+
+def _read_the_documents(report: MarginReport, documents: list[SaleDocument], costs: dict) -> None:
+    """The sale documents that count: a tab settled by hand, a private event,
+    an invoice the bar issued. Each is booked at exactly its own total, to
+    the cent - the one the « Ventes » tab and the bank read
+    (`SaleDocument.total_ttc`) - so the three never disagree on one
+    document's money.
+
+    **A document that states its HT** - every electronic invoice, a document
+    typed with « Total HT » - is summed as stated (`_stated_document`).
+    **A typed document without one** has its lines' HT worked out per VAT
+    RATE over the whole window rather than per line, the same rule the till
+    import follows: a receipt rounds per line, a VAT return does not, and
+    three coupes at 3,50 € are 9,55 € HT, not 9,54 €. A total typed beside
+    its lines is booked whatever the difference. What no line carries is
+    revenue with no recipe or article - TTC, no rate - when positive; when
+    negative (a discount, a package price) it is spread over the lines with a
+    positive TTC, each share in its own line's rate, so the HT drops with
+    it: a negative amount « sans taux » would say the HT margin is too LOW
+    when it is too high. Only with no such line (a credit note typed as its
+    total alone) is a negative one booked as it is, TTC, rather than lost.
+
+    **The article rule.** An article sold as itself puts both sides in - its
+    HT, and its purchase price times what was consumed - only with a VAT
+    rate AND a price of the line's own (an electronic invoice's HT, a typed
+    price). Without either its money stays TTC, is declared in
+    `revenue_without_rate_ttc` and never reaches `revenue.ht`, and its
+    purchase price is left out of the cogs too: taken in, that cost comes
+    off an HT its revenue never joined, and two bottles bought at 3 € and
+    sold at 10 € each printed a products margin of **-6,00 €** - a
+    profitable sale shown as a loss. Both sides out or neither. An article
+    ticked « compter dans la marge produits » is revenue with no cost added,
+    uncosted (`_line_cost`).
+
+    Lines tied to nothing, the part of a total no tied line carries and an
+    electronic invoice's charges are `document_free_ttc`: in the revenue,
+    uncosted, named at the foot of the page. The documents hold no till
+    category, so they are in no slice; they are in `revenue_documents` and
+    in the cogs, and the page says so.
+    """
+    articles = {line.stock_type_id for document in documents for line in document.line_list if _costs_its_article(line)}
+    unit_costs = read_unit_costs(articles) if articles else {}
+    # Keyed by each line's own divisor (`SaleDocumentLine.divisor`, through
+    # recipes.models.vat_divisor) rather than by its rate: a rate of exactly
+    # -1 makes (1 + rate) zero, and dividing by it here is the same
+    # ZeroDivisionError the model already guards every page that merely LISTS
+    # a recipe against (a row written by a raw update, past the form's
+    # validators). One definition, and this page cannot be the one that
+    # reintroduces it.
+    ttc_by_divisor: dict[Decimal, Decimal] = {}
+    uncosted_ttc_by_divisor: dict[Decimal, Decimal] = {}
     without_rate = ZERO
     uncosted_without_rate = ZERO
+    stated = Money()
+    stated_uncosted = Money()
+    costed_articles: set[int] = set()
 
-    for line in lines:
-        total_ttc = line.total_ttc
-        if line.recipe_id:
-            divisor = line.recipe._vat_divisor
-            ttc_by_rate[divisor] = ttc_by_rate.get(divisor, ZERO) + total_ttc
-            cost_range = costs.get(line.recipe_id)
-            if cost_range is None:
-                uncosted_ttc_by_rate[divisor] = uncosted_ttc_by_rate.get(divisor, ZERO) + total_ttc
+    for document in documents:
+        lines = document.line_list
+        line_costs = [_line_cost(line, costs, unit_costs) for line in lines]
+        for cost in line_costs:
+            if cost is None:
                 continue
-            report.cogs_low += cost_range[0] * line.quantity
-            report.cogs_high += cost_range[1] * line.quantity
-            report.document_costed_units += line.quantity
+            report.cogs_low += cost.low
+            report.cogs_high += cost.high
+            report.document_costed_units += cost.servings
+            if cost.article_id is not None:
+                costed_articles.add(cost.article_id)
+
+        if document.states_its_ht:
+            revenue, costed, free = _stated_document(document, lines, line_costs)
+            stated += revenue
+            stated_uncosted += revenue - costed
+            report.document_free_ttc += free
             continue
 
-        # An article sold as itself: its money has no HT, so its cost has
-        # nowhere to be taken off. Uncosted revenue, both ways.
-        without_rate += total_ttc
-        uncosted_without_rate += total_ttc
+        totals, rest = _typed_totals(document, lines)
+        for line, total, cost in zip(lines, totals, line_costs, strict=True):
+            divisor = None if _both_sides_out(line) else line.divisor
+            if divisor is None:
+                # No HT behind it: an article both sides out, or a line tied
+                # to nothing typed without a rate. Uncosted revenue, TTC.
+                without_rate += total
+                uncosted_without_rate += total
+            else:
+                ttc_by_divisor[divisor] = ttc_by_divisor.get(divisor, ZERO) + total
+                if cost is None:
+                    uncosted_ttc_by_divisor[divisor] = uncosted_ttc_by_divisor.get(divisor, ZERO) + total
+            if not line.is_tied:
+                report.document_free_ttc += total
+                if divisor is None:
+                    report.document_free_without_rate_ttc += total
+        if rest:
+            # Money no line carries - or, negative, no line with money to
+            # take it (a credit note typed as its total alone): no recipe, no
+            # article, no rate, and still booked.
+            without_rate += rest
+            uncosted_without_rate += rest
+            report.document_free_ttc += rest
+            report.document_free_without_rate_ttc += rest
 
-    report.revenue_documents = Money(_ht_per_rate(ttc_by_rate), _total(ttc_by_rate) + without_rate)
+    report.revenue_documents = Money(
+        _ht_per_rate(ttc_by_divisor) + stated.ht, _total(ttc_by_divisor) + without_rate + stated.ttc
+    )
     report.revenue_uncosted += Money(
-        _ht_per_rate(uncosted_ttc_by_rate), _total(uncosted_ttc_by_rate) + uncosted_without_rate
+        _ht_per_rate(uncosted_ttc_by_divisor) + stated_uncosted.ht,
+        _total(uncosted_ttc_by_divisor) + uncosted_without_rate + stated_uncosted.ttc,
     )
     report.revenue_without_rate_ttc += without_rate
+    report.document_costed_articles = len(costed_articles)
+
+
+def _typed_totals(document: SaleDocument, lines: list[SaleDocumentLine]) -> tuple[list[Decimal], Decimal]:
+    """(each line's TTC as booked, the rest no line carries) for a typed
+    document that states no HT.
+
+    **A discount is spread, whatever typed it.** A negative rest (a total
+    typed below the lines) and a line tied to nothing below zero (« Remise
+    1 x -20,00 € ») are one discount, shared over the lines with a positive
+    TTC (`_spread`), each share in its own line's bucket: the HT drops with
+    it, and the free line, emptied, is no « free » money below zero. With no
+    positive line to take it (a credit note made of negative lines alone),
+    the lines and the rest are booked as typed.
+
+    **To the cent.** The lines are then brought to the document's own total
+    - the one the « Ventes » tab and the bank read (`total_ttc_of`), less
+    the positive rest booked apart -, the sub-cent part of a price times a
+    four-decimal quantity on the largest line: three lines of 1,16655 € are
+    3,51 € here as there, never 3,50 €."""
+    totals = [line.total_ttc for line in lines]
+    lines_total = cents(sum(totals, start=ZERO))
+    rest = ZERO
+    if document.stated_total_ttc is not None:
+        rest = document.stated_total_ttc - lines_total
+    free_below_zero = [not line.is_tied and total < 0 for line, total in zip(lines, totals, strict=True)]
+    discount = sum((total for total, below in zip(totals, free_below_zero, strict=True) if below), start=ZERO)
+    if rest < 0:
+        discount += rest
+    if discount < 0 and any(total > 0 for total in totals):
+        totals = [ZERO if below else total for total, below in zip(totals, free_below_zero, strict=True)]
+        totals = [total + share for total, share in zip(totals, _spread(discount, totals), strict=True)]
+        if rest < 0:
+            rest = ZERO
+    drift = document.total_ttc_of(lines) - rest - sum(totals, start=ZERO)
+    if drift and totals:
+        largest = max(range(len(totals)), key=lambda index: (abs(totals[index]), -index))
+        totals[largest] += drift
+    return totals, rest
+
+
+def _stated_revenue(document: SaleDocument, lines: list[SaleDocumentLine]) -> Money:
+    """What a document stating its HT took: its stated HT (BT-109), else its
+    lines' and its adjustment's; its stated TTC (BT-112), else its lines' at
+    their rates and its adjustment at its own, to the cent - the total the
+    tab and the bank read (`SaleDocument.total_ttc_of`)."""
+    ht = document.stated_total_ht
+    if ht is None:
+        ht = sum((line.total_ht for line in lines if line.total_ht is not None), start=ZERO) + document.adjustment_ht
+    return Money(ht, document.total_ttc_of(lines))
+
+
+def _line_ht(line: SaleDocumentLine, ttc: Decimal) -> Decimal:
+    """A line's HT: the one it states, else its TTC at its rate - none
+    without a rate (it is then never costed)."""
+    if line.total_ht is not None:
+        return line.total_ht
+    divisor = line.divisor
+    return ttc / divisor if divisor is not None else ZERO
+
+
+def _stated_document(
+    document: SaleDocument, lines: list[SaleDocumentLine], line_costs: list[LineCost | None]
+) -> tuple[Money, Money, Decimal]:
+    """(revenue, costed, free) of a document that states its HT, summed as
+    stated - never rounded per rate over the window.
+
+    **An allowance is spread, a charge is not.** An electronic invoice's
+    allowance (a negative `adjustment_ht`, BG-20) goes on its lines with a
+    positive HT, pro rata, to the cent; each share's TTC is at the
+    allowance's OWN rate (CLAUDE.md, BG-20/BG-21 carry their own), the
+    line's only when the invoice states none. A typed document's negative
+    remainder - its total less its lines - is spread the same way in TTC,
+    each share's HT at its line's rate. A charge (BG-21), and any part of
+    the total no tied line carries, stays free: revenue with no cost.
+
+    `costed` is the costed lines' money after their share, each part to the
+    cent (as an invoice is, `_invoice_money`), then held inside the revenue
+    - the same sign, never beyond it: an invoice whose own check fails
+    (BT-109 is not its lines' sum) must not print a coverage above 100 %;
+    the failure is said on its page. `free` is the revenue less the tied
+    lines after their share, held the same way."""
+    revenue = _stated_revenue(document, lines)
+    ttc = [line.total_ttc for line in lines]
+    ht = [_line_ht(line, total) for line, total in zip(lines, ttc, strict=True)]
+    nothing = [ZERO] * len(lines)
+    if document.is_einvoice:
+        shares_ht = _spread(document.adjustment_ht, ht) if document.adjustment_ht < 0 else nothing
+        rate = document.adjustment_vat_rate
+        shares_ttc = [
+            share * (Decimal("1") + (rate if rate is not None else (line.vat_rate or ZERO)))
+            for share, line in zip(shares_ht, lines, strict=True)
+        ]
+    else:
+        rest = revenue.ttc - cents(sum(ttc, start=ZERO))
+        shares_ttc = _spread(rest, ttc) if rest < 0 else nothing
+        shares_ht = [
+            share / line.divisor if line.divisor is not None else ZERO
+            for share, line in zip(shares_ttc, lines, strict=True)
+        ]
+    after = [
+        Money(line_ht + share_ht, line_ttc + share_ttc)
+        for line_ht, line_ttc, share_ht, share_ttc in zip(ht, ttc, shares_ht, shares_ttc, strict=True)
+    ]
+    costed_money = sum(
+        (money for money, cost in zip(after, line_costs, strict=True) if cost is not None), start=Money()
+    )
+    costed = Money(_held(cents(costed_money.ht), revenue.ht), _held(cents(costed_money.ttc), revenue.ttc))
+    tied_ttc = sum((money.ttc for money, line in zip(after, lines, strict=True) if line.is_tied), start=ZERO)
+    return revenue, costed, _held(revenue.ttc - cents(tied_ttc), revenue.ttc)
+
+
+def _held(value: Decimal, bound: Decimal) -> Decimal:
+    """`value` held between 0 and `bound`, on whichever side of 0 `bound` is:
+    a part of an amount is of its sign, and never more than all of it."""
+    if bound >= 0:
+        return min(max(value, ZERO), bound)
+    return max(min(value, ZERO), bound)
+
+
+def _spread(amount: Decimal, weights: list[Decimal]) -> list[Decimal]:
+    """`amount` shared over the positive `weights`, pro rata, to the cent:
+    each share rounded towards zero, and the cents left go to the largest
+    remainders, a tie to the first (the rule of Achats' spreads,
+    generic_receipt._spread) - 1,00 € over three equal lines is 0,34 + 0,33
+    + 0,33. A weight of 0 or below takes nothing; with no positive weight,
+    nothing is shared."""
+    shares = [ZERO] * len(weights)
+    taking = [index for index, weight in enumerate(weights) if weight > 0]
+    whole = abs(cents(amount))
+    if not taking or not whole:
+        return shares
+    base = sum((weights[index] for index in taking), start=ZERO)
+    exact = {index: whole * weights[index] / base for index in taking}
+    rounded = {index: value.quantize(CENTS, rounding=ROUND_DOWN) for index, value in exact.items()}
+    left = int((whole - sum(rounded.values(), start=ZERO)) / CENTS)
+    for index in sorted(taking, key=lambda index: (rounded[index] - exact[index], index))[:left]:
+        rounded[index] += CENTS
+    sign = -1 if amount < 0 else 1
+    for index in taking:
+        shares[index] = rounded[index] * sign
+    return shares
+
+
+def _named(reference: str, day: date) -> str:
+    """« n° F-7 du 20/03/2026 », or « du 20/03/2026 » without a number."""
+    return (f"n° {reference} " if reference else "") + f"du {day:%d/%m/%Y}"
+
+
+def _deposits_counted_twice(report: MarginReport, documents: list[SaleDocument]) -> None:
+    """(deposit, final) for each deposit counted AND deducted by its final
+    invoice: a document of the window that counts and states an amount
+    already paid (BT-113) and a customer; a document that counts, of the
+    same customer (`customer_fold`: case, accents and spaces aside), dated
+    on or before it, whose total is that amount within a cent. A deposit
+    invoice typed by hand, or written by a software as type 380, counts one
+    sale twice in two months otherwise. Said, never repaired: the person
+    marks the deposit « Acompte ».
+
+    The one rule is recipes.sale_documents.deposits_counted_twice, which the
+    documents' pages say it by too. Two queries at most, and none unless
+    such a final invoice is in the window: the documents that count with a
+    customer up to the last of them, compared in Python - SQLite compares
+    case for ASCII only and accents not at all, so `customer__iexact` missed
+    « Événements » for « EVENEMENTS » -, then the lines of those whose total
+    is their lines'.
+    """
+    for deposit, final in deposits_counted_twice(documents):
+        report.deposits_counted_twice.append(
+            (_named(deposit.reference, deposit.sold_on), _named(final.reference, final.sold_on))
+        )
 
 
 def _total(by_rate: dict[Decimal, Decimal]) -> Decimal:
@@ -951,7 +1273,8 @@ def _total(by_rate: dict[Decimal, Decimal]) -> Decimal:
 
 def _ht_per_rate(by_rate: dict[Decimal, Decimal]) -> Decimal:
     """The TTC accumulated per rate, taken back to HT once per rate and
-    rounded there. Keyed by `Recipe._vat_divisor`, which is never zero."""
+    rounded there. Keyed by `recipes.models.vat_divisor`, which is never
+    zero."""
     return sum((cents(total / divisor) for divisor, total in by_rate.items()), start=ZERO)
 
 

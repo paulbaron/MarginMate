@@ -1,0 +1,42 @@
+{% load assets %}
+{% comment %}
+What a search found for ONE credit, alone: the search box swaps it into its
+own row (bank.views.sale_document_search), so this fragment holds neither
+the page, nor the row, nor the box itself.
+
+A « facture de vente » already paid is found too, with what pays it: an
+invoice settled in two goes is exactly the one a person must be able to say
+so of. Its page is linked for « Recettes & ventes » only.
+{% endcomment %}
+{% if search %}
+    {% if found %}
+        <form method="post" action="{% url 'bank:bank_line_action' line.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="sale_link">
+            <input type="hidden" name="next" value="{{ page_url }}">
+            {% for item in found %}
+                <div>
+                    {% if item.here %}
+                        <span class="muted">{{ item.document.label }} · {{ item.to_pay|money }} € — déjà rattachée à cette entrée</span>
+                    {% else %}
+                        <label>
+                            <input type="checkbox" name="document" value="{{ item.document.pk }}">
+                            {{ item.document.label }} · {{ item.due|money }} € à recevoir sur {{ item.to_pay|money }} €
+                        </label>
+                    {% endif %}
+                    {% if can.recipes and item.url %}<a class="read-as" href="{{ item.url }}">voir la facture</a>{% endif %}
+                    {% for other in item.elsewhere %}
+                        <span class="read-as">Déjà réglée par l'entrée du {{ other.credit_day|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.credit_amount|money }} €)</span>
+                    {% endfor %}
+                </div>
+            {% endfor %}
+            <button class="btn btn-small" type="submit">Rattacher les factures de vente choisies</button>
+            {% if more_found %}
+                {# A list cut in silence reads as « the invoice is not there ». #}
+                <p class="read-as">{{ more_found }} facture{{ more_found|pluralize }} de vente de plus : précisez la recherche.</p>
+            {% endif %}
+        </form>
+    {% else %}
+        <p class="muted">Aucune facture de vente ne répond à « {{ search }} ».</p>
+    {% endif %}
+{% endif %}

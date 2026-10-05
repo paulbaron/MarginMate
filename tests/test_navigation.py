@@ -29,6 +29,7 @@ from tests.factories import (
     make_invoice,
     make_product,
     make_recipe,
+    make_sale_document,
     make_stock_take,
     make_stock_type,
     make_supplier,
@@ -163,6 +164,7 @@ class NavigationTests(TestCase):
         supplier = make_supplier(code="METRO", name="Metro")
         invoice = make_invoice(supplier=supplier)
         recipe = make_recipe(name="Mule")
+        sale_document = make_sale_document(reference="FV-NAV-1", stated_total_ttc="10.00")
         stock_type = make_stock_type(name="Vodka")
         # An invented employee: the repository is public.
         person = Employee.objects.create(last_name="Dupont", first_name="Jeanne", tuesday_hours=7)
@@ -228,6 +230,7 @@ class NavigationTests(TestCase):
                 reverse("recipes:pos_product_list"),
                 reverse("recipes:sales_list"),
                 reverse("recipes:sale_document_create"),
+                reverse("recipes:sale_document_update", args=[sale_document.pk]),
                 # « Import automatique des ventes », reached from the Ventes tab.
                 reverse("recipes:auto_sales"),
             ],

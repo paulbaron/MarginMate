@@ -340,14 +340,24 @@
     }, true);
 
     // A button with `data-busy-label` says so while its form's request runs
-    // (a ticket's OCR is seconds), and can't be pressed a second time.
+    // (a ticket's OCR is seconds), and can't be pressed a second time. A
+    // form's hidden default button (`data-default-submit`, the one Enter
+    // presses) goes with it: left live, a second Enter sent the form again
+    // while the first save ran.
     document.addEventListener("submit", function (event) {
         var button = event.target.querySelector("button[data-busy-label]");
-        if (!button || event.defaultPrevented) return;
+        var defaults = event.target.querySelectorAll("button[data-default-submit]");
+        if ((!button && !defaults.length) || event.defaultPrevented) return;
         setTimeout(function () {
-            button.setAttribute("data-idle-label", button.textContent);
-            button.disabled = true;
-            button.textContent = button.getAttribute("data-busy-label");
+            if (button) {
+                button.setAttribute("data-idle-label", button.textContent);
+                button.disabled = true;
+                button.textContent = button.getAttribute("data-busy-label");
+            }
+            defaults.forEach(function (hidden) {
+                hidden.setAttribute("data-idle-label", hidden.textContent);
+                hidden.disabled = true;
+            });
         }, 0);
     });
     // Back to a page the browser kept in memory: the request is long over.

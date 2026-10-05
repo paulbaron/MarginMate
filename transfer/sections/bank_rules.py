@@ -48,8 +48,8 @@ from bank.models import IgnoreRule, OperationRule, StatementFormat
 from bank.recognition import PATTERN_LABEL, name_key
 from transfer import codec, registry
 from transfer.archive import ArchiveError
-from transfer.sections.bank import delete_ids, named_fields, restore_moments, sentence
-from transfer.sections.base import Section
+from transfer.sections.bank import named_fields, sentence
+from transfer.sections.base import Section, delete_ids, restore_moments
 
 KEY = "regles_banque"
 

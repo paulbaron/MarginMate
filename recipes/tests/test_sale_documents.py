@@ -4,6 +4,9 @@ A line is either a recipe or a stock item sold as itself. Both have to reach
 the variance report - a tab settled off the books consumed exactly as much
 stock as one rung up on the till - but by different routes: a recipe through
 its ingredients, a stock item directly.
+
+The document's page is tested through the page itself, as a browser posts
+it: recipes/tests/test_sale_document_pages.py.
 """
 
 from datetime import date
@@ -16,7 +19,7 @@ from django.urls import reverse
 
 from inventory.models import UnitChoices
 from inventory.variance import quantities_sold
-from recipes.models import Recipe, SaleDocument, SaleDocumentLine
+from recipes.models import SaleDocument, SaleDocumentLine
 from recipes.sales import record_sales, sales_between, stock_type_sales_between
 from tests.factories import make_ingredient, make_movement, make_recipe, make_stock_type
 
@@ -27,18 +30,46 @@ class SaleDocumentModelTests(TestCase):
         self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
         self.document = SaleDocument.objects.create(sold_on=date(2026, 3, 5), reference="T-1")
 
-    def test_a_line_must_be_exactly_one_of_the_two(self):
+    def test_a_line_is_at_most_one_of_the_two_and_a_free_one_has_a_label(self):
+        """A line tied to nothing - « Location de salle » - is a line of an
+        invoice since the sales invoices; it says what it is by its label."""
         line = SaleDocumentLine(document=self.document, quantity=Decimal("1"))
-        with self.assertRaises(ValidationError):
+        with self.assertRaisesMessage(ValidationError, "Donnez un libellé à une ligne sans recette ni article."):
             line.clean()
+        line.label = "Location de salle"
+        line.clean()
         line.recipe = self.recipe
         line.stock_type = self.vodka
-        with self.assertRaises(ValidationError):
+        with self.assertRaisesMessage(ValidationError, "Choisissez une recette ou un article, pas les deux."):
             line.clean()
 
-    def test_the_database_refuses_a_line_with_neither(self):
+    def test_the_database_refuses_a_line_with_neither_source_nor_label(self):
         with self.assertRaises(IntegrityError):
             SaleDocumentLine.objects.create(document=self.document, quantity=Decimal("1"))
+
+    def test_the_database_refuses_a_line_with_both(self):
+        with self.assertRaises(IntegrityError):
+            SaleDocumentLine.objects.create(
+                document=self.document, recipe=self.recipe, stock_type=self.vodka, quantity=Decimal("1")
+            )
+
+    def test_a_stated_ht_needs_its_rate(self):
+        with self.assertRaises(IntegrityError):
+            SaleDocumentLine.objects.create(
+                document=self.document, label="Location de salle", quantity=Decimal("1"), total_ht=Decimal("100.00")
+            )
+
+    def test_a_consumed_quantity_needs_a_source(self):
+        with self.assertRaises(IntegrityError):
+            SaleDocumentLine.objects.create(
+                document=self.document, label="Location de salle", quantity=Decimal("1"), consumed_quantity=Decimal("1")
+            )
+
+    def test_a_rebuilt_line_is_never_tied(self):
+        with self.assertRaises(IntegrityError):
+            SaleDocumentLine.objects.create(
+                document=self.document, recipe=self.recipe, quantity=Decimal("1"), rebuilt=True
+            )
 
     def test_a_recipe_line_falls_back_to_the_recipes_own_price(self):
         line = SaleDocumentLine.objects.create(document=self.document, recipe=self.recipe, quantity=Decimal("3"))
@@ -67,6 +98,13 @@ class SaleDocumentModelTests(TestCase):
             unit_price_ttc=Decimal("20.00"),
         )
         self.assertEqual(self.document.total_ttc, Decimal("37.00"))
+
+    def test_a_stated_total_wins_over_the_lines(self):
+        """The total printed on the invoice is what was invoiced: its lines
+        may carry only part of it."""
+        SaleDocumentLine.objects.create(document=self.document, recipe=self.recipe, quantity=Decimal("2"))
+        self.document.stated_total_ttc = Decimal("150.00")
+        self.assertEqual(self.document.total_ttc, Decimal("150.00"))
 
 
 class SaleDocumentsReachTheVarianceReportTests(TestCase):
@@ -334,89 +372,3 @@ class QuantitiesSoldWithNestedChoicesTests(TestCase):
         self.assertIn(self.well_mix.pk, sold)
         self.assertEqual(sold[self.well_mix.pk].pool, sold[self.vodka.pk].pool)
         self.assertEqual(sold[self.well_mix.pk].pool, sold[self.liqueur.pk].pool)
-
-
-class SaleDocumentPageTests(TestCase):
-    def setUp(self):
-        self.recipe = make_recipe(name="Mule", selling_price_ttc="8.50")
-        self.vodka = make_stock_type(name="Vodka", unit=UnitChoices.LITRE)
-
-    def payload(self, rows):
-        data = {
-            "sold_on": "2026-03-05",
-            "reference": "",
-            "note": "",
-            "lines-TOTAL_FORMS": str(len(rows)),
-            "lines-INITIAL_FORMS": "0",
-            "lines-MIN_NUM_FORMS": "0",
-            "lines-MAX_NUM_FORMS": "1000",
-        }
-        for index, row in enumerate(rows):
-            for key, value in row.items():
-                data[f"lines-{index}-{key}"] = str(value)
-        return data
-
-    def test_a_document_can_hold_both_kinds_of_line(self):
-        response = self.client.post(
-            reverse("recipes:sale_document_create"),
-            self.payload(
-                [
-                    {"source": f"recipe:{self.recipe.pk}", "quantity": "3", "unit_price_ttc": ""},
-                    {"source": f"stock:{self.vodka.pk}", "quantity": "0.7", "unit_price_ttc": "20"},
-                ]
-            ),
-        )
-        self.assertEqual(response.status_code, 302)
-        document = SaleDocument.objects.get()
-        self.assertEqual(document.lines.filter(recipe__isnull=False).count(), 1)
-        self.assertEqual(document.lines.filter(stock_type__isnull=False).count(), 1)
-
-    def test_a_document_with_no_lines_is_refused(self):
-        response = self.client.post(reverse("recipes:sale_document_create"), self.payload([]))
-        self.assertContains(response, "Ajoutez au moins une ligne")
-        self.assertEqual(SaleDocument.objects.count(), 0)
-
-    def test_a_line_with_no_source_is_refused(self):
-        response = self.client.post(
-            reverse("recipes:sale_document_create"),
-            self.payload([{"source": "", "quantity": "3", "unit_price_ttc": ""}]),
-        )
-        self.assertContains(response, "Choisissez une recette")
-
-    def test_the_page_renders(self):
-        self.assertEqual(self.client.get(reverse("recipes:sale_document_create")).status_code, 200)
-
-    def test_the_date_defaults_to_today(self):
-        """A ModelForm seeds self.initial from the instance, so setting
-        fields["sold_on"].initial is silently ignored and the box renders
-        empty - which is a small thing you notice only by looking."""
-        from django.utils import timezone
-
-        from recipes.forms import SaleDocumentForm
-
-        self.assertEqual(SaleDocumentForm()["sold_on"].value(), timezone.localdate())
-
-    def test_documents_appear_on_the_sales_page(self):
-        document = SaleDocument.objects.create(sold_on=date(2026, 3, 5), reference="T-9")
-        SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
-        html = self.client.get(reverse("recipes:sales_list")).content.decode()
-        self.assertIn("T-9", html)
-        self.assertIn("Mule", html)
-
-    def test_a_document_can_be_deleted(self):
-        document = SaleDocument.objects.create(sold_on=date(2026, 3, 5))
-        SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
-        self.client.post(reverse("recipes:sale_document_delete", kwargs={"pk": document.pk}))
-        self.assertEqual(SaleDocument.objects.count(), 0)
-
-    def test_a_recipe_on_a_document_is_kept_with_a_message(self):
-        """A document's line PROTECTs its recipe: deleting the recipe says
-        where it is used, as an article does - not a 500."""
-        for reference in ("T-1", "T-2"):
-            document = SaleDocument.objects.create(sold_on=date(2026, 3, 5), reference=reference)
-            SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("2"))
-            SaleDocumentLine.objects.create(document=document, recipe=self.recipe, quantity=Decimal("1"))
-        response = self.client.post(reverse("recipes:recipe_delete", kwargs={"pk": self.recipe.pk}), follow=True)
-        self.assertRedirects(response, reverse("recipes:recipe_detail", kwargs={"pk": self.recipe.pk}))
-        self.assertContains(response, "utilisée dans 2 document(s) de vente")
-        self.assertTrue(Recipe.objects.filter(pk=self.recipe.pk).exists())

@@ -207,6 +207,12 @@ class AreasOfFileTests(SimpleTestCase):
             with self.subTest(name=name):
                 self.assertEqual(areas_of_file(name), frozenset({"invoices"}))
 
+    def test_a_sale_document_s_file_is_recettes_et_ventes(self):
+        """A « facture de vente »'s file (recipes.SaleDocument, `ventes/`):
+        « Recettes & ventes », never « Factures » - and the other way round."""
+        self.assertEqual(areas_of_file("ventes/2026/10/x.pdf"), frozenset({"recipes"}))
+        self.assertEqual(areas_of_file("ventes/../invoices/f.pdf"), frozenset({"invoices"}))
+
     def test_a_name_climbing_into_another_folder_is_that_folder_s(self):
         for name in ("consignes/../invoices/f.pdf", "consignes/..\\invoices\\f.pdf", "consignes\\..\\invoices/f.pdf"):
             with self.subTest(name=name):
@@ -330,6 +336,14 @@ class AccessTests(SimpleTestCase):
         self.assertEqual(lists.entry, "inventory:shopping_lists")
         # Its help says what it shows, and that it shows no price.
         self.assertIn("sans les prix", lists.help)
+
+    def test_the_sales_invoices_are_said_on_both_sides(self):
+        """« Factures de vente »: « Recettes & ventes » sees what each invoice
+        received and never the bank's detail; « Banque » lists the invoices
+        its credits pay - each help says what it shows."""
+        helps = {area.key: area.help for area in AREAS}
+        self.assertIn("ce qui en est réglé (sans le détail de la banque)", helps["recipes"])
+        self.assertIn("la liste des factures de vente (numéro, client, montant)", helps["bank"])
 
     def test_where_each_login_starts(self):
         lists = reverse("inventory:shopping_lists")

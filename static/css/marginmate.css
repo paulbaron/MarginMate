@@ -995,10 +995,6 @@ th.sortable > button:focus-visible {
 .stock-take-total strong { font-size: 1.35rem; color: var(--amber); font-variant-numeric: tabular-nums; }
 .draft-state { margin-left: auto; font-size: 0.8rem; }
 
-.sale-line-row { margin-bottom: var(--s2); }
-.sale-line-row .inline-form select { min-width: 18rem; }
-.sale-line-row .inline-form input { width: 7rem; text-align: right; }
-
 /* "Sold" can be part certainty, part attribution: what was definitely this
    item, plus what an ambiguous "vodka OU gin" most plausibly took from it
    (see inventory/variance.py::allocate_choices). One number, with a quiet
@@ -2461,9 +2457,8 @@ html:has(body.public-page) { scroll-padding-top: var(--s4); }
        is a sentence wider than a phone: it wraps. `.filter-row label` keeps
        a filter's label on one line and outweighs the rule above. */
     .filter-row.shopping-form label { white-space: normal; }
-    /* Fields sized for a laptop: 18rem is wider than a card at 320 px. */
-    .add-identifier input[type="text"],
-    .sale-line-row .inline-form select { min-width: 0; width: 100%; }
+    /* A field sized for a laptop: 18rem is wider than a card at 320 px. */
+    .add-identifier input[type="text"] { min-width: 0; width: 100%; }
     /* In a grid of one column « span 2 » grew a second one, as wide as the
        gap and whatever the field asked: a recipe's till products take the
        grid's whole width instead - the same as span 2 in two columns. */
@@ -2942,6 +2937,73 @@ details.format-group > summary { cursor: pointer; }
 .area-choice { padding: var(--s1) 0; }
 .area-choice-label { display: block; }
 .area-choice .help { display: block; margin: 0; }
+
+/* ---------------------------------------------------------- sale documents */
+
+/* « Factures de vente » (recipes/sale_document_form.html, _sale_documents_card.html,
+   05/10/2026). The page: the document's form, and from 1100 px its file beside
+   it - one column below, minmax(0, 1fr), never a bare 1fr (which grows to its
+   widest table). */
+.sale-document-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); align-items: start; }
+@media (min-width: 1100px) {
+    .sale-document-layout.has-file { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+}
+.sale-document-file { padding: 0; overflow: hidden; }
+.sale-document-file > p { padding: var(--s4); margin: 0; }
+.sale-document-photo { display: block; max-width: 100%; height: auto; }
+.sale-document-pills { display: flex; flex-wrap: wrap; gap: var(--s1); margin: var(--s2) 0 0; }
+.sale-document-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s1) var(--s3); margin: 0 0 var(--s3); }
+.sale-document-facts dt { color: var(--muted); }
+.sale-document-facts dd { margin: 0; overflow-wrap: anywhere; }
+.sale-einvoice-checks { margin: 0 0 var(--s3); }
+.sale-einvoice-check-list { margin: var(--s2) 0 0; padding-left: var(--s4); }
+.sale-einvoice-check-list .check-failed { color: var(--red); }
+.sale-document-totals { margin: var(--s3) 0; }
+.sale-document-totals p { margin: 0 0 var(--s1); }
+
+/* A typed line: its fields side by side where they fit, its errors under it. */
+.sale-line-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: var(--s2);
+    align-items: end;
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--border);
+}
+.sale-line-row input:not([type="checkbox"]), .sale-line-row select { width: 100%; }
+.sale-line-row .sale-line-errors { grid-column: 1 / -1; }
+.sale-line-row .sale-line-errors:empty { display: none; }
+#sale-line-rows + .btn { margin: var(--s2) 0 var(--s3); }
+
+/* « Compte »: three choices, each with its sentence under its words - on the
+   document's form and on the read card. */
+.sale-counting { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: var(--s1); }
+.sale-counting legend { padding: 0; }
+.sale-counting-choice { display: block; margin: 0; font-weight: 500; color: var(--text); }
+.counting-help { display: block; margin-left: 1.6em; font-weight: 400; }
+/* On the document's form it sits under the grid, its legend drawn as the
+   grid's labels are. */
+.sale-document-form .sale-counting { margin: var(--s3) 0; }
+.sale-document-form .sale-counting legend { color: var(--text-dim); font-size: 0.85rem; font-weight: 600; margin-bottom: var(--s1); }
+
+/* « Règlement » (recipes/_sale_payments.html): its state, then the credits
+   that could pay the invoice and those its search found, one a line. And
+   Banque's « Entrées »: each sales invoice a credit pays on a line of its
+   own, the tiers' rules folded above the table. */
+.sale-payment-state { margin: 0 0 var(--s3); }
+.sale-credit-list { list-style: none; margin: 0 0 var(--s3); padding: 0; }
+.sale-credit-list > li { padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+.sale-link { margin: 0 0 var(--s1); }
+.sale-tier-rules { margin: 0 0 var(--s3); }
+
+@media (max-width: 860px) {
+    /* A select is as wide as its longest option, and the tie grid's options are
+       recipe names: one of 60 letters made the page wider than the phone. */
+    .sale-document-form select, .sale-einvoice-form select { width: 100%; min-width: 0; max-width: 100%; }
+}
+@media (max-width: 600px) {
+    .sale-line-row { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ------------------------------------------------------------------ touch */
 

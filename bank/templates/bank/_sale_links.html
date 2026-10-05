@@ -1,0 +1,100 @@
+{% load assets %}
+{% comment %}
+A credit of the « Entrées » tab and the « factures de vente » it pays
+(bank/sale_reconcile.py, fill_credit_rows): each invoice with what this
+credit gives it - the allocation, oldest invoice first, never beyond what it
+asks - and the other credits paying it; what goes to no invoice; where it
+pays nothing and nothing reads it, the matching's suggestion; the
+pick-list, or the link asking for it on a payout; the search. Every form
+posts to bank:bank_line_action - the « Banque » gate. An invoice's page is
+linked for « Recettes & ventes » only: « Banque » alone sees its number,
+customer and amount, never the page.
+{% endcomment %}
+{% for link in row.sale_links %}
+    <div class="sale-link">
+        Facture de vente {% if can.recipes %}<a href="{{ link.url }}">{{ link.fact.number }}</a>{% else %}{{ link.fact.number }}{% endif %}
+        <span class="muted">{% if link.fact.customer %}· {{ link.fact.customer }} {% endif %}· {{ link.fact.sold_on|date:"d/m/Y" }} · {{ link.share|money }} € pour elle (sur {{ link.fact.to_pay|money }} € à recevoir)</span>
+        <span class="status-pill status-linked">{{ link.fact.method_label }}</span>
+        {# One invoice at a time: « Tout délier » takes them all. #}
+        {% if row.sale_links|length > 1 %}
+            <form method="post" action="{{ row.action_url }}" class="inline-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="sale_unlink_document">
+                <input type="hidden" name="next" value="{{ page_url }}">
+                <input type="hidden" name="document" value="{{ link.fact.document_pk }}">
+                <button class="btn btn-small btn-secondary" type="submit">Délier</button>
+            </form>
+        {% endif %}
+        {% for other in link.others %}
+            <span class="read-as">Aussi réglée par l'entrée du {{ other.credit_day|date:"d/m/Y" }} ({{ other.counterparty|default:other.bank_type }}, {{ other.credit_amount|money }} €)</span>
+        {% endfor %}
+    </div>
+{% endfor %}
+{% if row.sale_gap %}
+    {% if row.sale_gap.left > 0 or row.sale_gap.shared %}
+        {# Said, never repaired: the part no invoice takes, and an invoice another credit pays too. #}
+        <p class="read-as">
+            {% if row.sale_gap.left > 0 %}Factures de vente : {{ row.sale_gap.given|money }} € de cette entrée de {{ row.sale_gap.amount|money }} € ; {{ row.sale_gap.left|money }} € ne vont à aucune facture.{% endif %}
+            {% if row.sale_gap.shared %}Une facture est aussi réglée par une autre entrée.{% endif %}
+        </p>
+    {% endif %}
+{% endif %}
+{% if row.sale_suggestion %}
+    <p class="read-as">
+        {# The tier, in the words of the debits' own; its rule is stated above the table. #}
+        <a href="#regles-ventes" class="status-pill status-tier-{{ row.sale_suggestion.tier }}">{{ row.sale_suggestion.tier_label }}</a>
+        {{ row.sale_suggestion.reason }}
+    </p>
+    {% if row.sale_suggestion.tier_reason %}<p class="read-as">{{ row.sale_suggestion.tier_reason }}</p>{% endif %}
+    {% for option in row.sale_options %}
+        <form method="post" action="{{ row.action_url }}" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="sale_link">
+            <input type="hidden" name="next" value="{{ page_url }}">
+            {% for candidate in option.candidates %}<input type="hidden" name="document" value="{{ candidate.pk }}">{% endfor %}
+            <span>{% for candidate in option.candidates %}{{ candidate.label }} · {{ candidate.due|money }} €{% if not forloop.last %} + {% endif %}{% endfor %}</span>
+            {% for other in option.also_for %}<span class="read-as">proposée aussi pour l'entrée du {{ other.operation_date|date:"d/m/Y" }}</span>{% endfor %}
+            <button class="btn btn-small" type="submit">Rattacher</button>
+        </form>
+    {% endfor %}
+{% endif %}
+{% if row.sale_choices %}
+    <form method="post" action="{{ row.action_url }}" class="inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="sale_link">
+        <input type="hidden" name="next" value="{{ page_url }}">
+        <select name="document" aria-label="Facture de vente réglée par cette entrée">
+            <option value="">{% if row.sale_links %}Rattacher une facture de vente de plus…{% else %}Choisir une facture de vente…{% endif %}</option>
+            {% for value, label in row.sale_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-small btn-secondary" type="submit">Rattacher</button>
+        {% if row.more_sale_choices %}
+            {# A list cut in silence reads as « the invoice is not there ». #}
+            <span class="read-as">{{ row.more_sale_choices }} facture{{ row.more_sale_choices|pluralize }} de vente de plus à ces dates : resserrez la période ou cherchez ci-dessous.</span>
+        {% endif %}
+    </form>
+{% elif row.sale_attach_url %}
+    {# A payout, a deposit, a credit a person chose: its pick-list on the row asked for only. #}
+    <a class="read-as" href="{{ row.sale_attach_url }}">Rattacher une facture de vente</a>
+{% endif %}
+{% comment %}
+The search: the same box as a debit's, asking for its results alone and
+swapping them into the row; a real GET underneath for a browser without
+JavaScript. Both go through sale_reconcile.documents_found_for.
+{% endcomment %}
+<form method="get" action="{{ home_path }}" class="inline-form"
+      hx-get="{{ row.sale_search_url }}"
+      hx-target="#sale-results-{{ row.line.pk }}" hx-swap="innerHTML"
+      hx-trigger="input delay:400ms, submit">
+    {% for name, value in page_fields.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <input type="hidden" name="ligne" value="{{ row.line.pk }}">
+    <input type="hidden" name="next" value="{{ page_url }}">
+    <input type="search" name="recherche" value="{{ row.sale_search }}"
+           autocomplete="off"
+           placeholder="Client, n°, date — ou plusieurs (client 09/2026)"
+           aria-label="Chercher une facture de vente à rattacher à cette entrée">
+    <button class="btn btn-small btn-secondary" type="submit">Chercher une facture de vente</button>
+</form>
+<div id="sale-results-{{ row.line.pk }}" aria-live="polite">
+    {% include "bank/_found_sale_documents.html" with line=row.line search=row.sale_search found=row.sale_found more_found=row.more_sale_found %}
+</div>

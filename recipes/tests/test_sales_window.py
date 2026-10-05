@@ -23,6 +23,7 @@ Data invented.
 
 import re
 from datetime import date, timedelta
+from html import unescape
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -32,8 +33,9 @@ from django.utils import timezone
 from common import DateRange
 from recipes.forms import MANUAL_SALE_SOURCE
 from recipes.menu import _window_label
-from recipes.models import RecipeSale, SaleDocument
+from recipes.models import RecipeSale, SaleDocument, SaleDocumentLine
 from recipes.tests.till_support import LADDITION_ACCOUNT
+from staff.tests.page_forms import forms_of
 from tests.factories import make_recipe
 
 WINDOW = {"du": "2026-02-01", "au": "2026-02-28"}
@@ -439,12 +441,210 @@ class ActionsKeepTheWindowTests(TestCase):
 
     def test_nothing_else_rides_back_on_the_redirect(self):
         # The address these actions are posted to is whatever is in the bar,
-        # so only the four parameters this tab reads are given back - a
-        # redirect that echoed the query string whole would carry anything.
+        # so only the six parameters this tab reads are given back - a
+        # redirect that echoed the query string whole would carry anything:
+        # the document page's own search of a credit (`entree`) included.
         url = reverse("recipes:sales_delete", kwargs={"pk": self.typed.pk})
-        response = self.client.post(f"{url}?{WINDOW_QUERY}&next=https://exemple.invalid/")
+        response = self.client.post(f"{url}?{WINDOW_QUERY}&next=https://exemple.invalid/&entree=VIR")
         self.assertNotIn("exemple.invalid", response["Location"])
+        self.assertNotIn("entree", response["Location"])
         self.assertTrue(response["Location"].startswith(reverse("recipes:sales_list")))
+
+    def assertKeepsEverything(self, address):
+        for kept in (
+            "du=2026-02-01",
+            "au=2026-02-28",
+            "vente=Mule",
+            "ventes=toutes",
+            "facture=mariage",
+            "factures=toutes",
+        ):
+            self.assertIn(kept, address)
+
+    def test_the_sale_invoices_actions_carry_all_six(self):
+        """The read card, the document's page - its breadcrumb, « Annuler »
+        and the address it posts to -, a delete and its redirect: the window,
+        the sales' search and the invoices' search ride along."""
+        query = f"{WINDOW_QUERY}&vente=Mule&ventes=toutes&facture=mariage&factures=toutes"
+        page = self.client.get(f"{reverse('recipes:sales_list')}?{query}").content.decode()
+        read = re.search(rf'action="({re.escape(reverse("recipes:sale_document_read"))}[^"]*)"', page)
+        self.assertIsNotNone(read)
+        self.assertKeepsEverything(unescape(read.group(1)))
+        update = reverse("recipes:sale_document_update", kwargs={"pk": self.document.pk})
+        document_page = self.client.get(f"{update}?{query}").content.decode()
+        back = re.findall(rf'href="({re.escape(reverse("recipes:sales_list"))}[^"]*)"', document_page)
+        self.assertEqual(len(back), 2)
+        for href in back:
+            self.assertKeepsEverything(unescape(href))
+            self.assertTrue(href.endswith("#factures-vente"))
+        here = re.search(rf'action="({re.escape(update)}[^"]*)"[^>]*class="sale-document-form"', document_page)
+        self.assertIsNotNone(here)
+        self.assertKeepsEverything(unescape(here.group(1)))
+        delete = reverse("recipes:sale_document_delete", kwargs={"pk": self.document.pk})
+        response = self.client.post(f"{delete}?{query}")
+        self.assertKeepsEverything(response["Location"])
+        self.assertTrue(response["Location"].endswith("#factures-vente"))
+
+    def test_a_refused_read_comes_back_to_the_card_with_all_six(self):
+        query = f"{WINDOW_QUERY}&vente=Mule&ventes=toutes&facture=mariage&factures=toutes"
+        response = self.client.post(f"{reverse('recipes:sale_document_read')}?{query}", {"compte": "counted"})
+        self.assertKeepsEverything(response["Location"])
+        self.assertTrue(response["Location"].endswith("#factures-vente"))
+
+    def test_saving_a_typed_document_comes_back_to_the_card(self):
+        url = reverse("recipes:sale_document_update", kwargs={"pk": self.document.pk})
+        response = self.client.post(f"{url}?{WINDOW_QUERY}&facture=mariage", self.document_payload())
+        self.assertIn("facture=mariage", response["Location"])
+        self.assertTrue(response["Location"].endswith("#factures-vente"))
+
+
+class GetFormsKeepTheTabTests(TestCase):
+    """A GET form submits the fields it holds and nothing else (CLAUDE.md
+    « a GET form carries it as hidden fields »): each of the tab's three
+    carries every OTHER kept parameter - the window, the sales' search and
+    « tout afficher », the invoices' search and theirs - as it was asked,
+    and leaves out its own."""
+
+    QUERY = {**WINDOW, "vente": "Mule", "ventes": "toutes", "facture": "mariage", "factures": "toutes"}
+
+    def form_holding(self, name: str):
+        """The page's GET form drawing the field `name` the reader types or
+        picks (not a hidden one)."""
+        page = self.client.get(reverse("recipes:sales_list"), self.QUERY).content.decode()
+        found = [
+            form
+            for form in forms_of(page)
+            if form.method == "get"
+            and any(control.name == name and control.kind != "hidden" for control in form.controls)
+        ]
+        self.assertEqual(len(found), 1, name)
+        return found[0]
+
+    def hidden(self, form) -> dict:
+        return {control.name: control.value for control in form.controls if control.kind == "hidden"}
+
+    def test_the_window_form_carries_the_invoice_search(self):
+        self.assertEqual(
+            self.hidden(self.form_holding("du")),
+            {"vente": "Mule", "ventes": "toutes", "facture": "mariage", "factures": "toutes"},
+        )
+
+    def test_the_sales_search_carries_the_invoice_search(self):
+        self.assertEqual(
+            self.hidden(self.form_holding("vente")),
+            {"du": "2026-02-01", "au": "2026-02-28", "facture": "mariage", "factures": "toutes"},
+        )
+
+    def test_the_invoice_search_carries_the_window_and_the_sales_search(self):
+        self.assertEqual(
+            self.hidden(self.form_holding("facture")),
+            {"du": "2026-02-01", "au": "2026-02-28", "vente": "Mule", "ventes": "toutes", "factures": "toutes"},
+        )
+
+    def test_the_credit_search_keeps_the_tab_parameters(self):
+        """« Chercher une entrée » on a sale document's « Règlement », posted
+        as a browser sends it - its hidden inputs and the word typed, the
+        action's own query string dropped: the page it answers with still
+        leads back to the tab as the reader had it."""
+        document = SaleDocument.objects.create(sold_on=date(2026, 2, 10), reference="FV-W1", stated_total_ttc=90)
+        url = reverse("recipes:sale_document_update", args=[document.pk])
+        page = self.client.get(url, self.QUERY).content.decode()
+        (search,) = [
+            form
+            for form in forms_of(page)
+            if form.method == "get" and any(control.name == "entree" for control in form.controls)
+        ]
+        self.assertEqual(search.action, f"{url}#reglements")
+        self.assertEqual(self.hidden(search), {name: str(value) for name, value in self.QUERY.items()})
+        sent = dict(search.submission(values={"entree": "virement"}))
+        answer = self.client.get(search.action.split("#")[0], sent)
+        self.assertEqual(answer.status_code, 200)
+        back = answer.context["back_url"]
+        for name, value in self.QUERY.items():
+            with self.subTest(name=name):
+                self.assertIn(f"{name}={value}", back)
+        self.assertNotIn("entree", back)
+
+
+class SaleDocumentsSearchTests(TestCase):
+    """« Factures de vente » searched by the database (spec §9.8): the card
+    draws its 50 most recent, and an older one - the 51st - was found by no
+    box (the table's own only sees what is drawn)."""
+
+    def setUp(self):
+        self.old = SaleDocument.objects.create(
+            sold_on=date(2025, 1, 15), reference="FV-ANCIENNE", customer="Comité Exemple des Fêtes"
+        )
+        for day in range(1, 31):
+            SaleDocument.objects.create(sold_on=date(2026, 3, day), reference=f"F-MARS-{day}")
+        for day in range(1, 31):
+            SaleDocument.objects.create(sold_on=date(2026, 4, day), reference=f"F-AVRIL-{day}")
+
+    def found(self, **params) -> list[str]:
+        response = self.client.get(reverse("recipes:sales_list"), params)
+        self.assertEqual(response.status_code, 200)
+        return [document.reference for document in response.context["documents"]]
+
+    def test_the_old_one_is_beyond_the_fifty_drawn(self):
+        self.assertNotIn("FV-ANCIENNE", self.found())
+
+    def test_by_its_number(self):
+        self.assertEqual(self.found(facture="ancienne"), ["FV-ANCIENNE"])
+
+    def test_by_its_customer_case_and_accents_aside(self):
+        self.assertEqual(self.found(facture="comite des FETES"), ["FV-ANCIENNE"])
+
+    def test_by_its_date_as_written(self):
+        for written in ("15/01/2025", "01/2025", "2025"):
+            with self.subTest(written=written):
+                self.assertEqual(self.found(facture=written), ["FV-ANCIENNE"])
+
+    def test_by_the_total_it_states(self):
+        SaleDocument.objects.filter(pk=self.old.pk).update(stated_total_ttc="1234.50")
+        for written in ("1234,50", "1234.5", "1\N{NO-BREAK SPACE}234.50"):
+            with self.subTest(written=written):
+                self.assertEqual(self.found(facture=written), ["FV-ANCIENNE"])
+
+    def test_by_a_line_s_label_or_what_it_is_tied_to(self):
+        recipe = make_recipe(name="Mojito exemple")
+        SaleDocumentLine.objects.create(document=self.old, label="Location de salle", quantity=1, unit_price_ttc=100)
+        SaleDocumentLine.objects.create(document=self.old, recipe=recipe, quantity=3)
+        self.assertEqual(self.found(facture="location"), ["FV-ANCIENNE"])
+        self.assertEqual(self.found(facture="mojito"), ["FV-ANCIENNE"])
+
+    def test_the_words_narrow_each_other(self):
+        self.assertEqual(self.found(facture="FV-ANCIENNE 2025"), ["FV-ANCIENNE"])
+        self.assertEqual(self.found(facture="FV-ANCIENNE 2026"), [])
+
+    def test_the_search_and_the_window_together(self):
+        self.assertEqual(self.found(facture="mars", du="2026-03-29"), ["F-MARS-30", "F-MARS-29"])
+
+    def test_tout_afficher_lists_them_all(self):
+        response = self.client.get(reverse("recipes:sales_list"))
+        self.assertEqual((len(response.context["documents"]), response.context["documents_found"]), (50, 61))
+        page = response.content.decode()
+        link = re.search(r'href="([^"]*)"[^>]*>\s*tout afficher', page[page.index('id="factures-vente"') :])
+        self.assertIsNotNone(link)
+        self.assertIn("factures=toutes", unescape(link.group(1)))
+        self.assertEqual(len(self.found(factures="toutes")), 61)
+
+    def test_the_count_says_the_search(self):
+        page = self.client.get(reverse("recipes:sales_list"), {"facture": "ancienne"}).content.decode()
+        self.assertIn("1 facture de vente pour « ancienne »", unescape(page))
+        empty = self.client.get(reverse("recipes:sales_list"), {"facture": "introuvable"}).content.decode()
+        self.assertIn("Aucune facture de vente pour cette recherche.", empty)
+
+    def test_the_table_is_sort_only(self):
+        page = self.client.get(reverse("recipes:sales_list")).content.decode()
+        table = re.search(r'<table[^>]*data-table-label="factures de vente"[^>]*>', page)
+        self.assertIsNotNone(table)
+        self.assertIn("data-table-sort-only", table.group(0))
+
+    def test_both_ride_back_on_a_redirect(self):
+        url = reverse("recipes:sale_document_delete", kwargs={"pk": self.old.pk})
+        response = self.client.post(f"{url}?facture=ancienne&factures=toutes")
+        self.assertIn("facture=ancienne", response["Location"])
+        self.assertIn("factures=toutes", response["Location"])
 
 
 class SalesTabLinkTests(TestCase):

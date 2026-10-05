@@ -210,6 +210,17 @@
                 </div>
             {% endif %}
         {% elif rows %}
+            {% comment %}
+            How a credit is matched to a « facture de vente » - the rule each
+            tier pill is decided by, built from the matching's constants
+            (bank/sale_matching.py, TIER_RULES) - once, where a credit is shown.
+            {% endcomment %}
+            {% if sale_tier_rules %}
+                <details class="sale-tier-rules" id="regles-ventes">
+                    <summary>Comment une entrée est rapprochée d'une facture de vente</summary>
+                    {% for tier, title, text in sale_tier_rules %}<p class="small"><strong>{{ title }}</strong> : {{ text }}</p>{% endfor %}
+                </details>
+            {% endif %}
             <div class="table-wrap">
                 <table data-table data-table-label="opérations">
                     <thead>
@@ -224,7 +235,7 @@
                     <tbody>
                         {% for row in rows %}
                             {% with line=row.line %}
-                                <tr>
+                                <tr{% if row.status == "income" %} id="entree-{{ line.pk }}"{% endif %}>
                                     <td data-sort="{{ line.paid_on|date:'Y-m-d' }}">{{ line.paid_on|date:"d/m/Y" }}</td>
                                     <td>
                                         <strong>{{ line.counterparty|default:line.bank_type }}</strong>
@@ -277,9 +288,12 @@
                                             {% comment %}
                                             What the entry is, read the way « Entrées d'argent » reads it
                                             (bank/income.py): a card payout and its commission, a
-                                            deposit, or the typed category - not « Entrée d'argent » for everything.
-                                            A payout printing no gross has no commission to say, and who
-                                            decided is said when a person did (« payeur retenu »).
+                                            deposit, a sales invoice, or the typed category - not « Entrée
+                                            d'argent » for everything. A payout printing no gross has no
+                                            commission to say, and who decided is said when a person did
+                                            (« payeur retenu ») - the invoices a credit pays are said once,
+                                            below, never again as its reading. A credit a person linked is
+                                            never « à classer ».
                                             {% endcomment %}
                                             {% with entry=row.entry %}
                                                 {% if entry.commission is not None %}
@@ -292,8 +306,9 @@
                                                 {% else %}
                                                     <span>{{ entry.name }}</span>
                                                 {% endif %}
-                                                {% if entry.how != "rule" %}<span class="read-as">{{ entry.how_label }}</span>{% endif %}
+                                                {% if entry.how == "line" or entry.how == "payer" %}<span class="read-as">{{ entry.how_label }}</span>{% endif %}
                                             {% endwith %}
+                                            {% include "bank/_sale_links.html" %}
                                         {% else %}
                                             {% if row.suggestion %}
                                                 <p class="read-as">
@@ -372,6 +387,23 @@
                                                 {% elif not row.rule %}
                                                     <button class="btn btn-small btn-secondary" type="submit" name="action" value="reopen">Rapprocher automatiquement</button>
                                                 {% endif %}
+                                            </form>
+                                        {% elif row.sale_links %}
+                                            {# The invoices this row shows: « Tout délier » takes these off, or nothing (sale_reconcile.unlink_as_shown). #}
+                                            <form method="post" action="{{ row.action_url }}" class="inline-form">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="action" value="sale_unlink">
+                                                <input type="hidden" name="next" value="{{ page_url }}">
+                                                {% for link in row.sale_links %}<input type="hidden" name="shown" value="{{ link.fact.document_pk }}">{% endfor %}
+                                                <button class="btn btn-small btn-secondary" type="submit">{% if row.sale_links|length > 1 %}Tout délier{% else %}Délier{% endif %}</button>
+                                            </form>
+                                        {% elif line.settled_by_hand %}
+                                            {# Unlinked by hand: the sales' automatic pass never comes back to it until asked. #}
+                                            <form method="post" action="{{ row.action_url }}" class="inline-form">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="action" value="sale_reopen">
+                                                <input type="hidden" name="next" value="{{ page_url }}">
+                                                <button class="btn btn-small btn-secondary" type="submit">Rapprocher automatiquement</button>
                                             </form>
                                         {% endif %}
                                     </td>

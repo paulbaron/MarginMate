@@ -1,100 +1,203 @@
 {% extends "base.html" %}
-{% block title %}Facture de vente - MarginMate{% endblock %}
+{% load assets %}
+{% comment %}
+A « facture de vente » (recipes/views.py::sale_document_form): typed - its
+header (recipes/forms.py::SaleDocumentForm), a plain file kept with it, its
+lines (a formset) - or an electronic invoice, whose figures are its own data,
+printed, and whose lines are tied in a grid named by line pk
+(SaleTiesForm).
+
+« Compte » is drawn apart from _form_fields.html's grid (the form's
+`drawn_apart`): three choices and their sentences are one field, a fieldset
+and its legend - in the grid it was a label naming no field.
+
+The form's FIRST submit button is a hidden « Enregistrer »: Enter in any
+field presses a form's first button, and « + Ajouter une ligne » - a submit
+button of its own, for a reader without JavaScript - would otherwise be it.
+The empty row lives in a <template> OUTSIDE the form: static/js/sale_document.js
+clones it; a browser sends nothing of it. Every address is built by the view
+with the tab's parameters (`here_url`, `back_url`): never {% querystring %},
+which would carry this page's own parameters back to the tab. No inline
+code: the page's script is static/js/sale_document.js.
+
+Once saved, « Règlement » (recipes/_sale_payments.html) follows the form and
+its file: the messages of its forms are said there, where they land
+(`payment_messages`, `#reglements`), the others at the top.
+{% endcomment %}
+{% block title %}{{ page_title }} - MarginMate{% endblock %}
+{% block messages %}
+    {% if top_messages %}
+        <ul class="messages">
+            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+        </ul>
+    {% endif %}
+{% endblock %}
 {% block content %}
     <div class="page-header">
         <div>
-            {# Both ways back keep the period the reader came from: this page is reached from a windowed list and the form posts to its own address, so the save returns to it too. #}
-            <p class="breadcrumb"><a href="{% url 'recipes:sales_list' %}{% querystring %}">← Recettes &amp; ventes · ventes</a></p>
-            <h1>{% if document %}Modifier une vente{% else %}Nouvelle facture de vente{% endif %}</h1>
-        </div>
-    </div>
-
-    <p class="lead">
-        Ce que vous avez vendu hors caisse : une recette, ou un article vendu tel quel.
-    </p>
-
-    <div class="card">
-        <form method="post">
-            {% csrf_token %}
-            {% include "_form_fields.html" %}
-
-            <h3>Lignes</h3>
-            {{ formset.management_form }}
-            {% if formset.non_form_errors %}
-                <div class="message message-error">{{ formset.non_form_errors }}</div>
+            <p class="breadcrumb"><a href="{{ back_url }}">← Recettes &amp; ventes · Ventes</a></p>
+            <h1>{{ page_title }}</h1>
+            <p class="page-subtitle">Ce qui a été vendu hors caisse, ou facturé : son fichier, ses lignes, son règlement.</p>
+            {% if saved %}
+                <p class="sale-document-pills">
+                    {% if document.einvoice_format %}<span class="status-pill status-IMPORTED">Facture électronique ({{ document.einvoice_format }})</span>{% endif %}
+                    {% if kind_label != "Facture" %}<span class="status-pill status-NEEDS_REVIEW">{{ kind_label }}</span>{% endif %}
+                    {% if not document.counts %}<span class="status-pill status-ignored">{{ document.get_counting_display }}</span>{% endif %}
+                </p>
             {% endif %}
-            <div id="sale-line-rows">
-                {% for line_form in formset %}
-                    <div class="sale-line-row">
-                        <div class="inline-form">
-                            {{ line_form.id }}
-                            <span style="display:none;">{{ line_form.DELETE }}</span>
-                            {{ line_form.source }}
-                            <span class="muted">×</span>
-                            {{ line_form.quantity }}
-                            <span class="muted">à</span>
-                            {{ line_form.unit_price_ttc }}
-                            <span class="muted">€ TTC (optionnel)</span>
-                            <button type="button" class="btn btn-small btn-secondary js-remove-sale-line">Retirer</button>
-                        </div>
-                        {% for error in line_form.non_field_errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
-                        {% for error in line_form.source.errors %}<div class="message message-error">{{ error }}</div>{% endfor %}
-                        {% for error in line_form.quantity.errors %}<div class="message message-error">Quantité : {{ error }}</div>{% endfor %}
-                    </div>
-                {% endfor %}
+            {% for doubt in doubts %}<p class="message message-warning">{{ doubt }}</p>{% endfor %}
+        </div>
+        {% if saved %}
+            <div class="actions">
+                {% if file_url %}
+                    <a class="btn btn-secondary" href="{{ file_url }}" target="_blank" rel="noopener">Voir le fichier</a>
+                    <a class="btn btn-secondary" href="{{ file_url }}?{{ download_param }}=1">Télécharger</a>
+                {% endif %}
+                <form method="post" action="{{ delete_url }}" data-confirm="{{ delete_question }}" data-leaves-lines="{{ leave_warning }}">
+                    {% csrf_token %}
+                    <button class="btn btn-secondary" type="submit">Supprimer</button>
+                </form>
             </div>
-            <button type="button" class="btn btn-small btn-secondary" id="add-sale-line">+ Ajouter une ligne</button>
-
-            <div class="form-actions" style="margin-top:1rem;">
-                <button class="btn" type="submit">Enregistrer</button>
-                <a class="btn btn-secondary" href="{% url 'recipes:sales_list' %}{% querystring %}">Annuler</a>
-            </div>
-        </form>
+        {% endif %}
     </div>
 
-    <template id="empty-sale-line">
-        <div class="sale-line-row">
-            <div class="inline-form">
-                <span style="display:none;">{{ formset.empty_form.DELETE }}</span>
-                {{ formset.empty_form.source }}
-                <span class="muted">×</span>
-                {{ formset.empty_form.quantity }}
-                <span class="muted">à</span>
-                {{ formset.empty_form.unit_price_ttc }}
-                <span class="muted">€ TTC (optionnel)</span>
-                <button type="button" class="btn btn-small btn-secondary js-remove-sale-line">Retirer</button>
-            </div>
+    <div class="sale-document-layout{% if file_url %} has-file{% endif %}">
+        <div class="card sale-document-main">
+            <form method="post" action="{{ here_url }}" enctype="multipart/form-data" class="sale-document-form"{% if unsaved %} data-unsaved{% endif %}>
+                {% csrf_token %}
+                <input type="hidden" name="jeton" value="{{ jeton }}">
+                <button class="visually-hidden" type="submit" tabindex="-1" aria-hidden="true" data-default-submit>Enregistrer</button>
+
+                {% include "_form_fields.html" with exclude=form.drawn_apart %}
+                <fieldset class="sale-counting{% if not hide_errors and form.counting.errors %} has-error{% endif %}">
+                    <legend>{{ form.counting.label }}</legend>
+                    {% for choice in form.counting %}
+                        <label class="sale-counting-choice" for="{{ choice.id_for_label }}">{{ choice.tag }} {{ choice.choice_label }}</label>
+                    {% endfor %}
+                    {% if not hide_errors %}{% for error in form.counting.errors %}<p class="field-error">{{ error }}</p>{% endfor %}{% endif %}
+                </fieldset>
+
+                {% if document.is_einvoice %}
+                    <h3>Ce que dit la facture</h3>
+                    <dl class="sale-document-facts">
+                        {% for fact in facts %}
+                            <dt>{{ fact.label }}</dt>
+                            <dd>{% if fact.url %}<a href="{{ fact.url }}">{{ fact.value }}</a>{% else %}{{ fact.value }}{% endif %}</dd>
+                        {% endfor %}
+                    </dl>
+                    <p class="muted small">{{ file_is_the_invoice }}</p>
+                    {% if checks %}
+                        <details class="sale-einvoice-checks"{% if failed_checks %} open{% endif %}>
+                            <summary>Contrôles de la facture{% if failed_checks %} — {{ failed_checks }} en échec{% endif %}</summary>
+                            <p class="muted small">Les chiffres de la facture elle-même, jamais corrigés.</p>
+                            <ul class="sale-einvoice-check-list">
+                                {% for check in checks %}
+                                    <li class="{% if check.passed %}check-passed{% else %}check-failed{% endif %}">{% if check.passed %}✓{% else %}✗{% endif %} <strong>{{ check.label }}</strong>{% if check.detail %} {{ check.detail }}{% endif %}</li>
+                                {% endfor %}
+                            </ul>
+                        </details>
+                    {% endif %}
+
+                    <h3>Lignes</h3>
+                    {% if lines_said %}<p class="muted">{{ lines_said }}</p>{% endif %}
+                    {% for error in ties.non_field_errors %}<p class="message message-error">{{ error }}</p>{% endfor %}
+                    <div class="table-scroll">
+                    <table class="sub-table phone-cards sale-ties" data-table-label="lignes">
+                        <thead>
+                            <tr>
+                                <th>Libellé</th><th class="num">Quantité</th><th class="num">Prix unitaire HT</th>
+                                <th class="num">Montant HT</th><th class="num">TVA</th><th>Correspond à</th><th>Quantité consommée</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in ties.rows %}
+                            <tr>
+                                <td>{{ row.line.label }}</td>
+                                <td class="num" data-label="Quantité">{{ row.line.quantity|quantity }}</td>
+                                <td class="num" data-label="Prix unitaire HT">{% if row.line.unit_price_ht is not None %}{{ row.line.unit_price_ht|money:4 }} €{% endif %}</td>
+                                <td class="num" data-label="Montant HT">{% if row.line.total_ht is not None %}{{ row.line.total_ht|money }} €{% endif %}</td>
+                                <td class="num" data-label="TVA">{{ row.rate }}</td>
+                                {% if row.blocked %}
+                                    <td colspan="2" class="phone-card-wide"><span class="read-as">{{ row.blocked }}</span></td>
+                                {% else %}
+                                    <td data-label="Correspond à">
+                                        {{ row.tie }}
+                                        {% if row.why %}<span class="read-as">proposé : {{ row.why }}</span>{% endif %}
+                                        {% for error in row.tie.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                                    </td>
+                                    <td data-label="Quantité consommée">
+                                        {{ row.consumed }}
+                                        <span class="read-as">vide : {{ row.line.quantity|quantity }} ; un article dans son unité, une recette en ventes</span>
+                                        {% if row.zero %}<span class="read-as">{{ consumed_zero }}</span>{% endif %}
+                                        {% if row.doubt %}<span class="read-as consumption-doubt">{{ row.doubt }}</span>{% endif %}
+                                        {% for error in row.consumed.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+                                    </td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    </div>
+                {% else %}
+                    <datalist id="{{ known_customers_list }}">{% for customer in known_customers %}<option value="{{ customer }}">{% endfor %}</datalist>
+                    {% if file_url %}
+                        <p class="small">Fichier : {{ file_name }} · <a href="{{ file_url }}" target="_blank" rel="noopener">Voir</a> · <a href="{{ file_url }}?{{ download_param }}=1">Télécharger</a></p>
+                    {% endif %}
+
+                    <h3>Lignes</h3>
+                    {{ formset.management_form }}
+                    {% if not hide_errors and formset.non_form_errors %}
+                        <div class="message message-error">{% for error in formset.non_form_errors %}<p>{{ error }}</p>{% endfor %}</div>
+                    {% endif %}
+                    <div id="sale-line-rows">
+                        {% for line_form in formset %}
+                            {% include "recipes/_sale_line_row.html" %}
+                        {% endfor %}
+                    </div>
+                    <button type="submit" name="ajouter_ligne" value="1" formnovalidate class="btn btn-small btn-secondary">+ Ajouter une ligne</button>
+                {% endif %}
+
+                {% if totals %}
+                    <div class="sale-document-totals">
+                        <p>Total des lignes : {{ totals.lines|money }} € TTC.</p>
+                        {% if totals.stated is not None %}
+                            <p>Total de la facture : {{ totals.stated|money }} € TTC.{% if totals.rest %} {{ totals.rest }}{% endif %}</p>
+                        {% endif %}
+                        {% if totals.prepaid is not None %}
+                            <p>Déjà réglé : {{ totals.prepaid|money }} € · Reste à payer : {{ totals.to_pay|money }} €</p>
+                        {% endif %}
+                    </div>
+                {% endif %}
+
+                <div class="form-actions">
+                    <button class="btn" type="submit" data-busy-label="Enregistrement…">Enregistrer</button>
+                    <a class="btn btn-secondary" href="{{ back_url }}">Annuler</a>
+                </div>
+            </form>
         </div>
-    </template>
+
+        {% if file_url %}
+            <section class="card sale-document-file">
+                {% if file_framed %}
+                    <iframe src="{{ file_url }}" title="La facture" class="document-frame"></iframe>
+                {% elif file_drawn %}
+                    <img src="{{ file_url }}" alt="La facture" class="sale-document-photo">
+                {% else %}
+                    <p class="muted">Ce fichier ne s'affiche pas ici : <a href="{{ file_url }}?{{ download_param }}=1">le télécharger</a>.</p>
+                {% endif %}
+            </section>
+        {% endif %}
+    </div>
+
+    {% if payments %}
+        <p class="muted small no-js-only">{{ save_before_payments }}</p>
+        {% include "recipes/_sale_payments.html" %}
+    {% endif %}
+
+    {% if formset %}
+        <template id="empty-sale-line">
+            {% include "recipes/_sale_line_row.html" with line_form=formset.empty_form hide_errors=True %}
+        </template>
+    {% endif %}
 {% endblock %}
-{% block extra_js %}
-<script>
-// New rows take a fresh index counting up from TOTAL_FORMS and keep it;
-// removing one leaves a gap rather than renumbering. Renumbering moves an
-// existing row's -id to a different index and Django then silently fails to
-// save it - see recipe_form.html, where that bug was found.
-(function () {
-    var totalForms = document.querySelector("[name$='-TOTAL_FORMS']");
-    var next = parseInt(totalForms.value, 10);
-    document.getElementById("add-sale-line").addEventListener("click", function () {
-        var html = document.getElementById("empty-sale-line").innerHTML.replace(/__prefix__/g, next);
-        next += 1;
-        totalForms.value = next;
-        var holder = document.createElement("div");
-        holder.innerHTML = html.trim();
-        document.getElementById("sale-line-rows").appendChild(holder.firstElementChild);
-    });
-    document.addEventListener("click", function (event) {
-        if (!event.target.matches(".js-remove-sale-line")) return;
-        var row = event.target.closest(".sale-line-row");
-        var id = row.querySelector("input[name$='-id']");
-        if (id && id.value) {
-            row.querySelector("input[name$='-DELETE']").checked = true;
-            row.hidden = true;
-        } else {
-            row.remove();
-        }
-    });
-})();
-</script>
-{% endblock %}
+{% block extra_js %}<script src="{% asset 'js/sale_document.js' %}" defer></script>{% endblock %}

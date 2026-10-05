@@ -4,9 +4,11 @@ euro sign for a decimal point, and the date with underscores (the owner,
 01/10/2026). The stored file keeps its own name (`invoices/2026/10/…`); only
 what the browser is told to save changes.
 
-One definition for every door out: the document's own file route
-(`invoices:invoice_file`, the PDF frame, « Voir le PDF », « Télécharger »)
-and the zip of Banque (`bank:invoice_files`).
+One shape (`named_download`) for every door out: a purchase's own file route
+(`invoices:invoice_file`, the PDF frame, « Voir le PDF », « Télécharger »),
+the zip of Banque (`bank:invoice_files`) - and a « facture de vente »'s
+(`recipes:sale_document_file`), named after its customer: « Vente Exemple
+SARL 1500€00 05_03_2026.pdf » (`sale_download_name`).
 """
 
 from __future__ import annotations
@@ -41,14 +43,34 @@ def amount_words(total: Decimal) -> str:
     return f"{sign}{cents // 100}€{cents % 100:02d}"
 
 
+def named_download(party: str, total, day, stored_name: str) -> str:
+    """« <party> 11€55 01_10_2026.pdf » - the one shape of every door out:
+    who it is with, its total TTC, its date (« sans date » without one), and
+    the stored file's own extension, lower case - a ticket's photo stays a
+    « .jpg », and a file stored without one gets none (named « .pdf », it
+    would be shown as one)."""
+    day_text = day.strftime("%d_%m_%Y") if day else NO_DATE
+    extension = PurePosixPath(stored_name).suffix.lower()
+    return f"{clean(party) or NO_SUPPLIER} {amount_words(total)} {day_text}{extension}"
+
+
 def download_name(invoice) -> str:
-    """« Darty 11€55 01_10_2026.pdf »: the stored file's own extension, lower
-    case - a ticket's photo stays a « .jpg », and a file stored without one
-    gets none (named « .pdf », it would be shown as one)."""
-    supplier = clean(invoice.supplier.name) or NO_SUPPLIER
-    day = invoice.invoice_date.strftime("%d_%m_%Y") if invoice.invoice_date else NO_DATE
-    extension = PurePosixPath(invoice.source_file.name).suffix.lower()
-    return f"{supplier} {amount_words(invoice.total_ttc)} {day}{extension}"
+    """« Darty 11€55 01_10_2026.pdf »: a purchase's supplier, total and date."""
+    return named_download(invoice.supplier.name, invoice.total_ttc, invoice.invoice_date, invoice.source_file.name)
+
+
+#: A sale's party: « Vente » and its customer, cut to SALE_CUSTOMER_CHARS -
+#: a name some customers give at length, and a file name that stays readable.
+SALE_PARTY = "Vente"
+SALE_CUSTOMER_CHARS = 60
+
+
+def sale_download_name(document) -> str:
+    """« Vente Exemple SARL 1500€00 05_03_2026.pdf » - the customer when the
+    sale document names one, « Vente » alone otherwise; its total (the stated
+    one, `SaleDocument.total_ttc`) and its date of sale."""
+    party = f"{SALE_PARTY} {clean(document.customer)[:SALE_CUSTOMER_CHARS].rstrip()}".strip()
+    return named_download(party, document.total_ttc, document.sold_on, document.source_file.name)
 
 
 class UniqueNames:

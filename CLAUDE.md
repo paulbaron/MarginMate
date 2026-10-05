@@ -898,6 +898,11 @@ Six rules, each of them somebody's money:
   electronic invoice carries, which would be learned by whichever supplier
   filed enough of them first; and the **file's name**. And the label follows
   the digits: BT-30 can be a GLN, and « SIREN » in front of one is a lie.
+  The buyer's name and numbers, and BT-25 / BT-72 / BG-14, are read into
+  `EInvoiceFacts` for the sales side (`recipes/sale_einvoice.py`, with the
+  stated BT-109/113/114/115 copied by `copy_negate`, never by arithmetic that
+  could refuse what Achats reads) - and still never into `source_text`.
+  `einvoice.party_siren` names a party's SIREN through `identifiers.py` too.
 
 Two more that cost real debugging:
 
@@ -931,6 +936,9 @@ each a French sentence and never a traceback or a hang:
   makes that a message on the import rather than a machine that stops
   answering. An oversized attachment beside a readable invoice costs nothing.
 
+`root_syntax` is the same root check, raising: the sales side's typed form
+refuses what it refuses (`looks_like_an_invoice` is it, answering False).
+
 `EInvoiceError` is a **ValueError** on purpose: `receipt_batches` already
 reports a plain ValueError as one file's error and carries on with the
 folder, which is what a broken or hostile attachment deserves.
@@ -949,7 +957,10 @@ exact old default was rewritten, migration 0032; a pattern someone tuned
 says something a migration does not know). A well-formed XML that is not an
 EN 16931 invoice is **one file's error, in French**: there is no page to
 photograph and no text layer to fall back on, so the alternative to a
-sentence is a traceback out of a PDF renderer.
+sentence is a traceback out of a PDF renderer. A sales e-invoice is never
+read there: it is added on « Recettes & ventes · Ventes » (« Lire la
+facture »), and Achats refuses the bar's own (`OwnSalesInvoiceError`,
+« Factures de vente »).
 
 `Invoice.einvoice_format` - "Factur-X" (the XML came attached to a PDF),
 "CII" or "UBL" (it arrived on its own), blank for everything else - is the
@@ -1051,7 +1062,8 @@ refuse it on the box to change (`forms.unit_price_problem`; on a ticket, a
 printed TTC past `MAX_AMOUNT` too), and a rate above 100 % as `VatRowForm`
 does. Under every path that writes lines, `importing._fitting` checks each
 figure against its `InvoiceLine` column **the way the read does it**
-(quantize to the column's places in the column's context). It raises
+(quantize to the column's places in the column's context:
+`common.fits_column`, which the sales e-invoice reader asks too). It raises
 `LineTooWideError`, a ValueError said in French and one of
 `receipt_batches.READING_REFUSALS`. `import_parsed_invoice` checks **the
 lines it will write** (a supplier of charges: `expense_lines`, not
@@ -1122,7 +1134,12 @@ expat reads the BOM and expands every entity. A 2 KB billion-laughs came back
 with a one-million-character seller name; what stopped the machine was
 libexpat's own amplification limit, not this code. An EN 16931 instance is
 UTF-8, so a wide encoding (BOM, NUL in the first four bytes, or a declared
-utf-16/32) is **refused rather than decoded**.
+utf-16/32 - « utf_16 », « UCS2 » included, the name's « _ » read as « - ») is
+**refused rather than decoded**. And an encoding expat cannot use is a refusal,
+never another exception: expat raises LookupError for an unknown one and a
+plain ValueError for a multi-byte one, both caught beside ParseError in
+`_root_tag` and `read` - « + Facture de vente » answered 500, and
+`looks_like_an_invoice` broke its « never raises ».
 
 **The attachment cap belongs on what comes OUT of a stream, not on what went
 in.** `MAX_ATTACHMENT_BYTES` bounds the compressed bytes, which bounds
@@ -1231,10 +1248,10 @@ element names, nesting and attributes (`schemeID="0002"`, `format="102"`) are
 the standard's own because that is what the reader keys on; every name,
 SIREN, number and amount is invented. There was nothing to copy and there
 must never be. The PDF/A-3s are **built by the test**
-(`tests/pdf_files.py::write_pdf_with_attachments`, a few hundred bytes of PDF
-syntax with an `/EmbeddedFiles` name tree): a test that needs a binary
-fixture it cannot build is a test nobody can fix, and a real Factur-X invoice
-would carry a supplier's IBAN into a public repository.
+(`invoices/tests/pdf_files.py::write_pdf_with_attachments`, a few hundred
+bytes of PDF syntax with an `/EmbeddedFiles` name tree): a test that needs a
+binary fixture it cannot build is a test nobody can fix, and a real Factur-X
+invoice would carry a supplier's IBAN into a public repository.
 
 ### Facturettes: the input is a photograph
 
@@ -1979,9 +1996,10 @@ counts them and lists them (`?sans_date=1`).
 (`views.create_manual_invoice`). Most paper invoices have no number, and the
 number was the only duplicate guard. The page carries a one-time `jeton`,
 and the session keeps the last 20 as token -> (invoice pk, digest of what
-was posted: `views._posted`, every field and file name/size but the CSRF
-token and the jeton). The same page with the same content opens the invoice
-already made (« Facture déjà créée »). The same token with other content is
+was posted: `common.posted_digest`, every field and file name/size but the
+CSRF token and the jeton - a « facture de vente »'s pages keep theirs the
+same way, `recipes.views.SALE_DOCUMENTS_MADE`). The same page with the same
+content opens the invoice already made (« Facture déjà créée »). The same token with other content is
 a new invoice: after Back, the browser can give the page back with its old
 value. The button has `data-busy-label`. Two requests in flight at once are
 stopped only by that button: closing it needs a shared server-side record,
@@ -2311,7 +2329,10 @@ it (`move_to_shop`), which is what unlearns a number that named it wrongly.
 (The seven themselves were deleted and imported again under Free; UBA lost
 the number at the `learn_shop_identifiers` pass that followed, once Free's
 documents printed it too. Nothing names the customer's number because two
-suppliers' documents print it - no list of "my numbers" is kept anywhere.)
+suppliers' documents print it - no list of "my numbers" is kept anywhere -
+but one: the SIREN the bar's own sales e-invoices state as their seller
+(`SaleDocument.seller_siren`), read by Achats' guard against filing them as
+purchases and by nothing that names a supplier.)
 
 **A header only adds documents.** It says "a document printing this is
 this supplier's", never "a document not printing it is someone else's": a
@@ -3720,7 +3741,14 @@ chosen by hand on one debit, one invoice across two debits.
   form is drawn on one, so it is a stale or crafted POST - but linked, the
   invoice would leave `unpaid_invoices` for ever and read « Payée » on its
   own page while showing on no tab here and in no figure of « Dépenses »,
-  which counts debits only.
+  which counts debits only. It may pay a SALES invoice -
+  `recipes.SaleDocumentPayment`, never `InvoicePayment` (« Factures de
+  vente », bank/sale_reconcile.py) -, and `link`, `unlink_invoice`,
+  `unlink`, `no_invoice` and `reopen` all refuse a credit
+  (`views.DEBIT_ACTIONS`, « Une entrée d'argent ne règle pas une
+  facture. », nothing written): a stale `reopen` handed back a credit a
+  person had unlinked from a sale, and `no_invoice` froze it. The `sale_*`
+  actions refuse a debit the same way (`sale_reconcile.DEBIT_PAYS_NO_SALE`).
 - **The document's own page compares what was paid with what it costs.**
   « Payée » is kept for when the two agree; otherwise « Réglée en partie » /
   « Réglée au-delà » and « X € réglés sur Y € » (`InvoiceDetailView`,
@@ -4523,7 +4551,13 @@ values in, plain values out - but for its last three functions (`load`,
   « règle « <nom> » » like any other. Every test of it in `income.py` asks
   exactly that - `reading_of`, `follows_its_payer`, `set_source` (`reached`,
   the payer's other credits), `forget_payer`, `Entry.how_label`,
-  `Entry.remember_by_default`.
+  `Entry.remember_by_default`. A credit paying a sales invoice that counts
+  off the till reads « Facture de vente » (`SALE`, `BY_SALE`, derived from
+  the links, never stored) after the rules and a payer retained for a
+  compared source, and before any other payer: `follows_its_payer` (`sold`,
+  `holds`), `set_source` (`reached`, followers), `forget_payer`,
+  `Entry.how_label`, `Entry.remember_by_default`, `Entry.unnamed` and
+  `Entry.choice` all say so.
 - **A terminal that prints no gross** (the owner's last ask): a payout rule
   WITHOUT `(?P<encaisse>…)` reads the credit as a card payout counted at the
   amount received, its commission unknown (`Entry.gross_from_amount`, None
@@ -4551,10 +4585,12 @@ values in, plain values out - but for its last three functions (`load`,
   **The preview promises only that** - « Les rapprochements, les catégories
   et le choix « En caisse » propre à chaque opération restent tels quels » -
   **and says what a new payee unties without a field being written**
-  (`views._detached`; three queries, none when no payee changes): the
-  credits that follow a retained payer and whose payer key moves with their
-  payee (`income.payer_key` is read off it; worked out on a copy carrying
-  the new counterparty, `follows_its_payer` asked with the rules loaded),
+  (`views._detached`; three queries, none when no payee changes - its third
+  carries the credits chosen or paying a sales invoice that counts off the
+  till): the credits that follow a retained payer and whose payer key moves
+  with their payee (`income.payer_key` is read off it; worked out on a copy
+  carrying the new counterparty, `follows_its_payer` asked with the rules
+  loaded and what the payer holds),
   « N entrées ne suivront plus leur payeur retenu : à reclasser sur
   « Entrées d'argent » », and the debits whose alias key
   (`alias_key(payee_of(...))`) is a learnt `CounterpartyAlias`'s and moves,
@@ -4969,19 +5005,38 @@ of the window carries the menu - Automatique, Carte, Espèces, Chèque, Avoir,
 Titres-restaurant, Pas une vente (`models.IncomeSource`, the ONE vocabulary:
 `income.CARD`… are its values) - and sits in exactly one of three lists
 (`payouts`, `others`, `other_means`), the row's id `entree-<pk>` being where
-the choice answers (`views.income_source`), whichever list it moved to.
+the choice answers (`views.income_source`), whichever list it moved to. A
+credit paying a sales invoice is in `other_means`, « Facture de vente » -
+unless a till rule or a compared payer reads it, then in its own list; on
+every list's row « facture de vente n° X » is printed, a link to the
+invoice for « Recettes & ventes » (`Entry.sales`, `views._with_sale_pages`),
+whatever the credit reads as. « Factures de vente » is a row of the
+comparison compared with nothing (`till=None`, never « before the till »),
+and a compared row says « dont X € de factures de vente hors caisse »
+(`IncomeReport.sales_inside`: a counted invoice paid at the terminal or in
+a cheque deposit is a sale the till never rang, inside its Écart - said,
+the Écart left as computed).
 - **Order, and nothing else** (`income.reading_of`, a `Reading(source, how,
   till)`): the LINE's own choice (`BankTransaction.income_source`), else the
   first till RULE that RECOGNISES the line - « recognised » is « a till rule
   matched », « Pas une vente » included: what the line prints is data about
-  it -, else its PAYER's (`IncomePayer`), else « Autres entrées ». A payer
-  never un-recognises a line: the provider prints the bar's own name as the
-  payee of its payouts, so « Pas une vente » retained for a transfer from
-  the bar's other account under that name moved every payout out of the card
-  figures when the payer came before the rules (review, 01/10/2026). A stored
-  value that is no source is passed over, never raised on. `entry.how`
-  (`BY_LINE`, `BY_PAYER`, `BY_RULE`) is printed on the row, and on Banque's
-  tab where a person decided - who decided is part of the answer. A rule is
+  it -, else a PAYER (`IncomePayer`) retained for a source the till compares
+  (card, cash, cheques, vouchers, « Avoir »), else « Facture de vente » when
+  it pays a sales invoice that counts off the till (`sold`), else a payer
+  retained « Pas une vente », else « Autres entrées ». A payer never
+  un-recognises a line: the provider prints the bar's own name as the payee
+  of its payouts, so « Pas une vente » retained for a transfer from the
+  bar's other account under that name moved every payout out of the card
+  figures when the payer came before the rules (review, 01/10/2026) - and a
+  terminal recognised by its payer « Carte » and linked to a sales invoice
+  must stay a payout (its gross, its commission, the balance), hence the
+  compared payer before the sale. A « Déjà comptée par la caisse » invoice's
+  credit is no sale: the till took that money, and it reads as the till took
+  it. A stored value that is no source is passed over, never raised on.
+  `entry.how` (`BY_LINE`, `BY_PAYER`, `BY_RULE`, `BY_SALE`) is printed on
+  the row, and on Banque's tab where a person decided (`BY_LINE`,
+  `BY_PAYER`; a sale's invoices are said once there, by its links) - who
+  decided is part of the answer. A rule is
   named (`Entry.rule`; `Entry.how_label` « règle « <nom> » »), « non
   reconnue » where none matched - no longer « libellé « TOTAL ENCAISSE » » or
   « type d'opération », words of the code that were one bank's.
@@ -5005,8 +5060,11 @@ the choice answers (`views.income_source`), whichever list it moved to.
   nothing re-keys a payer.
 - **Read when the page is drawn, never written onto the lines**, like
   `IgnoreRule`: the payers are ONE query and the till rules another
-  (`income.QUERIES` is 7; Banque's tab reads both once, `income.known_payers`
-  and `recognition.load`, and only when it shows a credit), and a statement
+  (`income.QUERIES` is 9 - the sale links and their documents' lines are
+  two, `recipes.sale_payments.read_links`; Banque's tab reads both once,
+  `income.known_payers` and `recognition.load`, and the sale links, the
+  documents near its credits and the bar's own names - six queries - only
+  when it shows a credit), and a statement
   imported again never touches `income_source` (`import_statement` only
   adds lines). A choice settles nothing - `settled_by_hand` is untouched.
 - **A card credit printing no gross counts the amount received as its gross**
@@ -5503,14 +5561,19 @@ employés » names the treasury, so the owner ticks it knowing.
 01/10/2026): the supplier, the total TTC with « € » for the decimal point,
 the date with underscores, « sans date » when there is none, the stored
 file's own extension (a ticket's photo stays « .jpg »; a file stored with
-none gets none - named « .pdf » it would be shown as one). One definition,
-`invoices/filenames.py::download_name`; the stored file keeps its name.
+none gets none - named « .pdf » it would be shown as one). One shape,
+`invoices/filenames.py::named_download`: `download_name` (an invoice),
+`sale_download_name` (« Vente Exemple SARL 1500€00 05_03_2026.pdf » - a
+« facture de vente », its customer cut to 60, « Vente » alone without one);
+the third door is `recipes:sale_document_file`. The stored file keeps its
+name.
 
 **Every door opens the stored file through `accounts.views.open_stored`**:
 the file under the bound tenant's media folder, resolved, a file - or None
 (a name climbing out with « ../ », a link pointing out, a folder, a NUL: each
 was a 500 or worse when the route opened `source_file` itself). The
-`/fichiers/` view, the document's file route and the zip all use it.
+`/fichiers/` view, the documents' file routes and the zip all use it - and
+`?telecharger=1` is one parameter for them all (`accounts.views.DOWNLOAD_PARAM`).
 
 - `invoices:invoice_file` (`/invoices/<pk>/fichier/`) serves a document's
   file under that name - inline for a PDF or a photo, so the frame and
@@ -5539,10 +5602,10 @@ was a 500 or worse when the route opened `source_file` itself). The
   contains every file. A root passed in is only ever `media_folder()` of
   the bound tenant, never anything from the request. A member whose suffix
   « Données » stores (`transfer.archive.STORED_SUFFIXES`: PDFs, photos,
-  zips, xlsx) goes in ZIP_STORED; the rest and « Factures sans
-  fichier.txt » are deflated. A whole history of 338 files (62 MB) went
-  from ~3,7 s to ~1,2 s, for a zip ~17 % bigger on incompressible files
-  (less on real PDFs).
+  zips and the office files that are zips - xlsx, docx, odt, ods) goes in
+  ZIP_STORED; the rest and « Factures sans fichier.txt » are deflated. A
+  whole history of 338 files (62 MB) went from ~3,7 s to ~1,2 s, for a zip
+  ~17 % bigger on incompressible files (less on real PDFs).
 
 Tests: `invoices/tests/test_filenames.py`, `bank/tests/test_invoice_files.py`.
 
@@ -5655,8 +5718,10 @@ imports (`transfer/legacy.py`).
   number), else its stored sha, else its file's sha, with an occurrence for
   byte-identical documents (two of the real Monoprix tickets), an invoice line
   by its rank in its invoice, a bank line by its fingerprint, a treasury
-  point by its day and an adjustment by its random `reference`. A document
-  with no number, no stored sha and no file on the disk (typed by hand
+  point by its day and an adjustment by its random `reference`, a sale
+  document by its `key` (random, or its content's for one older than
+  recipes 0020 - « Factures de vente », below). An invoice with no number,
+  no stored sha and no file on the disk (typed by hand
   without a file, or a ticket whose PDF is gone) carries the moment it was
   typed: its key's `moment` is its imported_at in UTC, which an import
   writes back (`_create`'s bulk_update, `_replace`'s assign). Its
@@ -5789,7 +5854,12 @@ imports (`transfer/legacy.py`).
   still counts the files it keeps - and, merged without a conflict, its
   lines - « inchangés » (`InvoicesSection._untouched_files`): a « Remplacer »
   restore of that copy that updated one ticket counted 1 518 of its 1 520
-  files.
+  files. « Ventes » counts the same: a sale document updated still counts
+  its kept file and, merged without a conflict, its lines « inchangés »; a
+  file missing from the disk is counted by `count()` and not by the export,
+  as for the invoices; its prune and its clear count the same four rows -
+  documents, lines, files and bank links (« règlements bancaires des bons
+  de vente ») -, the lines and links from the counts the deletes return.
 - **Two steps, and the preview is the real run rolled back**
   (`runner.run_import(preview=True)`), so what it announces is what happens.
   Files are only written by the confirm, and removed if it fails; deletions
@@ -5863,10 +5933,15 @@ imports (`transfer/legacy.py`).
   statement formats are « Règles de la banque »'s since 02/10/2026
   (`sections/bank_rules.py`, « The statement's layout », « Recognising the
   operations »), which « Banque » only recommends: its « Effacer » takes
-  none of them. Its `clear_note` names only the treasury's points and
-  adjustments, which no statement brings back; the description above it
-  lists the rest - the payee names learnt, the payers retained and every
-  line's decisions go too, and no statement brings them back either.
+  none of them. Its `clear_note` names the treasury's points and
+  adjustments, which no statement brings back, and the sales invoices'
+  links its lines take with them (`recipes.SaleDocumentPayment`, CASCADE:
+  its prune and its clear count them into « Ventes »' report, with
+  `bank.SALE_LINKS_NOTE` - which puts « Ventes » in the safety archive);
+  « Ventes »' own `clear_note` names their files and links. The
+  description above it lists the rest - the payee names learnt, the payers
+  retained and every line's decisions go too, and no statement brings them
+  back either.
 - **Never exported:** Metro's `scrape_*` fields (the firewall's pause - a
   restore resetting it would let the next gather sign in), `SupplierChange`
   (its undo data holds pks), job history, `ai_suggestion` (the review panel
@@ -5893,11 +5968,14 @@ imports (`transfer/legacy.py`).
   section, like « Personnel ». Suppliers
   with a reader or a till of their own are never deleted by a clear or a
   replace; a clear only forgets what they learned.
-- **Nor the till's money and payments.** « Ventes » carries the quantities
-  only; the day's money and `PosDailyPayment` are read again from the files
-  on disk (`laddition_backfill_revenue`, then `laddition_backfill_payments`),
-  and the section's description on the page says so. `count()` leaves the
-  payments out, since the Importer tab compares it with the archive's counts.
+- **Nor the till's money and payments.** « Ventes » carries the till's
+  quantities only - its money stays out; the sale documents travel whole:
+  their stated figures, lines, file (`ventes/`, written STORED in the zip)
+  and bank links. The day's money and `PosDailyPayment` are read again from
+  the files on disk (`laddition_backfill_revenue`, then
+  `laddition_backfill_payments`), and the section's description on the page
+  says so. `count()` leaves the payments out, since the Importer tab
+  compares it with the archive's counts.
   « Effacer » deletes them all, « Remplacer » those of every day it leaves
   without till sales, and both add `sales.PAYMENTS_NOTE`, the command that
   brings them back.
@@ -5930,15 +6008,22 @@ imports (`transfer/legacy.py`).
   CHECK - each skips its record with its reason. A photo's width and height
   are held to `codec.check_count`, since no full_clean runs on photos: from
   2**63 the insert's OverflowError failed the whole preview. Files only under
-  `consignes/` (`archive.STORAGE_FOLDERS`), written through the same
-  `check_file`/`save_file` as the invoices', old ones deleted on commit; a
-  photo missing from the exporting disk leaves its reprise without it (said),
-  a bon whose PDF was missing is skipped. A reprise's counts find their
-  type, and a bon its format, in the database - after « Types et formats de
-  consignes » applied in the same run. The seeded types and format are
-  counted and cleared like the rest, by « Effacer » of « Types et formats de
-  consignes » (which clears « Consignes » with it) - the safety archive
-  brings them back; « Effacer » of « Consignes » alone keeps them.
+  `consignes/` - `archive.STORAGE_FOLDERS` holds four folders,
+  `invoices/`, `receipts/`, `consignes/` and `ventes/`, and each section
+  refuses a name outside its own (« Factures et tickets » `invoices/` and
+  `receipts/`, « Ventes » `ventes/`), or a record could take another
+  section's file over; a `ventes/` member is never deflated
+  (`archive.STORED_FOLDERS`: a sales invoice's scan deflated past
+  `MAX_RATIO` made the reader refuse the whole archive) -, written through
+  the same `check_file`/`save_file` as the invoices', old ones deleted on
+  commit; a photo missing from the exporting disk leaves its reprise
+  without it (said), a bon whose PDF was missing is skipped. A reprise's
+  counts find their type, and a bon its format, in the database - after
+  « Types et formats de consignes » applied in the same run. The seeded
+  types and format are counted and cleared like the rest, by « Effacer » of
+  « Types et formats de consignes » (which clears « Consignes » with it) -
+  the safety archive brings them back; « Effacer » of « Consignes » alone
+  keeps them.
   The supplier page and « Données » name the consignes rows holding a
   supplier (`supplier_views.returnables_refusal`, one sentence for both);
   an import keeping it says which section left each there unreplaced
@@ -6804,7 +6889,9 @@ count's page, the message at the top.
   less one month is 28/02), and a sale ON that first day counts
   (`GapReport.menu_since`, inclusive; the take's default is the day after it).
 - **A recipe is on the menu when its last sale** (`gaps._last_sale_days`:
-  a till day or a sale document, quantity above 0 - a refund is no sale) **is
+  a till day, quantity above 0, or a sale document that counts (« Compte
+  dans les marges et le stock »), its consumed quantity (else invoiced)
+  above 0 - a refund is no sale, nor is a line nothing was poured for) **is
   on or after `menu_since`**; the page lists the others with that date, or
   « jamais vendue » (`UnsoldRecipe`). A refund does not undo a sale either:
   sold, then refunded another day, a recipe stays on the menu, its mix 0 or
@@ -7035,12 +7122,14 @@ with it on, and `test_shopping_page.PageCostTests` the whole page):
   first day is the first day a till import recorded a sale** (a till
   button's day, `PosProductDailyQuantity`, or a `RecipeSale` not typed by
   hand: any source but « manual »), clamped to W. A sale typed by hand and
-  a sale document count as consumption and never start the till: older
-  than the import, one put months the till never read into k, and a young
-  import read « la caisse a vendu » far more than it had. Only a bar with
-  no till import at all starts from the first of its own sales
-  (`_till_first_day`). No sale in W (or a coverage older than it): the
-  till is off for the page.
+  a sale document that counts, by its consumed quantity, count as
+  consumption and never start the till (a line tied to nothing is no
+  consumption, nor is a document « Déjà comptée par la caisse » or
+  « Acompte »): older than the import, one put months the till never read
+  into k, and a young import read « la caisse a vendu » far more than it
+  had. Only a bar with no till import at all starts from the first of its
+  own sales (`_till_first_day`). No sale in W (or a coverage older than
+  it): the till is off for the page.
 - **A lagging import extrapolates**: past `covered_until` the till clock
   runs on at its recent rate, the line's till sentence says « aurait
   vendu environ … estimé depuis le JJ/MM » (above), and the page warns
@@ -8106,6 +8195,550 @@ written as itself in recipes/), and
 settings (`common.search_key`, today's date): it writes and reads nothing
 else of the database but the payments' vocabulary.
 
+### « Factures de vente » (`recipes/sale_*.py`, `bank/sale_*.py`)
+
+The owner, 05/10/2026: « Je veux pouvoir ajouter des factures de vente, soit au format facture
+électronique, soit au format pdf ou autre. Le but est d'associer une rentrée d'argent sur le compte
+avec une facture et de pouvoir spécifier certains éléments vendus sur la facture qui correspondent à
+des éléments des "recettes" avec des ingrédients ou bien directement des produits achetés présents
+dans le stock. » What it became: the existing sale document - « facture de vente » on screen
+(« Recettes & ventes · Ventes », card « Factures de vente »), « bon de vente » in « Données » -
+carries a file; an electronic invoice is read from its own data; the lines that left the stock are
+tied to a recipe or an article, the others stay free; and a credit of the statement is linked to the
+invoice it pays. The modules, each docstring the reference: `recipes/sale_files.py` (the one
+writer), `sale_einvoice.py` (the pure reading), `sale_documents.py` (the tab's list and search, the
+known customers, the deposit doubts), `sale_lines.py` (tie proposals, the consumption doubt),
+`sale_payments.py` (the links read once, the allocation, the payment state), `bank/sale_matching.py`
+(pure) and `bank/sale_reconcile.py` (the database side). `bank` imports `recipes` at module level;
+`recipes` reaches `bank` only inside a function (`# here: bank reads this module`), the way
+`invoices/workspace.py` reaches `bank`.
+
+**What a document is** (recipes 0020):
+- `SaleDocument` keeps `reference`, `sold_on` and `note`, and gains `key` (below), `customer`,
+  `customer_identifier` (BT-47, else BT-48: shown, never matched), `counting` (below), the totals it
+  STATES - `stated_total_ttc` (BT-112, or typed), `stated_total_ht` (BT-109, or typed beside the
+  TTC), `prepaid_ttc` (BT-113), `payable_ttc` (BT-115) -, `adjustment_ht` and `adjustment_vat_rate`
+  (the document's charges and allowances, net, and their own rate), what an electronic invoice
+  states (`einvoice_format` « Factur-X » / « CII » / « UBL », "" when typed; `einvoice_type_code`;
+  `einvoice_issued_on`, BT-2 kept beside `sold_on`; `einvoice_delivered_on`;
+  `einvoice_preceding_number`, BT-25; `einvoice_checks`, its own checks, said and never repaired),
+  `seller_name`, `seller_siren` (indexed: Achats' guard reads it), `source_file` (`ventes/AAAA/MM/`,
+  `models.SALE_FILES_FOLDER`) and `source_sha256`. Constraints: `saledocument_one_per_file` (a
+  partial unique on the sha - also what makes two posts of one file in flight one document) and
+  `saledocument_counting_known`.
+- `SaleDocumentLine`: a recipe, an article, **or nothing** - a free line (« Location de salle », a
+  service charge) says what it is by its `label`. New: `label`, `unit_price_ht` (shown only),
+  `total_ht` (BT-131, signed) with its `vat_rate` (a fraction), `consumed_quantity`, `rebuilt`. Five
+  check constraints named after their rules - `saledocumentline_at_most_one_source` (it was
+  « exactly one »), `_untied_has_a_label`, `_ht_has_its_rate`, `_consumed_needs_a_source`,
+  `_rebuilt_is_untied` -; `clean()` says, all at once, the four a form can meet (the `LINE_*`
+  constants, which the forms reuse). `source_name`, `shown_name` and `unit_display` never
+  dereference a missing source: a free line used to crash the tab and « Données ».
+- `SaleDocumentPayment` - in `recipes`, not `bank`: the link is the sale's fact, and « Ventes »
+  carries it. One CREDIT pays one document, wholly or in part; the pair is unique
+  (`unique_transaction_sale_document`), neither side exclusive (a deposit then the balance; one
+  transfer for two invoices), CASCADE from both ends, `method` AUTO / MANUAL (`InvoicePayment`'s
+  words, declared here so recipes never imports bank). **Never `InvoicePayment`** (a purchase, read
+  by every spending figure) **and never `related_name="payments"` on the bank line**
+  (`reconcile.open_lines`, `views.classify`, `invoice_files.paid_by` read that name as purchases):
+  `bank_payments` on the document, `sale_payments` on the line. A debit is refused by the code that
+  links: no constraint sees a sign across two tables.
+
+**Its key** (`SaleDocument.key`, 16 hex, unique, never shown) is what « Données » names it by:
+random for a new document (`new_sale_key`, a module function the migration names, never a frozen
+value), and for one saved before 0020 - or a key-less record of an older archive -
+`legacy_key(fingerprint, occurrence)`: the first 16 hex of sha256(« fingerprint#occurrence »), the
+fingerprint « Données » always matched documents by (`transfer.sections.sales.fingerprint`) and the
+rank among identical ones. The database migrated and every older archive of it give one document one
+key, deterministically. The migration adds the column NULL and not unique, fills it in
+`RunPython(fill_keys)` - the fingerprint FROZEN in the migration, which imports nothing of the app -
+and only then makes it unique with its default: one `AddField(unique=True, default=…)` computes the
+callable ONCE for the table rebuild, gives every row the same key and fails on the index with two
+documents. Proved twice (`recipes/tests/test_migration_0020.py`): `LegacyKeyTests` (the frozen
+derivation equals the live one) and `MigrationReplayTests` (back to the migration before it,
+`recipes/0019_tillformat`, two identical documents and a third, forward again: unique keys, each
+the live derivation; the leaf restored in `finally`) - only a replay proves the risky step.
+
+**Two ways in, on the tab's card** (`recipes/_sale_documents_card.html`, `#factures-vente`):
+- **« Lire la facture »** (`recipes:sale_document_read`, POST): a Factur-X PDF or a CII / UBL XML,
+  read and created AT ONCE - header, lines, file - with its « Compte » chosen ON THE CARD (three
+  radios, « Compte dans les marges et le stock » checked): chosen before the document exists, so ten
+  invoices documenting tabs already rung on the till are never counted, nor linked as sales, in the
+  meantime. Then its page, to tie the lines. `sale_files.read_einvoice_upload` refuses, before
+  anything is written and in this order: no file, an extension, `file_too_big`, an unknown counting;
+  the same sha already a sale (« Déjà ajoutée : … ») or a purchase (« … déjà dans les factures
+  d'achat … » - a file dropped in the wrong place); the XML (`document_xml` / `embedded_xml`,
+  **never `looks_like_an_invoice`**: an XML goes to the reader whatever it is, and einvoice says
+  what is wrong with it); `read_sale`; the direction guards; a number another document holds; the
+  date. Each refusal is said IN the card (`error_for_page`, `said=(EInvoiceError, SaleFileRefused)`:
+  einvoice's own sentences as they are - a UTF-16 file, a DOCTYPE, not EN 16931 -, anything else a
+  fixed sentence).
+- **« + Facture de vente »** (`recipes:sale_document_create`): typed, with an optional file of any
+  allowed kind (`SALE_FILE_EXTENSIONS`: PDF, XML, photos, office files, CSV, text - by the
+  extension, never sniffed; 25 Mo). The date and the amounts of a plain file are TYPED: nothing
+  reads it - no OCR, no AI, no PDFium; the only reading anywhere is an e-invoice's XML. **An
+  electronic invoice is refused there** (`einvoice_on_typed_form`): its figures typed again by hand
+  would be the loss receipts.py forbids. So is an XML einvoice refuses to read (a DOCTYPE, UTF-16,
+  too big), with its own sentence - `looks_like_an_invoice` swallowed every refusal and let it in as
+  a plain file. `.heic` is accepted but left out of the input's `accept` (`SALE_FILE_ACCEPT`), so an
+  iPhone sends the JPEG the page can show (to confirm on the owner's phone).
+- **The reader** (`sale_einvoice.read_sale`, pure: bytes in, a `SaleReading` out) is Achats'
+  `einvoice.read` and nothing else, plus one question: does each figure fit the SALE column it goes
+  into? A sale line's quantity is (10,4) where Achats' is (12,3), its rate stops at 100 %: past it,
+  `SALE_FIGURE_REFUSED` in French, never cut (`common.fits_column`, the check Django's converter
+  makes on every read - `importing._fitting` asks it too now); a negative rate is refused; names are
+  cut. More than `MAX_SALE_LINES` (500) lines is refused first: the page would be tens of megabytes
+  and its POST past `DATA_UPLOAD_MAX_NUMBER_FIELDS`. A MINIMUM / BASIC WL invoice gives one line per
+  VAT row, `rebuilt` (« Total au taux de 20,00 % (facture sans lignes) »): money only, never tied. A
+  line stating no label is stored « Ligne N sans libellé »; no figure reads « -0.00 ». `einvoice`
+  reads the buyer, BT-25, BT-72 and BG-14 into `EInvoiceFacts` for this side and never into
+  `source_text` (signed with `copy_negate`, which asks no decimal context: an absurd BT-115 Achats
+  reads today must not become a new refusal) - so Achats reads every fixture as before:
+  `test_einvoice.py` pins each one's whole ParsedInvoice as read before the change.
+- **The date** (`sale_files._sold_on`): the delivery date (BT-72, else the start of the billing
+  period) when plausible (2000 - today), else the issue date - an event invoiced days later consumes
+  in the stock-take window of the event, not of the paperwork; the one used is said. Neither
+  plausible: the card's « Date » (junk typed there is « Date illisible », never « nothing typed »);
+  nothing typed: refused, nothing stored, and a readable date typed comes back in the box. Any
+  refusal also gives back the card's « Compte » when it is not the default (`compte`, read back
+  only as a value the card offers, never carried on): drawn again on « Compte dans les marges »,
+  a « Déjà comptée par la caisse » refused was counted by the next file sent without a second
+  look. A plausible date AND a typed one: the typed one is said ignored.
+- **Duplicates and direction**: one document per file (the sha, then the constraint); a number is
+  unique among sale documents, case aside - the card refuses it naming the first, the typed form
+  only when the number CHANGED (`NUMBER_TAKEN`: two documents saved before 0020 with one number
+  still save). A seller a supplier retains (`identified_supplier`), or a buyer whose SIREN is the
+  bar's (a stored `seller_siren`), is a purchase: refused, « importez-la dans « Factures » ». Stored
+  as a sale, it would also teach Achats' guard a supplier's SIREN.
+- **How it counts** (`document_from_reading`): a 386 is « Acompte » whatever the card said; a credit
+  note whose BT-25 names a document held here counts like it; else the card's choice - each said
+  (`ReadOutcome.said`, `Said(level, text)`: some `info`, some `warning`). A 380 that says
+  « acompte » is only said: preset « Acompte », a final invoice paid in advance would leave every
+  figure.
+
+**The one writer** (`recipes/sale_files.py`, `returnables/slips.store_slip`'s shape): every refusal
+BEFORE the transaction; the file saved INSIDE it with its rows (`staged(upload)`: a temp file in the
+system TEMP keeping the upload's suffix - `document_xml` decides by it -, deleted in `finally`);
+**any exception inside deletes the name just saved** - Django has no « on rollback »; a file
+replaced, removed (« Retirer le fichier »; a new file chosen with it wins) or deleted with its
+document goes `on_commit`, never before: rolled back, the old file stays with its row. The
+IntegrityError of two posts of one file is « Déjà ajoutée » on the card and `FILE_TAKEN` on the
+typed form. **`save_typed` and `delete_document` read the row again inside their IMMEDIATE
+transaction** - the view loaded it when the request began: a row deleted meanwhile is
+`DocumentGone` (« Cette facture de vente n'existe plus. », nothing written - saved anyway, the row
+and its lines came back under their pk), a header-only save writes back the file the row names NOW
+(never a stale instance's), `save(force_update=True)` the backstop, and the file deleted is the one
+the row names inside the transaction. **A file deleted on commit is one no row names**
+(`_delete_unreferenced`, case aside), and never the name just written (`_same_name`): a row naming
+a file gone from the disk, the same file attached again that month is saved under exactly that
+name - and the old name's deletion took the new file. A stem that cleans to nothing (« €.pdf ») is
+saved `facture.pdf`. An e-invoice's type code is stored cut to its column (10), after the kind was
+read off the whole code. `source_file` is a
+plain `forms.FileField` OUTSIDE `Meta.fields` (`ManualInvoiceForm`'s rule: inside,
+`FileField.pre_save` writes a second copy). `delete_document`: lines and links by CASCADE, the
+credits stay with their `settled_by_hand`, the file on commit; a document already gone answers
+None - « Cette facture de vente n'existe plus. », never a 404 (a POST on a document deleted in
+another tab says the same). « Données » writes through its own context, never here.
+
+**The file** (`recipes:sale_document_file`, `caisse/ventes/facture/<pk>/fichier/`) is the third door
+out: `accounts.views.open_stored` + `file_response` - a PDF or a photo inline (the document page
+frames it, SAMEORIGIN), anything else a sandboxed download, `?telecharger=1` to save. **Only a name
+under `ventes/`**: a row naming another folder (an older archive, a hand edit) would hand a
+purchase's PDF to an employee given « Recettes & ventes ». Its name is `sale_download_name` (« A
+document's file », above). `MEDIA_AREAS`: `ventes/` is « Recettes & ventes »'.
+
+**The one money rule.** A document's total is the total it STATES (BT-112, or typed), else its
+lines' TTC plus its charges and allowances at their own rate, to the cent
+(`models.fallback_total_ttc`, which `total_ttc_of`, `document_to_pay`, `read_links`,
+`deposits_counted_twice` and « Marges » all read: an e-invoice stating no BT-112 beside a BG-21
+charge was 110 € on the tab and at the bank, 134 € in « Marges ») - lines never replace a stated
+total: typed beside some
+lines, it says the rest has no line (the owner ties « certains éléments ») or, lower, that a
+discount applies to them. A line's money is its stated HT at its rate (EN 16931 states no line TTC),
+else price × quantity, else - a recipe line saved before 0020 only - the recipe's menu price. **No
+document's money moves after it is saved**: `save_typed` writes the menu price of the day into every
+recipe line saved with a blank price (`_write_menu_prices`: every line, not only the forms that
+changed), or raising a cocktail's price moved every old invoice's total, its payment state and the
+pass's figure; documents from before keep the fallback until saved again (an old archive's
+fingerprint must still find them). What the bank is to receive is `to_pay`
+(`models.document_to_pay`): BT-115 when stated, else the total less what was already paid. The page
+says when the lines miss a stated total by more than a cent a line (`lines_differ_of`). Achats'
+« what the lines now say wins » is NOT copied: a sale's lines are optional, an e-invoice's are not
+editable.
+
+**What « Marges » counts** (`margins_for`, `_read_the_documents`): every counted document **at
+exactly its total, to the cent** - the tab, the bank and Marges never disagree on one document.
+- A document that states its HT (every e-invoice; a typed one with « Total HT »): booked as stated.
+  A NEGATIVE adjustment (an allowance) is spread over the lines with a positive HT at its OWN rate,
+  to the cent, the leftover cents to the largest remainders; a POSITIVE one (a charge, a room fee)
+  is revenue with no cost. The costed part is clamped to the revenue (`_held`): an e-invoice whose
+  own check fails never prints a coverage above 100 % - and `revenue_coverage` itself never reads
+  above 1, whatever the documents hold.
+- A typed document without its HT: its lines go into the window's per-rate buckets as before, and
+  the rest of a typed total, whatever its size, is booked too - positive, as TTC with no rate and no
+  line (`document_free_ttc`); negative (« Forfait 30 cocktails 200 € » on lines worth 270 €), spread
+  over the lines with a positive TTC in their own buckets, so the HT drops with it - never « free »
+  money below zero; with no positive line to take it (a credit note typed as its total alone),
+  booked whole rather than dropped. **A free line below zero (« Remise 1 x -20 € ») is the same
+  discount** (`_typed_totals`): spread with the negative rest, the free line emptied - booked as
+  typed it left the HT 18 € too high, printed « -20 € … ne correspondent à aucune recette » and,
+  with a rate, a « Part chiffrée » of 125 %. **And the lines are brought to the document's own
+  total to the cent** before the buckets (the sub-cent part of a price times a four-decimal
+  quantity on the largest line): three lines of 3,50 € x 0,3333 are 3,51 € here as on the tab,
+  never 3,50 €.
+- A line's cost (`_line_cost`, None meaning uncosted): the recipe's cost per sale or the article's
+  unit cost (`read_unit_costs`: one query, only when such a line exists), × its CONSUMPTION.
+  Consumed 0 is uncosted - a « 0 » typed on a keg must not make its 150 € « chiffrés » at 0 €; a
+  consumption of the money's opposite sign (the mirror shape) is never costed; a free line is
+  uncosted revenue.
+- **The article rule** (« An article sold as itself on a sale document », below): both sides IN only
+  with a rate AND a price of the line's own (`has_own_price`), else both out. An article ticked
+  « compter dans la marge produits » is revenue with NO cost and counted uncosted: costed at 0 it
+  printed 100 % and inflated « Part chiffrée » in a month that sold it without buying it. A rate
+  with no price is refused by the typed form and kept out by `_line_cost` whatever brought it.
+- The new counts, each named in the page's foot: `documents_set_aside` (« … ne compte(nt) pas
+  ici »), `document_free_ttc` (« … ne correspondent à aucune recette ni à aucun article », with
+  « dont … sans taux de TVA » - `document_free_without_rate_ttc`, in `revenue_without_rate_ttc`
+  already: said once), `deposits_counted_twice` (« … la même vente compte deux fois. Marquez
+  l'acompte « Acompte ». »); `document_costed_articles` is the stat's note (« N articles vendus hors
+  caisse »: distinct articles beside the servings - an article's quantity is in its own unit). The
+  stat reads « Coût de ce qui a été vendu (HT) ».
+- A deposit counted twice has ONE definition, `recipes/sale_documents.deposits_counted_twice`
+  (Marges and the document's page ask it; recipes cannot import margins): customers compared case,
+  accents and spaces aside IN PYTHON (`customer_fold` - SQLite's case-blind comparison is ASCII only
+  and never accent-blind), two queries at most, none unless a counted document of the window states
+  an amount already paid.
+
+**Consumption** (`SaleDocumentLine.consumption`, `models.line_consumption`): `consumed_quantity` - 0
+included, nothing left the stock - else the invoiced quantity: a « Fût 30 L » invoiced once on an
+article followed by the litre consumes 30, a « Forfait 30 cocktails » × 1 consumes 30 sales of its
+recipe. It has the money's sign (a credit note's TIED line gives stock back), and it is what every
+reader of stock and the cost read - never the money. Every reader (`recipes/sales.py`'s two,
+`gaps._last_sale_days` and `servings_from`, `shopping_data.read_till`) filters
+`document__counting=COUNTED`, leaves a line tied to nothing out, and stays ONE query. **No
+`Coalesce`**: SQLite's converter quantizes a plain column but hands a `Coalesce` back with fifteen
+digits (« 0.700000000000000 »: equal, not the same bytes), so both columns are read and the rule
+applied in Python, `_bought_over`'s precedent; `_last_sale_days` keeps a SQL `Q` (« nothing poured
+is no sale »). No query pin moved. **A tie changed with the consumed quantity left as drawn clears
+it**, said: a 30 typed in servings would be read as 30 L once the line points at a keg.
+
+**What a document counts in** (`counting`, chosen on the card and on the page):
+- « Compte dans les marges et le stock » (`COUNTED`): the default, and every document from before.
+- « Déjà comptée par la caisse » (`TILL`, the owner's D5): it documents sales the till rang up (a
+  tab settled by transfer) - figures, file and bank link, no margin, no stock. Its credit does NOT
+  read « Facture de vente » on « Entrées d'argent »: in a bar it is mostly a deposit the till took
+  as an « Avoir », compared with the till's « Avoir » row once a person chooses « Avoir » on the
+  credit (the help under the choice says so); read as a sale off the till, it would count beside the
+  till's own takings.
+- « Acompte : la facture finale la comptera » (`DEPOSIT`): nothing either - its final invoice counts
+  the whole sale, stating the deposit « déjà réglé » -, but its credit IS a sale off the till. A 386
+  is preset. Two doubts are said, never repaired: a counted deposit its final invoice deducts
+  (above), and a « Acompte » older than `DEPOSIT_WITHOUT_FINAL_DAYS` (90) with no later document of
+  its customer stating a prepaid amount (pill « Sans facture finale »: a deposit kept for a
+  cancelled event is a sale to count) - one naming no customer is doubted too.
+- A credit note (381, 261, 396, a UBL `CreditNote`) comes signed from einvoice and counts like the
+  invoice it corrects (BT-25 held here), else as the card says, with « vérifiez « Compte » »: a
+  credit note of a till invoice, counted, would take off revenue never added. A typed one is a
+  negative QUANTITY at a positive price. `to_pay ≤ 0` reads « Avoir » and asks the bank for nothing.
+
+**The page** (`sale_document_form.html`; `sale_document_form` creates and updates):
+- **An e-invoice's figures are its data**: « Ce que dit la facture » is printed, read-only;
+  « Contrôles de la facture » folds open when one fails (« les chiffres de la facture elle-même,
+  jamais corrigés »). Only « Date de vente » (the invoice's own dates said under it), « Compte »,
+  « Note » and the ties change (`SaleEInvoiceHeaderForm`); the file is the invoice and is never
+  replaced.
+- **The tie grid** (`SaleTiesForm`): `lien-<pk>` and `consomme-<pk>` per line, **named by line pk,
+  never a formset** - the timesheet grid's rule: no index can move a value onto another line. A
+  rebuilt line and one of the mirror shape (quantity and amount of opposite signs) draw no select,
+  and a tie posted for one is refused. `save()` writes, in one update, only what the POST says
+  differently from what is stored; a field the POST leaves out keeps the stored tie. A consumed
+  quantity of the line's opposite sign is refused; 0 is accepted and said. Saved, the page comes
+  back to itself at `#reglements` - the next step is « Règlement ». This save runs no bank pass
+  (Banque's next import or « Rapprocher automatiquement » does).
+- **Proposals** (`sale_lines.proposals`, three queries): for an untied line with a label and a
+  POSITIVE quantity and amount, on a document that counts - what the latest line of the same label
+  was tied to (its consumed ratio carried), else the one sellable recipe, else the one article, of
+  that name (case, accents and spaces aside; two of one name propose nothing). Drawn as the select's
+  choice on a GET and **never stored**: « Enregistrer » compares what is POSTED with what is STORED
+  (no `has_changed()` trap), so a proposal left as drawn is saved, and one set to « rien » comes
+  back next time. **None on a credit note**: it repeats its invoice's labels, and one
+  « Enregistrer » over a price correction would put phantom stock back. A preparation is never
+  offered (`keep=` now reaches the grid and the formset).
+- **The consumption doubt** (`consumption_doubt`): HT per unit consumed beyond ×10 or ÷10 of the
+  recipe's menu price HT or the article's unit cost is said under the cell, never enforced.
+- **A typed document** keeps its formset: `extra=1` new, `extra=0` saved (no spare row),
+  `max_num=MAX_SALE_LINES`. « Correspond à » is a recipe, an article or « — rien (ligne sans recette
+  ni article) » (a free line needs a label and a price, and may be negative - a discount). Figures
+  are `TypedAmountField`s (`common.read_amount`: « 12,50 » is 12.50, « 1,500 » is asked again;
+  compared by VALUE in `has_changed`). Refused, each in French: an article with a rate and no price,
+  a tied line with a negative price, a consumed quantity on a free line or of the quantity's
+  opposite sign. A typed total with no line is allowed (« Total HT » too: with the TTC, the same
+  sign, not larger); neither a line nor a total is `NOTHING_SOLD`. **Missing is not blank**
+  (`KEPT_WHEN_ABSENT`): a header field the POST does not carry keeps the instance's value - a page
+  drawn before the deploy blanks nothing. No Django default refusal reaches the page in English
+  (`FrenchErrorsTests`; a NUL is `NUL_REFUSED`, a stale line id « Cette ligne n'existe plus »).
+- **The `jeton`** (`SALE_DOCUMENTS_MADE` in the session, the last 20, token → (pk,
+  `common.posted_digest`)): the same token and content on create or on the read card opens the
+  document already made (« Facture de vente déjà enregistrée : la voici. »), on update lands where
+  that save went; other content under the same token, or no token, is a new submission. « + Ajouter
+  une ligne » is a submit button (`ajouter_ligne`), handled first: one more row drawn, nothing
+  validated or saved, no error printed (`hide_errors`). Enter saves - a hidden first
+  « Enregistrer »; without it Enter « added a line » and saved nothing. That hidden button carries
+  `data-default-submit`, which ui.js disables with the visible `data-busy-label` one: left live, a
+  second Enter while the first save ran made the document twice (the `jeton` is remembered only
+  once the save returns).
+- **Nothing typed is lost without a word**: every form leaving the page (« Délier », « Rattacher »,
+  « Chercher une entrée », the head's « Supprimer ») carries `data-leaves-lines`, and
+  `static/js/sale_document.js` asks `LEAVE_WARNING` once a field changed, then the form's own
+  `data-confirm` (ui.js passes such a form over: each question once). A page drawn in answer to a
+  POST - a refused save, the no-JS « + Ajouter une ligne »; a successful save always redirects -
+  carries `data-unsaved` on the document's form, and the script starts out edited: « Rattacher »
+  right after a refusal threw the typed values away in silence. The script also clones a row
+  (never renumbering - `NonContiguousTests`) and hides the sentence written for a reader without
+  JavaScript. No inline script, handler or style in the sales templates (`TemplatesTests` uses the
+  CSP test's own patterns).
+- **The tab** (`sale_documents.listed`): windowed with « Dernières ventes », searched by the
+  DATABASE (`facture`: a number, a customer, a note, a line, the name of what a line is tied to -
+  names compared case and accents aside in Python -, a date as written, a stated amount), cut at 50
+  unless « tout afficher » (`factures=toutes`); both ride back on every redirect and through every
+  GET form of the tab (`menu.kept_fields`). Each row says its total, its pills and its payment
+  state. Messages tagged `factures-vente` are said in the card on « Ventes », at the top on the
+  page's other tabs.
+
+**The allocation** (`recipes/sale_payments.py`): a link says « this credit pays this document »,
+never how much - one transfer pays two invoices, a cheque deposit of 1 200 € holds one customer's
+300 €. Summing whole credits read « 1 200 € reçus » on a 300 € invoice and gave the matcher a wrong
+remaining due. `allocate` spreads each credit (by its day, then pk) over ITS documents (by date,
+then pk), each taking at most what it still asks - **oldest first**, the Code civil's default when
+the payer says nothing (art. 1342-10); what is left of a credit goes to no document, and Banque says
+so. `read_links()` is the ONE reader - two queries whatever the links, the bank's columns read
+across the link (no bank import in recipes) - and everything asks it: the tab's pill, « Règlement »,
+Banque's rows and suggestions, the payer history, « Entrées d'argent ». `payment_state` takes the
+document's lines, already read: `document.to_pay` per row is an N+1. The states: « Réglée »,
+« Réglée en partie », « Non réglée » (« … l'entrée rattachée règle d'abord d'autres factures »),
+« Avoir », « — ».
+
+**The bank link** (`bank/sale_matching.py` decides on plain values, `bank/sale_reconcile.py` reads
+and writes; the debit side is untouched):
+- **The tiers** (`matching.Match`'s, SURE derived from `confident`): an invoice still due (what the
+  allocation leaves of its `to_pay`) dated from `LATE_PAYMENT_WINDOW` (180 days) before the credit
+  to `ADVANCE_WINDOW` (90) after it, its customer NAMED by the bank - a word of its own name (five
+  letters or more may be one letter off), or a payer an earlier link taught. Then: exactly one exact
+  named document, paid by nothing yet, among EVERY document still due - a partly paid one included:
+  a pass looking at fresh ones only saw one where Banque's row said « plusieurs » - is SURE; so is
+  one exact sum of 2 to `MAX_DOCUMENTS_PER_CREDIT` (4) of one customer's 12 most recent fresh
+  invoices. A balance, or a few cents (`NEAR_SURE_GAP`), is NEAR_SURE; several, a possible deposit,
+  or the same amount from a payer the bank does not name as the customer (offered, never linked;
+  never on a recognised credit) are TO_CONFIRM. `TIER_RULES` says it once above Banque's table.
+- **Customer words** (`customer_words`): `matching.GENERIC_WORDS` is a SUPPLIER list, so civilities,
+  public bodies and event words (`CUSTOMER_GENERIC_WORDS`: « MME », « MAIRIE », « MARIAGE »…) and
+  the bar's own name (`bar_words`: the seller its sales e-invoices state and the establishment's
+  name - payouts print it as their payee) never name a customer; otherwise « Mme X » was named by
+  every « MME Y ».
+- **The history** (`customer_naming`): a payer is taught to a customer only by links that ADD UP,
+  measured over each CONNECTED GROUP of credits and documents joined by links - one transfer for two
+  invoices teaches, a part payment or a mis-tick does not. Nothing stored: unlinking forgets. **A
+  key read off a label** (no payer printed: a cheque deposit, the bank's own line) is the same for
+  every credit of that wording - « REMISE CHEQUES N » for every deposit -, so it never makes a
+  match SURE (`sale_matching.match` caps it NEAR_SURE, `NAMED_BY_THE_LABEL`), and taught to two
+  customers it names neither: otherwise the amount alone linked a deposit holding the till's own
+  cheques. A payer the bank prints is kept whoever it was taught to.
+- **The automatic pass** (`reconcile_sales`, D6 - the debit pass's rules): SURE only, AUTO links
+  `bulk_create`d, the documents taken withdrawn; never a credit `settled_by_hand`, one with its own
+  « En caisse » choice, one already linked, or one **recognised** (`is_recognised`: a till rule, or
+  a payer retained for a COMPARED source - a terminal recognised by its payer « Carte » is a card
+  payout). It runs after a statement import (handed the rules read once for the whole POST), on
+  « Rapprocher automatiquement », after `sale_reopen`, and once a document is read, or typed and
+  saved with something to receive: after the commit, a failure logged and said (« Le rapprochement
+  bancaire n'a pas pu se faire … »), never a 500 after a commit. Never from « Données ».
+- **A person decides**, through `bank:bank_line_action` only: `sale_link` (MANUAL; nothing refused
+  for its amounts - the allocation and the gap say what it adds up to), `sale_unlink_document`,
+  `sale_unlink` (its `shown` ids, the stale-post guard), `sale_reopen` - each sets or clears
+  `settled_by_hand` like its debit twin, and **every one refuses a debit** (`DEBIT_PAYS_NO_SALE`),
+  the unlinks and the reopen included: crafted, an unlink froze a debit out of the purchases' pass
+  for ever and a reopen handed back one a person had decided. **The debit branches refuse a credit**
+  (`link`, `unlink_invoice`, `unlink`, `no_invoice`, `reopen`: « Une entrée d'argent ne règle pas
+  une facture. »). `link` never touches the line's own « En caisse » choice, and says so when one of
+  its documents counts off the till. Messages posted from a document's « Règlement » come back there
+  (`lieu=reglements`, `SALE_MESSAGE_PLACES`).
+- **Banque's « Entrées » rows** (`fill_credit_rows`): the documents a credit pays, with what it
+  gives each, the gap (« Z € ne vont à aucune facture »), the suggestion (none on a recognised
+  credit or one chosen « En caisse »; a document proposed on several rows says so, `_share_sales`),
+  the pick-list (the 15 nearest; on a recognised or chosen row only when asked, `?rattacher=`), the
+  search (`bank:sale_document_search`), « Délier » / « Tout délier » / « Rapprocher
+  automatiquement ». A credit unlinked by hand is capped « Quasi-sûre » (« déliée à la main ») - the
+  pass never comes back to it, so « Certaine » would lie -, and so is one already linked elsewhere,
+  on the document's « Règlement » too (`credits_for`, which matches on what the allocation LEAVES of
+  each credit). « Recognised » is read off the row's entry, never by running the till rules a second
+  time (a rule's time is counted). Six queries more when the tab shows a credit, none otherwise.
+- **« Règlement »** (`recipes/_sale_payments.html`, `#reglements`): the state; with « Banque », the
+  linked credits (« X € sur une entrée de Y € », « Délier »), up to five « Entrées possibles » -
+  one form per option `credits_for` keeps (each holds this document), naming every invoice it posts
+  with what it still asks, as Banque's own suggestion does: a sum's reason names none, and posting
+  the first option alone linked an invoice the page never showed - and a credit search whose GET
+  form carries every kept parameter as hidden inputs.
+
+**« Entrées d'argent »** (`bank/income.py`): a credit paying a document that counts off the till
+(`COUNTED` or `DEPOSIT`) reads « Facture de vente » (`SALE`, `BY_SALE`) - derived from the links,
+never stored, no `IncomeSource` member. **Its place in the order**: the line's own choice → a till
+rule → **a payer retained for a COMPARED source** → SALE → any other payer → OTHER. A till rule or a
+compared payer keeps winning: a terminal's payout recognised by « Carte » and linked to an invoice
+would otherwise have left `payouts`, the card balance and the commission - the harm « A payer never
+un-recognises a line » was written against, reached through a link. A credit paying only « Déjà
+comptée par la caisse » invoices does not read SALE. **« Exactly one of three lists » is kept**: a
+SALE credit is in `other_means`; one a rule or a compared payer reads stays in its own list,
+« facture de vente n° X » printed on its row. « Factures de vente » is a comparison row compared
+with nothing (its `till` None); a compared row whose payouts carry invoices counted off the till
+says « dont X € de factures de vente hors caisse » under its Écart (`sales_inside`: the Écart left
+as computed, now explained). `follows_its_payer`, `set_source`, `forget_payer`, `_detached` (still
+three queries) and `Entry` (`how_label`, `remember_by_default`, `unnamed` - a linked credit is never
+« à classer » -, `choice`) all say it. `income.QUERIES` is 9.
+
+**Achats' guard** (D10, `receipts.own_sales_invoice`, raised as `einvoice.OwnSalesInvoiceError` by
+`import_einvoice` before the supplier is resolved): an electronic invoice whose seller's SIREN is
+the one the bar's own sales e-invoices state (`SaleDocument.seller_siren`: one indexed query per
+e-invoice imported) is refused - filed as a purchase, the bar would become its own supplier and the
+sale money spent -, naming the sale document that taught it (« … celui de votre facture de vente n°
+X du … : ajoutez-la dans « Recettes & ventes · Ventes », ce n'est pas un achat. »): the way to undo
+a document stored by mistake. **Unless a supplier retains that SIREN**: then it is that supplier's,
+and the sales side refuses the invoice instead - the two sides agree. A subclass of `EInvoiceError`,
+so every way in says it its own way: the folder import's line (`READING_REFUSALS`), the upload, the
+gathers' logs (refused for what it is, coverage moves on). `identifiers.py` still never sees the
+bar's number: the guard refuses, it never teaches. A SIREN two suppliers retain names neither: the
+guard then refuses, and the sales side lets such an invoice in as a sale - again the same answer.
+
+**« Données »** (« Ventes », `transfer/sections/sales.py`, extended IN PLACE: no new section, no
+VERSION bump):
+- A document record carries every field (`DOCUMENT_FIELDS`), its lines (`LINE_FIELDS`), its file
+  (under `ventes/`, a fourth `STORAGE_FOLDERS`; each section refuses a name outside its own) and its
+  links (`payments`, by the credit's fingerprint). `ContractTests` holds every concrete field of the
+  three models exported or said why not.
+- **Keys**: by `key`; a key-less record (an older archive) by `legacy_key` of its fingerprint, then
+  by its content (a legacy document typed again after the migration), never refused for having none.
+  **Every key is claimed first, across all the records, and content only then** (`_read`, two
+  passes): the earlier of two identical legacy documents deleted here, the survivor keeps
+  legacy(c, 1) while its content now ranks it (c, 0) - matched record by record, the (c, 0) record
+  took it by content, the (c, 1) record was skipped and the deleted twin never came back;
+  two records of one key: the second skipped « en double dans l'archive » (it failed the WHOLE run
+  on the unique index). A field an archive does not say is « not said » - never defaulted, never
+  blanked by « Remplacer » - but a line's quantity and price, which every archive has carried.
+  Bounds the codec does not apply (the date of sale, a SIREN of nine digits - Achats' guard reads
+  it -, the sha, the checks' shape, the rates) skip the record with its reason, and so does a line
+  its constraints would refuse once assigned (`_lines_problem`): an IntegrityError there fails the
+  whole run. **What « Lire la facture » stores is never one of them**: the e-invoice's own dates
+  (`einvoice_issued_on`, `einvoice_delivered_on`, a 0001-01-01 included) are taken as they are, and
+  a type code wider than its column is cut and said (`_type_code_cut`) - skipped, a safety archive
+  lost the invoice, its lines, its file and its links for good. **A tie an import changes clears a
+  consumed quantity the record does not say** (`_clears_consumed`, in `_lines_problem` and
+  `_replace_lines`, `CONSUMED_CLEARED_NOTE`): an older archive putting the recipe back kept 30
+  litres of a keg as 30 servings.
+- **Files**: written STORED in the zip, never deflated - deflated, a 25 Mo scan of a white page or
+  padded text inflates past 200:1 and the reader's bomb guard refuses the WHOLE archive, the safety
+  archive included; `.docx .odt .ods` joined `STORED_SUFFIXES`. A document's sha follows the file it
+  stores, never the record's figure, and is written after the loop in two steps (cleared, then set):
+  a swap of two files never meets `saledocument_one_per_file`. Under « Remplacer », a record whose
+  file a document here holds that no record names is **adopted** (its key rewritten): the owner who
+  deleted an invoice, read it again (a new key) and restored yesterday's archive gets it back, one
+  copy; before, the record was skipped « fichier déjà celui de … » and the prune deleted the other
+  copy - the invoice in neither.
+- **Links**: gathered over every record parsed, applied only to the documents this run applied;
+  « Fusionner » adds the missing ones and keeps as a conflict a credit that pays another document
+  here, or one settled by hand without this one (`SALE_UNDONE_NOTE`); « Remplacer » makes them the
+  archive's. With « Banque » replaced in the same run, a fingerprint resolves only if `banque.json`
+  names it. An import never runs the pass. « Ventes » RECOMMENDS « Banque », never requires it.
+- **Cascades counted**: « Banque »'s prune and clear count the sale links their lines take into
+  « Ventes »' report (`SALE_LINKS_NOTE`: reimport both together) - which puts « Ventes » in the
+  safety archive; both `clear_note`s say it before. The helpers both sections share
+  (`restore_moments`, `delete_ids`, `stored_bytes`, `SALE_LINKS`) live in
+  `transfer/sections/base.py`: sales (order 80) and bank (90) never import each other - a cycle was
+  an ImportError on a partly initialised module, « Données » down; `ImportOrderTests` imports every
+  section afresh to prove it.
+- **Compatibility**: an older archive imports here (keys from content, nothing new said, no link
+  made or pruned). This version's archive read by an OLDER app passes with « champ inconnu ignoré »
+  and wrong figures: a document holding a free line skipped (and pruned under « Remplacer »),
+  `consumed_quantity` and `counting` dropped. Knowingly no VERSION bump (one installation runs one
+  version); DEPLOY.md says it.
+
+**Access** (« Employees' access »): « Recettes & ventes » sees the tab, every document page and
+file, and each document's payment STATE (« X € reçus »), never a bank date, payer, line or form
+(`entree` ignored); « Banque » sees, on « Entrées » and « Entrées d'argent », the number, customer,
+date and total of the documents a credit pays, links and unlinks, and opens no document page (the
+link drawn only `{% if can.recipes %}`). The views decide with `access_of(request).allows("bank")`,
+and the messages are worded from it (« Réglée par une entrée de « Banque », rattachée
+automatiquement. », without detail). A « Recettes » employee's read or save may run the pass and
+link credits, and his delete detaches links (CASCADE): the owner's question, built as the default.
+
+**Migration recipes 0020, WRITTEN and left to be applied** (deploy.cmd in production; data-dev by
+hand, DEPLOY.md section 17). Written as `0019_sale_invoices` and renumbered `0020_sale_invoices`
+after GitHub's main's `recipes/0019_tillformat` (« The till's file import », above), which it now
+follows; a dev copy migrated under the old name is restored from a backup (`refresh_dev_data.cmd`)
+and migrated again - never faked. Until it is, « no such table / column » answers on the « Ventes » tab
+and every sale document page, Marges, the stock pages reading `recipes.sales` (« Vendu »,
+« Écarts », « Combler les écarts », « Prévoir les courses »), Banque's « Entrées » tab and « Entrées
+d'argent », Achats' import of an electronic invoice (the guard), deleting a recipe or merging an
+article (the PROTECT collector reads the line table) and « Données ». Going back drops the new
+columns and every link, and FAILS once a line tied to nothing exists (the old « exactly one source »
+constraint): delete those lines first, or restore the backup.
+
+**Tests** (invented data only - « Bar des tests », the house's invented SIRENs `BAR_SIREN`,
+`CUSTOMER_SIREN`, `SUPPLIER_SIREN`; e-invoices written from Achats' fixtures in
+`recipes/tests/sale_einvoice_files.py`, Factur-X PDFs built by the test). One line a module, its
+classes named:
+- `recipes/tests/test_sale_document_model.py` - `SaleDocumentModelTests` (defaults, the key, the
+  money rules), `FreeLineTests` (the five constraints, `clean()`, a free line's names),
+  `VatDivisorTests`, `SaleDocumentPaymentModelTests` (the pair, CASCADE, the related names);
+- `test_migration_0020.py` - `LegacyKeyTests`, `MigrationReplayTests`;
+- `test_sale_einvoice.py` - `ReadSaleTests`, `RefusalTests` (each figure past its column, 501 lines,
+  einvoice's refusals as they are), `FixtureTests`;
+- `test_sale_files.py` - `ReadEInvoiceUploadTests` (the read card step by step),
+  `NoGrandTotalTests` (one total for the tab, the bank and Marges), `DocumentFromReadingTests`,
+  `TypedFormFileTests` (`einvoice_on_typed_form`), `WriterTests` (any exception deletes the new
+  name; `on_commit`; the row read again), `DeletionTests`, `FileViewTests` (inline, sandboxed,
+  `ventes/` only), `AccessTests` (`/fichiers/ventes/…`), `BankPassTests` (the pass after the
+  commit);
+- `test_sale_document_pages.py` - the page as it draws and posts (read off the page, CSRF enforced):
+  `TypedFormTests`, `TypedLineRuleTests`, `KeptWhenAbsentTests`, `FrenchErrorsTests`,
+  `MaxLinesTests`, `NonContiguousTests`, `PriceErrorTests`, `SpareRowTests`, `KeptPreparationTests`,
+  `DoublePostTests`, `AddRowWithoutScriptTests`, `EnterSavesTests`, `UnsavedFlagTests`,
+  `FileUploadTests`, `EInvoicePageTests`, `ReadCardTests`, `CountingChoiceTests`, `LeavesLinesTests`, `StaleTests`,
+  `TemplatesTests`, `MessagesPlacementTests`, `DoubtsTests`, `TabTests`, `PaymentSectionTests`,
+  `AccessMessagesTests`;
+- `test_sale_lines.py` - `ProposalTests`, `ConsumptionDoubtTests`;
+- `test_sale_consumption.py` - every reader of stock: `ConsumedQuantityTests`, `CountingTests`,
+  `GapsTests`, `ShoppingTests`;
+- `test_sale_payments.py` - `AllocationTests`, `PaymentStateTests`, `ReadLinksTests` (two queries);
+- `test_sale_documents.py` (`SaleDocumentModelTests`: a free line, the constraints, a stated
+  total) and `test_sales_window.py` (`SaleDocumentsSearchTests`, `ActionsKeepTheWindowTests`: the
+  window);
+- `margins/tests/test_sale_invoices.py` - each rule above with its figures: `StatedDocumentTests`,
+  `TypedHtTests`, `TypedRemainderTests`, `ArticleWithARateTests`, `FlaggedArticleTests`,
+  `FreeDiscountLineTests`, `TypedToTheCentTests`, `ConsumptionCostTests`, `AdjustmentTests`,
+  `ClampTests`, `CountingTests`, `CreditNoteTests`, `DepositTwiceTests`, `PageTests` (the foot), `QueryCountTests` (ten documents cost what three do);
+- `bank/tests/test_sale_matching.py` - `WindowTests`, `NamingTests`, `CustomerWordsTests`,
+  `TierTests`, `CombinationTests`, `EdgeTests`, `TierRulesTests`;
+- `bank/tests/test_sale_reconcile.py` - `PassTests`, `HistoryTests`, `LinkServiceTests`,
+  `CreditsForTests`;
+- `bank/tests/test_sale_links_page.py` - Banque's « Entrées »: `RowsTests`, `ActionTests`,
+  `AccessTests`, `MessagesTests`, `QueriesTests`;
+- `bank/tests/test_income_sales.py` - `ReadingOrderTests`, `ListsTests`, `MethodRowTests`,
+  `SalesInsideTests`, `SetSourceTests`, `ForgetPayerTests`, `DetachedTests`, `SaidTests`,
+  `QueryTests` (`income.QUERIES` 9);
+- `invoices/tests/test_own_sales_guard.py` - `TheBarsOwnSalesInvoiceTests` (every way in, one query
+  more), `WhatIsNotRefusedTests`;
+- `invoices/tests/test_einvoice.py` - `SalesSideFactsTests` (Achats reads every fixture as before,
+  `party_siren`, `root_syntax`); `test_filenames.py` - `NamedDownloadTests`,
+  `SaleDownloadNameTests`;
+- `transfer/tests/test_sales_section.py` - `SaleInvoiceArchiveTests`, `SaleLinksArchiveTests`,
+  `SaleLinksWithTheBankTests`, `ContractTests`, `ImportOrderTests` beside the section's own;
+  `test_bank_section.py` - `SaleLinksTakenTests` (the cascades counted); `test_archive.py` (stored,
+  never deflated) and `test_full_round_trip.py` (`build_sales` carries a link);
+- `tests/test_common_files.py` - `FitsColumnTests`, `PostedDigestTests`, `DeleteStoredFilesTests`;
+  `tests/test_views_smoke.py::SaleDocumentSmokeTests` (every route); `accounts/tests/test_access.py`
+  (`ventes/` and the two areas' texts); `tests/test_ui.py` - `SaleDocumentScriptTests`, the phone
+  cards;
+- in Chrome, `tests/test_phone_width_browser.py` (the tab, an e-invoice with a 60-letter recipe in
+  its selects, a typed line of one 60-letter word, at 320, 375 and 430 px; the owner runs it).
+
 ### The three margins (`margins/computation.py`)
 
 `margins_for(window: DateRange, left_out=()) -> MarginReport` - pure, no
@@ -8115,8 +8748,8 @@ them:
 - **the real margin** (« Marge réelle »): everything that came in against everything that was
   **invoiced** over the window, goods and charges alike
   (`Supplier.expenses_only`). « Ai-je gagné de l'argent ce mois-ci. »
-- **the products margin** (« Marge produits »): the same income against what the recipes sold
-  actually consumed, plus the articles flagged « compter dans la marge
+- **the products margin** (« Marge produits »): the same income against what the recipes and the
+  articles sold actually consumed, plus the articles flagged « compter dans la marge
   produits ». « Est-ce que je vends assez cher. »
 - **the margins by category** (« Marges par catégorie »), on both dimensions the till already stores -
   `PosProduct.category` (Bières, Cocktails, Planches…) and `.typology`
@@ -8210,7 +8843,10 @@ Five traps a review found on it, each a test that failed first:
   Happy hour : 4,80 € », one page saying both. « Vendu par … » is nested the
   same way - there is no sale to take anything.
 - **A preparation is NOT offered on a sale document** (« bon de vente », `sale_source_choices`,
-  with `keep=` so a line written before the price was cleared still opens).
+  with `keep=` so a line written before the price was cleared still opens - now through the
+  formset and the tie grid, each building the choices once with every recipe its lines hold:
+  it never reached the formset before 05/10/2026, and such a line's page answered « Select a
+  valid choice »).
   Offered, a line naming it books its full cost against 0,00 € of revenue -
   `SaleDocumentLine.total_ttc` has nothing to fall back on and
   `margins.computation` counts the cost, which is exactly the asymmetry the
@@ -8260,9 +8896,14 @@ sold, inside `recipes.models.variation_scope()`, with the ingredients handed
 to `summary()` - `choice_groups()` builds its own queryset, so a prefetch at
 the call site buys nothing without that. Measured on a scratch copy of the
 real database: **11-12 queries and about half a second** for the whole
-history, a few hundredths for a month.
+history, a few hundredths for a month - and, since the sales invoices, the
+sale documents and their lines (two queries, one when the window has no
+document), the purchase prices of the articles sold with a rate and a price
+of their own (one, only when there is such a line), and the deposits a
+final invoice deducts (two at most, only when a counted document of the
+window states an amount already paid).
 A test asserts that costing three times as many recipes costs no more
-queries.
+queries, and another that ten sale documents cost what three do.
 
 **Every gap is a field, not a zero.** `unread_days` / `unread_units` (a day
 whose money was never read counts its units and its cost, but no revenue -
@@ -8278,14 +8919,20 @@ it IS the spending and the flag says which); `hand_typed_units` (a
 window that only refunded has -8,75 € of margin on -7,50 € of revenue - which
 works out to **+116 %**. A loss printed as a gain is worse than no figure.
 
-**An article sold as itself on a sale document is income with no margin.**
-It carries no VAT rate anywhere - a recipe has one, an article does not - so
-its money stays TTC, lands in `revenue_without_rate_ttc` and never reaches
-`revenue.ht`. Its purchase price is therefore left out of the cogs too:
+**An article sold as itself on a sale document: both sides in, or both
+out.** Typed without a rate or without a price of its own, both sides stay
+out: its money stays TTC, lands in `revenue_without_rate_ttc` and never
+reaches `revenue.ht`, and its purchase price is left out of the cogs too -
 counted there, the cost came off an HT its revenue never joined, and two
 bottles bought at 3 € and sold at 10 € printed a products margin of
-**-6,00 €**, a profitable sale shown as a loss. Both sides out or neither,
-and the foot of the page names the amount. 0 such lines today.
+**-6,00 €**, a profitable sale shown as a loss; the foot of the page names
+the amount. With a rate AND its own price - an electronic invoice's line,
+or a typed one - both sides are in: its HT, and its purchase price × its
+consumed quantity (uncosted when never bought; an article ticked « compter
+dans la marge produits » uncosted, no cost added, its purchases already
+counted). A rate with no price is refused by the form and kept out by the
+margins (`_line_cost`): its cost would come off 0,00 € of revenue. Both
+sides out or neither, both ways.
 
 **The two margins date one purchase on one day.** A flagged article's
 purchase is counted on its **invoice's** date, like everything in
@@ -8451,6 +9098,14 @@ headline.** The rows are the **till alone**; the headline products margin
 also counts the flagged articles' purchases and the sales made off the till,
 which belong to no till category - a positive margin on a row above a
 negative one on the headline, same money, same screen, nothing bridging them.
+The cost beside it is « Coût de ce qui a été vendu (HT) » - the articles
+sold on an invoice with a rate and a price are in it, counted in its note
+as articles, never as servings - and the foot names what the sales invoices
+leave unsaid: the money no recipe or article carries (`document_free_ttc`,
+with « dont … sans taux de TVA » for its part already in the first figure),
+the invoices that count in nothing (`documents_set_aside`: « Déjà comptée
+par la caisse », « Acompte ») and a deposit its final invoice also deducts
+(`deposits_counted_twice`).
 
 **Zero invoiced is not zero spent.** `invoice_count` is beside « Facturé »
 and a window with none says so in a warning: that is the state of the current
@@ -8790,7 +9445,9 @@ back and forth between them. The rules that came with merging them:
   amount, and the table is `data-table-sort-only` - two boxes filtering by
   two different rules is worse than one. Same on the sales list
   (`recipes.menu._sales_matching`, `SALES_PAGE_SIZE`): 8 099 rows was 2,6 MB
-  on one page, and it only grows.
+  on one page, and it only grows - and on « Factures de vente », whose 50
+  most recent hid every older one (`recipes.sale_documents.documents_matching`:
+  a number, a customer, a line, a date as written, a total stated).
 - **The list shows the newest documents** (`workspace.PAGE_SIZE`, 250), and
   "tout afficher" renders the rest. Every row is about 1,4 KB of HTML and a
   slice of a second of template: at 823 documents the page was 1,2 MB, 15 000
@@ -8894,7 +9551,10 @@ still say "stock item" and "stock page" for the article and that workspace.
 
 Eight pages are read through a period: **Produits & charges** (the articles
 bought between two dates), **Achats** (the documents), **Ventes** (the sales,
-the sale invoices and « Par origine »), **Banque** (the operations),
+the sale invoices and « Par origine » - the sale invoices' own search
+(`facture`) and « tout afficher » (`factures`) ride back like the sales', and
+every GET form of the tab carries all six parameters, `menu.kept_fields`),
+**Banque** (the operations),
 **Marges** (the three margins), **Dépenses par catégorie** (what left the
 account), **Entrées d'argent** (what came into it) and **Trésorerie** (its
 curve and its months; the balances, gaps and adjustments are the whole
@@ -9573,8 +10233,15 @@ every page). An AREA (`access.AREAS`, keys stored, never renamed) is one box the
 `invoices_add`, `stock_takes`, `returnables`, `shopping` (ticked for a new employee,
 `DEFAULT_AREAS`), `invoices`, `stock_gaps`, `products`, `recipes`, `bank`, `margins`, `staff`. Each
 help says what the area shows that an owner may not want shown (purchase prices, the invoices' files
-of « Banque »). « Liste de courses » (`shopping`) came on 04/10/2026, with accounts 0005 (data only,
-WRITTEN and left to be applied): every MEMBER of every espace - the logins are central - was given it,
+of « Banque »). « Factures de vente » on both sides (05/10/2026): « Banque » lists the sales invoices
+its credits pay (number, customer, total) - on its « Entrées » tab and « Entrées d'argent », never
+their page -, « Recettes & ventes » sees what each invoice received (the allocation's « X € reçus »),
+never the bank's detail (no date, payer or line; `entree` ignored), and the messages say each its own
+(`access_of`). A « Recettes » employee's save or delete may write or remove bank links all the same:
+the automatic pass runs after a read or a save, told « Réglée par une entrée de « Banque » » without
+detail, and a deletion detaches the document's links (CASCADE). « Liste de courses » (`shopping`)
+came on 04/10/2026, with accounts 0005 (data only, WRITTEN and left to be applied): every MEMBER of
+every espace - the logins are central - was given it,
 his pages kept in AREAS' order with the new key at its place and anything stored that is no key
 after them; the owners' rows untouched; run twice, it changes nothing more; reversed, nothing (a
 version without the area passes the key over); no employee's start page moves (`Access.home_url`).
@@ -9616,6 +10283,9 @@ page ouverte » with none).
   the media root, so « consignes/../invoices/… » and « consignes\..\invoices\… » (the server's
   separator) are invoices, a name with « : », absolute or climbing out is the owner's. A plain
   `startswith` let a Consignes employee read every invoice PDF (security review, blocker).
+  `ventes/` (the « factures de vente »' files) is « Recettes & ventes »'; their own route
+  (`recipes:sale_document_file`) refuses a row naming any other folder, whose file it would
+  otherwise hand to that employee.
 - **What a route alone cannot say is decided in the view**, with `access_of(request)`: a gather
   (`invoices:gather*` opens to `returnables` for « Récupérer les bons »: such a login posts slip
   sources only, follows a GATHER of slips only and stops one only once its sources say so; a

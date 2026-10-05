@@ -1,0 +1,7 @@
+{% comment %}
+The « factures de vente » a credit of « Entrées d'argent » pays (bank/income.py,
+Entry.sales) - said on its row whatever it reads as: a payout linked to an
+invoice stays a payout, and a recognition nobody can see is one nobody can
+correct. Each invoice's page for « Recettes & ventes » only (views._with_sale_pages).
+{% endcomment %}
+{% for ref in entry.sales %}<span class="read-as">{% if can.recipes and ref.url %}<a href="{{ ref.url }}">facture de vente {{ ref.label }}</a>{% else %}facture de vente {{ ref.label }}{% endif %}</span>{% endfor %}

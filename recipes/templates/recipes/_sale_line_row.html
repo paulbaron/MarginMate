@@ -1,0 +1,23 @@
+{% comment %}
+One typed line of a « facture de vente » (recipes/forms.py::SaleDocumentLineForm):
+a row of the formset, or the empty row of <template id="empty-sale-line"> that
+static/js/sale_document.js clones (`__prefix__` its index). Context: `line_form`,
+`hide_errors`. Its errors - each a sentence naming its field, its hidden
+fields' included (a line deleted in another tab) - under the row.
+{% endcomment %}
+<div class="sale-line-row">
+    {{ line_form.id }}
+    <label class="stacked-label sale-line-label"><span class="muted">Libellé</span>{{ line_form.label }}</label>
+    <label class="stacked-label sale-line-source"><span class="muted">Correspond à</span>{{ line_form.source }}</label>
+    <label class="stacked-label"><span class="muted">Quantité</span>{{ line_form.quantity }}</label>
+    <label class="stacked-label"><span class="muted">Prix unitaire TTC</span>{{ line_form.unit_price_ttc }}</label>
+    <label class="stacked-label"><span class="muted">TVA %</span>{{ line_form.vat_percent }}</label>
+    <label class="stacked-label"><span class="muted">Quantité consommée</span>{{ line_form.consumed_quantity }}</label>
+    <label class="inline-label sale-line-remove">{{ line_form.DELETE }} Retirer</label>
+    {% if not hide_errors %}
+        <div class="sale-line-errors">
+            {% for field in line_form %}{% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}{% endfor %}
+            {% for error in line_form.non_field_errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+        </div>
+    {% endif %}
+</div>

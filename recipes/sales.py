@@ -28,7 +28,7 @@ from django.db import transaction
 
 from common import search_key
 
-from .models import Recipe, RecipeSale
+from .models import Recipe, RecipeSale, line_consumption
 
 #: The till's rows - every connector's (the module's docstring).
 TILL_SOURCE = "laddition"
@@ -274,6 +274,25 @@ def recount_pos_products(product_ids) -> int:
     return changed
 
 
+def _counted_lines(start: date | None, end: date):
+    """The sale document lines of the window (start, end] whose document
+    counts. Each reader reads its `consumed_quantity` and `quantity` in its
+    one query and takes `line_consumption` of them.
+
+    A document that counts in nothing (« Déjà comptée par la caisse »,
+    « Acompte ») consumed nothing here: the till's sales already hold it, or
+    its final invoice will. Unordered: Meta.ordering would sort every line
+    only for it to be added up."""
+    from .models import SaleDocument, SaleDocumentLine
+
+    lines = SaleDocumentLine.objects.filter(
+        document__counting=SaleDocument.Counting.COUNTED, document__sold_on__lte=end
+    )
+    if start is not None:
+        lines = lines.filter(document__sold_on__gt=start)
+    return lines.order_by()
+
+
 def sales_between(start: date | None, end: date) -> dict[int, int]:
     """{recipe_id: units sold} over a stock-take window.
 
@@ -283,9 +302,11 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
     counting it would double it against the next period), while a sale on
     the day of the closing count is. `start` of None means "everything up to
     the closing count", for the very first period.
-    """
-    from .models import SaleDocumentLine
 
+    A sale document's recipe line counts the sales it poured - its consumed
+    quantity, else the invoiced one (`_counted_lines`) - and a document that
+    counts in nothing consumed nothing here.
+    """
     totals: dict[int, int] = {}
 
     # Unordered: Meta.ordering would join every row to its recipe and sort
@@ -299,11 +320,9 @@ def sales_between(start: date | None, end: date) -> dict[int, int]:
 
     # Hand-written sale documents count too: a tab settled off the books
     # consumed exactly as much stock as one rung up on the till.
-    document_lines = SaleDocumentLine.objects.filter(recipe__isnull=False, document__sold_on__lte=end)
-    if start is not None:
-        document_lines = document_lines.filter(document__sold_on__gt=start)
-    for recipe_id, quantity in document_lines.values_list("recipe_id", "quantity"):
-        totals[recipe_id] = totals.get(recipe_id, 0) + quantity
+    document_lines = _counted_lines(start, end).filter(recipe__isnull=False)
+    for recipe_id, consumed, quantity in document_lines.values_list("recipe_id", "consumed_quantity", "quantity"):
+        totals[recipe_id] = totals.get(recipe_id, 0) + line_consumption(consumed, quantity)
 
     return totals
 
@@ -312,14 +331,13 @@ def stock_type_sales_between(start: date | None, end: date) -> dict[int, Decimal
     """{stock_type_id: quantity} sold directly, as itself, over the window.
 
     A bottle sold over the counter is not a recipe and has no ingredients to
-    expand - it consumes exactly itself, in its own unit.
+    expand - it consumes exactly itself, in its own unit: the line's consumed
+    quantity when it has one (a « Fût 30 L » invoiced once, followed by the
+    litre, consumed 30), else the invoiced one. A document that counts in
+    nothing consumed nothing here.
     """
-    from .models import SaleDocumentLine
-
-    lines = SaleDocumentLine.objects.filter(stock_type__isnull=False, document__sold_on__lte=end)
-    if start is not None:
-        lines = lines.filter(document__sold_on__gt=start)
+    lines = _counted_lines(start, end).filter(stock_type__isnull=False)
     totals: dict[int, Decimal] = {}
-    for stock_type_id, quantity in lines.values_list("stock_type_id", "quantity"):
-        totals[stock_type_id] = totals.get(stock_type_id, Decimal("0")) + quantity
+    for stock_type_id, consumed, quantity in lines.values_list("stock_type_id", "consumed_quantity", "quantity"):
+        totals[stock_type_id] = totals.get(stock_type_id, Decimal("0")) + line_consumption(consumed, quantity)
     return totals

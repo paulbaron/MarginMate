@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -24,13 +23,10 @@ import common
 from accounts import sudo, vault
 from accounts.access import access_of, refused
 from accounts.tenancy import bound, integrations_allowed, is_owner, server_accounts_allowed
-from accounts.views import file_response, open_stored
-from common import error_for_page, group_thousands, is_id, local_return, safe_next
+from accounts.views import DOWNLOAD_PARAM, file_response, open_stored
+from common import error_for_page, group_thousands, is_id, local_return, posted_digest, safe_next
 
 logger = logging.getLogger(__name__)
-
-#: `?telecharger=1` on a document's file: saved rather than shown.
-DOWNLOAD_PARAM = "telecharger"
 
 #: What a bank line is compared against: a document's total to the cent,
 #: the way bank/reconcile.py rounds it before matching.
@@ -50,6 +46,7 @@ PORTAL_OWNER_ONLY = (
 from . import coverage, gathering, integrations, supplier_changes
 from .deletion import InvoiceInUseError, blocking_stock_takes, delete_invoice
 from .einvoice import NO_LINES_CHECK as EINVOICE_NO_LINES
+from .einvoice import OwnSalesInvoiceError
 from .filenames import download_name
 from .forms import (
     DOCUMENT_INVOICE,
@@ -183,7 +180,7 @@ def upload_invoice(request):
     uploaded = form.cleaned_data["source_file"]
     suffix = os.path.splitext(uploaded.name)[1] or ".pdf"
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-    is_slip = False
+    is_slip = is_own_sale = False
     try:
         with os.fdopen(fd, "wb") as tmp:
             for chunk in uploaded.chunks():
@@ -210,6 +207,11 @@ def upload_invoice(request):
     except DuplicateInvoiceError as exc:
         messages.warning(request, str(exc))
         is_slip = isinstance(exc, RoutedToReturnablesError)
+    except OwnSalesInvoiceError as exc:
+        # The bar's own sales invoice (receipts.own_sales_invoice): its
+        # sentence says where it goes - no supplier of the bar's to choose.
+        messages.error(request, f"Échec de l'import. {exc}")
+        is_own_sale = True
     except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a crash
         # The app's refusals in their words, anything else by kind: never the
         # exception's own text, which can name the server's files (audit
@@ -234,9 +236,9 @@ def upload_invoice(request):
         # Made before the file was read, it stays: an empty supplier is a
         # legitimate one (deleted from its page if need be), but not a
         # silent one - the retry under the same name says « existe déjà ».
-        # A slip is no invoice to retry under it: its sentence says where it
-        # went, or where to drop it.
-        then = "" if is_slip else " : choisissez-le dans la liste"
+        # A slip is no invoice to retry under it, nor is the bar's own sales
+        # invoice: its sentence says where it went, or where to drop it.
+        then = "" if is_slip or is_own_sale else " : choisissez-le dans la liste"
         messages.info(request, f"Fournisseur {supplier.name} créé, sans ce document{then}.")
     return redirect(f"{reverse('invoices:invoice_list')}?ajouter=pdf")
 
@@ -287,21 +289,12 @@ MANUAL_INVOICES_MADE = "manual_invoices_made"
 MANUAL_INVOICES_KEPT = 20
 
 
-def _posted(request) -> str:
-    """What a page sent, but for the values that differ each time it is sent."""
-    fields = sorted(
-        (key, request.POST.getlist(key)) for key in request.POST if key not in ("csrfmiddlewaretoken", "jeton")
-    )
-    files = sorted((key, upload.name, upload.size) for key, upload in request.FILES.items())
-    return hashlib.sha256(repr((fields, files)).encode()).hexdigest()
-
-
 def create_manual_invoice(request):
     if request.method == "POST":
         token = request.POST.get("jeton", "")[:64]
         made = request.session.get(MANUAL_INVOICES_MADE, {})
         made_pk, made_from = made.get(token, (None, ""))
-        posted = _posted(request)
+        posted = posted_digest(request)
         already = Invoice.objects.filter(pk=made_pk).first() if made_from == posted else None
         if already is not None:
             messages.info(request, f"Facture déjà créée : {already}")

@@ -16,8 +16,12 @@ urlpatterns = [
     path("caisse/<int:pk>/assign/", views.pos_product_assign, name="pos_product_assign"),
     path("caisse/bulk/", views.pos_products_bulk, name="pos_products_bulk"),
     path("caisse/ventes/", views.sales_list, name="sales_list"),
+    # « Factures de vente » (recipes/sale_files.py): typed, or read from the
+    # bar's electronic invoice (« Lire la facture »), and their file.
     path("caisse/ventes/facture/", views.sale_document_form, name="sale_document_create"),
+    path("caisse/ventes/facture/lire/", views.sale_document_read, name="sale_document_read"),
     path("caisse/ventes/facture/<int:pk>/", views.sale_document_form, name="sale_document_update"),
+    path("caisse/ventes/facture/<int:pk>/fichier/", views.sale_document_file, name="sale_document_file"),
     path("caisse/ventes/facture/<int:pk>/delete/", views.sale_document_delete, name="sale_document_delete"),
     path("caisse/ventes/<int:pk>/delete/", views.sales_delete, name="sales_delete"),
     path("caisse/import/", views.sales_import, name="sales_import"),

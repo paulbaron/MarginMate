@@ -33,6 +33,8 @@ urlpatterns = [
     # The results of an invoice search for this operation, alone: the
     # box swaps them into its own row instead of reloading the page.
     path("operations/<int:pk>/chercher/", views.invoice_search, name="invoice_search"),
+    # The same for a credit: the sales invoices a search finds for it.
+    path("operations/<int:pk>/chercher-ventes/", views.sale_document_search, name="sale_document_search"),
     path("regles/", views.rule_list, name="rule_list"),
     path("regles/<int:pk>/", views.rule_action, name="rule_action"),
     # « Reconnaissance des opérations »: the rules saying what an operation

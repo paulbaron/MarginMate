@@ -7,9 +7,9 @@ has to survive the trip too: an invoice line a stock take was priced from,
 a bank payment to a ticket known only by its file (the second of two
 byte-identical ones), a supplier's code named by six sections' records, and
 by « Types et formats de consignes »' slip format and « Consignes »' pickup
-(UBA's), the photos of a pickup and the PDF of a slip byte for byte, and the
-purchase movements and the till's sales per recipe rebuilt from what came
-back.
+(UBA's), the photos of a pickup and the PDF of a slip byte for byte, a sales
+invoice's file and the credit of « Banque » paying it, and the purchase
+movements and the till's sales per recipe rebuilt from what came back.
 
 Every name, amount and file below is invented.
 """
@@ -44,6 +44,8 @@ from inventory.models import (
 )
 from inventory.services import update_product_conversion
 from invoices.models import ShopItemPrice, Supplier
+from recipes.models import SaleDocumentPayment
+from recipes.tests.sale_einvoice_files import SALE_NUMBER
 from returnables.models import Pickup, PickupPhoto, Slip
 from returnables.tests.support import CO2_LINE, KEG_LINE, make_pickup, make_slip
 from tests.factories import make_movement, make_stock_take, make_stock_take_line
@@ -69,7 +71,7 @@ from transfer.tests.test_invoices_section import (
     named_files,
     sha,
 )
-from transfer.tests.test_sales_section import build_sales
+from transfer.tests.test_sales_section import SALES_CREDIT, build_sales
 from transfer.tests.test_sources_section import as_restored, email_source, portal_source
 from transfer.tests.test_till_formats_section import make_till_format
 from transfer.tests.test_views import shown_preview
@@ -91,7 +93,10 @@ def build_everything() -> dict:
     update_product_conversion(
         Product.objects.get(raw_name="VODKA ESSAI 70CL"), unit=UnitChoices.LITRE, stock_equivalent=D("0.7")
     )
-    build_sales()  # recipes, till days and links, sales typed in, sale documents (lane C's)
+    # Recipes, till days and links, sales typed in, sale documents - the
+    # sales invoices with their files under ventes/ and the credit paying
+    # one of them (lane C's).
+    build_sales()
 
     # Suppliers: Metro paused by its firewall, known prices, what names a shop.
     Supplier.objects.filter(code="METRO").update(
@@ -280,6 +285,19 @@ class WholeArchiveTests(MediaMixin, TestCase):
 
     def test_export_clear_and_merge_gives_everything_back(self):
         self._check(MERGE)
+
+    def test_a_sales_invoice_comes_back_with_the_credit_that_pays_it(self):
+        """The link is « Ventes »' (recipes.SaleDocumentPayment), the credit
+        « Banque »'s: « Ventes » applies after « Banque », so both ends are
+        back when it links them - and when « Banque » is replaced, the
+        credit is one banque.json names."""
+        for strategy in (REPLACE, MERGE):
+            with self.subTest(strategy=strategy):
+                self._check(strategy)
+                self.assertEqual(
+                    list(SaleDocumentPayment.objects.values_list("document__reference", "transaction__fingerprint")),
+                    [(SALE_NUMBER, SALES_CREDIT)],
+                )
 
     def test_the_derived_data_is_rebuilt_equal(self):
         """Said on its own, since it is what the snapshots are made from:

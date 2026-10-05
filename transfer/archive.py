@@ -76,15 +76,38 @@ MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_RATIO = 200
 RATIO_MIN_BYTES = 10 * 1024**2
 
-#: Already compressed: deflating them again costs time for nothing.
-STORED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".zip", ".xlsx"}
+#: Already compressed: deflating them again costs time for nothing. The
+#: office files that are zip containers (.xlsx, .docx, .odt, .ods) too.
+STORED_SUFFIXES = {
+    ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".heic",
+    ".zip",
+    ".xlsx",
+    ".docx",
+    ".odt",
+    ".ods",
+}
 
 #: Where an import may write a file: the invoices' documents and previews,
-#: and « Consignes »' photos and slips (returnables.models, all under
-#: consignes/). Adding a folder here does not bump VERSION: an older
-#: installation ignores the section it does not know (« partie inconnue
-#: ignorée ») and never reads its files.
-STORAGE_FOLDERS = ("invoices/", "receipts/", "consignes/")
+#: « Consignes »' photos and slips (returnables.models, all under
+#: consignes/) and the sales invoices' files (« Ventes »,
+#: recipes.models.SALE_FILES_FOLDER). Adding a folder here does not bump
+#: VERSION: an older installation ignores the section it does not know
+#: (« partie inconnue ignorée ») and never reads its files - nor, in a
+#: section it knows, the files of a field it does not (« champ inconnu
+#: ignoré »).
+STORAGE_FOLDERS = ("invoices/", "receipts/", "consignes/", "ventes/")
+#: Written STORED whatever their suffix: a sales invoice's file is any file
+#: the bar was sent, stored as received - a BMP or TIFF scan of a white
+#: page, a padded CSV -, and one deflated past MAX_RATIO over
+#: RATIO_MIN_BYTES makes the reader refuse the WHOLE archive, every safety
+#: archive of « Effacer » and « Remplacer » included.
+STORED_FOLDERS = ("ventes/",)
 
 ZIP_MAGIC = b"PK\x03\x04"
 
@@ -250,7 +273,7 @@ def storage_name_problem(name) -> str | None:
     if not isinstance(name, str) or not safe_member_name(name):
         return f"nom de fichier refusé (« {_shown(name)} »)"
     if not name.startswith(STORAGE_FOLDERS):
-        return f"fichier hors des dossiers des factures, des tickets et des consignes (« {_shown(name)} »)"
+        return f"fichier hors des dossiers des factures, des tickets, des consignes et des ventes (« {_shown(name)} »)"
     if len(name) > 100:
         return f"nom de fichier trop long (« {_shown(name)} »)"
     try:
@@ -407,7 +430,8 @@ class ArchiveWriter:
             ref = {"name": name, "missing": True}
             self._refs[name] = ref
             return dict(ref)
-        compress_type = zipfile.ZIP_STORED if Path(name).suffix.lower() in STORED_SUFFIXES else zipfile.ZIP_DEFLATED
+        stored = name.startswith(STORED_FOLDERS) or Path(name).suffix.lower() in STORED_SUFFIXES
+        compress_type = zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED
         digest = hashlib.sha256()
         size = 0
         with source, self._zip.open(_zip_info(member, compress_type), "w", force_zip64=True) as target:

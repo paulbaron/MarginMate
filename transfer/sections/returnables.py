@@ -284,9 +284,10 @@ def _stored(name: str) -> bool:
 
 # -- sizes, for count() ------------------------------------------------------------------
 
-#: (tenant, media folder) → (hash of the names, when, bytes): as the
-#: invoices section keeps its own (sections/invoices.py) - per tenant, since
-#: two tenants restored from one archive name the same files.
+#: (tenant, media folder) → (hash of the names, when, bytes): the shape of
+#: the invoices' and the sales' slots (`base.stored_bytes`, a follow-up may
+#: move this one there) - per tenant, since two tenants restored from one
+#: archive name the same files.
 _SIZES: dict[tuple[str, str], tuple[int, float, int]] = {}
 
 
