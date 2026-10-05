@@ -31,7 +31,10 @@ does not offer is still a purchase, and a visit.
 
 **One article at one store** (`usual_purchase_at`, the shopping lists'): the
 same scan narrowed to them, read into a Prepared of its own - the forecast
-line's usual purchase, in two queries at most.
+line's usual purchase, in two queries at most. **Every article at one
+store** (`usual_purchases_at`, the shopping list's add menu): the store's
+scan, read once into one Prepared - the same answers, in ONE query, the
+product names handed in by the caller.
 
 **Which stores are offered** (`offered_stores`): every supplier with a
 purchase, but the suppliers of charges (`expenses_only`) and the removed AI
@@ -205,14 +208,58 @@ def usual_purchase_at(today: date, store_id: int, article) -> shopping.UsualPurc
         if bought_as
         else {}
     )
+    return _usual_from(rows, today, store_id, [_article_info(article)], names).get(article.pk)
+
+
+def usual_purchases_at(
+    today: date, store_id: int, articles: Iterable, product_names: Mapping[int, str]
+) -> dict[int, shopping.UsualPurchase]:
+    """{article: its usual purchase at the store `store_id` as of today}
+    for each of `articles` (StockTypes) bought there up to today - those
+    never bought there are absent: `usual_purchase_at`'s answer for every
+    one of them, in ONE query, the store's whole scan
+    (`purchase_rows(today, store_id=...)`). Another store's purchases never
+    enter (the scan is the store's); an article's `buys_at` holds its rows
+    alone, so the others' rows change nothing.
+
+    `product_names` ({product: raw name}) are the caller's, read already -
+    the shopping list's add menu has the store's classified products in
+    hand: a product it does not name counts its article's units, as an
+    unnamed one does in `usual_purchase_at`."""
+    infos = [_article_info(article) for article in articles]
+    rows = purchase_rows(today, store_id=store_id)
+    if not rows or not infos:
+        return {}
+    return _usual_from(rows, today, store_id, infos, product_names)
+
+
+def _article_info(article) -> shopping.ArticleInfo:
+    return shopping.ArticleInfo(article.pk, article.name, article.unit, article.category or "")
+
+
+def _usual_from(
+    rows: list[shopping.PurchaseRow],
+    today: date,
+    store_id: int,
+    infos: list[shopping.ArticleInfo],
+    names: Mapping[int, str],
+) -> dict[int, shopping.UsualPurchase]:
+    """{article: usual purchase} for each of `infos` that `rows` (one
+    store's purchases) bought up to today, by `shopping.usual_purchase` -
+    the page's own rule. No query."""
     prepared = shopping.Prepared.build(
         today=today,
         purchases=rows,
-        articles=[shopping.ArticleInfo(article.pk, article.name, article.unit, article.category or "")],
+        articles=infos,
         stores=[shopping.StoreInfo(store_id, "")],
         product_names=names,
     )
-    return shopping.usual_purchase(prepared, store_id, article.pk)
+    found = {}
+    for info in infos:
+        usual = shopping.usual_purchase(prepared, store_id, info.id)
+        if usual is not None:
+            found[info.id] = usual
+    return found
 
 
 def offered_stores(purchases: Iterable[shopping.PurchaseRow]) -> list[shopping.StoreInfo]:

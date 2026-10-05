@@ -24,7 +24,9 @@ up at the bar, were tables two to three times as wide as the screen.
   courses » (04/10): the lists' page and its store menu, a list to prepare
   holding a free text printed as one word and a note of 60 letters with no
   space, its « Modifier » card, the tick page - a ticked item, the sticky
-  « Courses terminées » - and a finished list.
+  « Courses terminées » - and a finished list; then (05/10) the add form's
+  unit select filled by its script, a card's select for an item counted in
+  bottles, and « 3 bouteilles de 70 cl » in the store.
 * **A table's search box sits before the box it scrolls in**, never inside
   it, where it scrolled away with the columns (static/js/datatable.js).
 * **A ticket's photo is part of the page** once stacked above its lines:
@@ -79,7 +81,13 @@ from tests.factories import (
     make_supplier,
 )
 from tests.runner import log_in_the_browser
-from tests.test_views_smoke import SHOPPING_BEER_PRODUCT, make_shopping_history, make_shopping_lists
+from tests.test_views_smoke import (
+    SHOPPING_BEER_PRODUCT,
+    SHOPPING_GIN_PRODUCT,
+    make_shopping_bottles,
+    make_shopping_history,
+    make_shopping_lists,
+)
 
 #: The widths of the review: a small phone, the owner's, a large one.
 WIDTHS = (320, 375, 430)
@@ -445,10 +453,24 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
         # no space, and the grocer's list finished (all invented).
         self.shopping_lists = lists = make_shopping_lists(shopping)
         ShoppingListItem.objects.create(shopping_list=lists.open, label=ONE_WORD, quantity=Decimal("1"), note=LIST_NOTE)
+        # Bottles (04/10): the gin bought here in 70 cl bottles, three of
+        # them on the list - its card's unit select, its words in the store.
+        bottles = make_shopping_bottles(shopping)
+        gin = ShoppingListItem.objects.create(
+            shopping_list=lists.open,
+            stock_type=bottles.gin,
+            label=bottles.gin.name,
+            quantity=Decimal("3"),
+            product_name=SHOPPING_GIN_PRODUCT,
+            pack_size=6,
+            item_size=Decimal("0.7"),
+            size_unit=UnitChoices.LITRE,
+        )
         list_page = reverse("inventory:shopping_list_page")
         self.lists_index = reverse("inventory:shopping_lists")
         self.list_edit = f"{list_page}?fournisseur={shopping.wholesaler.pk}"
         self.list_card = f"{self.list_edit}&ligne={lists.beer.pk}#modifier"
+        self.list_gin_card = f"{self.list_edit}&ligne={gin.pk}#modifier"
         self.list_run = f"{self.list_edit}&mode=courses"
         self.list_finished = f"{list_page}?liste={lists.finished.pk}"
         self.wholesaler_name = shopping.wholesaler.name
@@ -484,6 +506,7 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             "les listes de courses": self.lists_index,
             "une liste à préparer": self.list_edit,
             "une ligne à modifier": self.list_card,
+            "une ligne en bouteilles à modifier": self.list_gin_card,
             "les courses à cocher": self.list_run,
             "une liste terminée": self.list_finished,
         }
@@ -557,7 +580,9 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
             (self.list_edit, "table[data-table-label='articles']", LIST_NOTE),
             (self.list_edit, "table[data-table-label='articles']", ONE_WORD),
             (self.list_card, "#modifier", "Bière exemple"),
+            (self.list_gin_card, "#modifier select[name='unite']", "bouteilles de 70 cl"),
             (self.list_run, "#courses .shopping-tick-name", ONE_WORD),
+            (self.list_run, "#courses .shopping-tick-quantity", "3 bouteilles de 70 cl"),
             (self.list_run, "#courses .shopping-tick.is-ticked", "Sirop exemple"),
             (self.list_run, "form.shopping-finish", "Garder les articles non pris"),
             (self.list_finished, "table[data-table-label='courses terminées']", "Citron exemple"),
@@ -569,6 +594,37 @@ class NoPageWiderThanAPhoneInBrowserTests(PhoneBrowserTestCase):
                     css,
                 )
                 self.assertTrue(any(words in text for text in texts), f"{css}: no « {words} » in {texts!r:.300}")
+
+    def test_the_add_form_s_unit_select_fits_once_filled(self):
+        """A name typed in the list's add form: entry_units.js fills its unit
+        select - « bouteilles de 70 cl » / « litres » for the gin, the
+        longest label « litres (format inconnu) » for the juice -, and the
+        page still fits the phone at every width."""
+        problems = []
+        for width in WIDTHS:
+            self.as_a_phone(width)
+            self.open(self.list_edit)
+            for typed, labels in (
+                ("Gin exemple (article)", ["bouteilles de 70 cl", "litres"]),
+                ("Jus exemple (article)", ["litres (format inconnu)"]),
+            ):
+                with self.subTest(width=width, typed=typed):
+                    self.script(
+                        "var field = document.querySelector('form.shopping-add input[name=\"nom\"]');"
+                        "field.value = arguments[0];"
+                        "field.dispatchEvent(new Event('input', {bubbles: true}));",
+                        typed,
+                    )
+                    drawn = self.script(
+                        "return Array.prototype.map.call("
+                        "document.querySelector('form.shopping-add select[name=\"unite\"]').options,"
+                        "function (option) { return option.textContent; });"
+                    )
+                    self.assertEqual(drawn, labels)
+                    wide = self.too_wide(width)
+                    if wide:
+                        problems.append(f"« {typed} », {width} px : {wide}")
+        self.assertEqual(problems, [], "\n".join(problems))
 
     def test_a_ticket_s_photo_is_part_of_the_page(self):
         """Stacked above the lines (900 px and under), a ticket's photo is no

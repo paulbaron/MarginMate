@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load assets %}
 {% block title %}{% if stock_take.pk %}Modifier{% else %}Nouvel{% endif %} inventaire - MarginMate{% endblock %}
 {% block content %}
     <h1>{% if stock_take.pk %}Modifier{% else %}Nouvel{% endif %} inventaire</h1>
@@ -96,6 +97,12 @@
     </template>
 {% endblock %}
 {% block extra_js %}
+{% comment %}
+entry_units.js fills each row's unit select (shared with the shopping list's add form). Deferred, it
+runs once the page is read and before DOMContentLoaded, where - and in the events after it - the
+script below first calls it.
+{% endcomment %}
+<script src="{% asset 'js/entry_units.js' %}" defer></script>
 <script>
 var VALUE_URL = "{% if can.sees_costs %}{% url 'inventory:value_stock_take_line' %}{% endif %}";
 
@@ -163,21 +170,16 @@ function rebuildDatalist() {
 // otherwise the select's current value is kept if it's still one of the
 // valid choices (used on page load, to preserve an already-saved line's
 // actual unit rather than silently resetting it to the default).
+// entry_units.js does it: the name looked up with its spaces around taken
+// off (as the save does), and a name nobody knows given back the options
+// the server drew - never the previous entry's. Should that script not have
+// arrived, the select keeps the server's options and nothing throws: the
+// page's own start (the first row, the draft offered back) must still run.
 function updateUnitChoices(row, useDefault) {
     var input = row.querySelector("input[name$='-entry_search']");
     var select = row.querySelector("select[name$='-unit']");
-    var entry = input ? entryData[input.value] : null;
-    if (!entry || !select) return;
-    var currentValue = select.value;
-    select.innerHTML = "";
-    entry.unit_choices.forEach(function (choice) {
-        var option = document.createElement("option");
-        option.value = choice[0];
-        option.textContent = choice[1];
-        select.appendChild(option);
-    });
-    var keepCurrent = !useDefault && entry.unit_choices.some(function (c) { return c[0] === currentValue; });
-    select.value = keepCurrent ? currentValue : entry.default_unit;
+    if (!input || !select || !window.MarginMateEntryUnits) return;
+    MarginMateEntryUnits.fill(select, MarginMateEntryUnits.lookup(entryData, input.value), useDefault);
 }
 
 // Same reasoning as recipe_form.html's nextFormIndex: existing (saved)
@@ -293,7 +295,8 @@ function priceRow(row) {
     var quantity = row.querySelector("input[name$='-counted_quantity']");
     var unit = row.querySelector("select[name$='-unit']");
     if (!entry || !quantity) return;
-    if (!entry.value.trim() || !quantity.value.trim() || !entryData[entry.value]) {
+    var known = window.MarginMateEntryUnits && MarginMateEntryUnits.lookup(entryData, entry.value);
+    if (!entry.value.trim() || !quantity.value.trim() || !known) {
         showRowValue(row, null);
         return;
     }

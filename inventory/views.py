@@ -34,14 +34,21 @@ from common import (
     search_key,
 )
 
-from .forms import (
+from .entries import (
+    ARTICLE_KIND,
+    ENTRY_MAX,
+    ITEMS,
     OLD_STOCK_TYPE_ENTRY_SUFFIXES,
     STOCK_TYPE_ENTRY_SUFFIX,
     EntryResolver,
+    is_stock_type_entry,
+    item_size,
+    product_item_sizes,
+)
+from .forms import (
     StockTakeForm,
     StockTakeLineFormSet,
     StockTypeForm,
-    is_stock_type_entry,
     stock_take_entry_lookup,
 )
 from .gaps import (
@@ -78,9 +85,11 @@ from .models import (
 from .product_matching_rules import SuggestionContext, apply_rules_to_pending_products, is_current, suggest_for_product
 from .services import (
     conversion_refusal,
+    is_discrete_count,
     link_product_to_stock_type,
     merge_stock_types,
     product_base_amount,
+    product_counting_ratios,
     refresh_invoice_statuses_for_product,
     unlink_product,
     update_product_conversion,
@@ -103,22 +112,32 @@ from .shopping import (
 from .shopping_data import prepare, settings_from
 from .shopping_lists import (
     LABEL_MAX,
+    MEASURED,
     NOTE_MAX,
     PACK_RANGE,
     QUANTITY_PLACES,
     RECENT_FINISHED,
     UNIT_SYMBOLS,
+    USUAL_WORD,
     YOU,
     AddOutcome,
     Figures,
+    ItemOf,
     QuantityTooWide,
     add_item,
-    article_choices,
+    article_item_of,
+    card_figures,
+    card_labels,
+    card_units,
     clean_text,
+    counted_unit_words,
     display_names,
-    find_article,
+    entry_figures,
+    entry_units,
     finish,
     line_figures,
+    list_aliases,
+    list_entries,
     offered_stores,
     open_list_of,
     pack_words,
@@ -2343,15 +2362,18 @@ FORECAST_ADD_PLACES = (LIST_MESSAGES, MAYBE_MESSAGES, NEW_MESSAGES)
 #: « Listes de courses »' parameters (the HTTP interface: French). A list by
 #: its id (`liste`, a finished one read as it was); the tick page (`mode` =
 #: `courses`); the item a form changes (`ligne`); what « Ajouter » posts -
-#: a name typed (`nom`) or the forecast's line (`article`, `produit`,
-#: `colis`), a quantity, a note; the tick's wanted state (`pris`, « 1 »
-#: bought, « 0 » not); « Garder les articles non pris » (`garder`). The
-#: article reuses EXCLUDED_ARTICLE_PARAM (« article »).
+#: a name typed (`nom`) with the unit its quantity counts (`unite`, the
+#: stock take's values: « UNIT » items, « L » / « KG » the article's measure;
+#: the card posts it too), or the forecast's line (`article`, `produit`,
+#: `colis`, never a unit) -, a quantity, a note; the tick's wanted state
+#: (`pris`, « 1 » bought, « 0 » not); « Garder les articles non pris »
+#: (`garder`). The article reuses EXCLUDED_ARTICLE_PARAM (« article »).
 SHOPPING_LIST_PARAM = "liste"
 MODE_PARAM = "mode"
 RUN_MODE = "courses"
 ITEM_PARAM = "ligne"
 NAME_PARAM = "nom"
+UNIT_PARAM = "unite"
 QUANTITY_PARAM = "quantite"
 PRODUCT_PARAM = "produit"
 PACK_PARAM = "colis"
@@ -2482,6 +2504,7 @@ def _shopping_params() -> dict:
         "run_mode": RUN_MODE,
         "item_param": ITEM_PARAM,
         "name_param": NAME_PARAM,
+        "unit_param": UNIT_PARAM,
         "quantity_param": QUANTITY_PARAM,
         "product_param": PRODUCT_PARAM,
         "pack_param": PACK_PARAM,
@@ -2675,15 +2698,17 @@ def shopping_list(request):
     # The store's open list, in one read: what each line already has there -
     # to buy (`listed`), or ticked as bought on a list nobody finished yet
     # (`taken`): that one is no longer in the list, and is offered again.
+    # In the words the list says them: « 3 bouteilles de 70 cl », « 2 L ».
     on_the_list = list(
         ShoppingListItem.objects.filter(
             shopping_list__supplier_id=store.store_id, shopping_list__finished_at__isnull=True
-        ).values_list("stock_type_id", "quantity", "unit", "checked_at")
+        ).values_list("stock_type_id", "quantity", "unit", "item_size", "size_unit", "product_name", "checked_at")
     )
     listed, taken = {}, {}
-    for article_id, quantity, unit, checked_at in on_the_list:
+    for article_id, quantity, unit, size, size_unit, product_name, checked_at in on_the_list:
         if article_id is not None:
-            (listed if checked_at is None else taken)[article_id] = quantity_words(quantity, unit)
+            words = quantity_words(quantity, unit, size, size_unit, product_name=product_name)
+            (listed if checked_at is None else taken)[article_id] = words
     # A fold not drawn says its messages at the top, never nowhere.
     for drawn, place in (
         (plan.maybe, MAYBE_MESSAGES),
@@ -2924,6 +2949,9 @@ PRODUCT_NOT_FOUND = "Produit introuvable : rien n'a été ajouté."
 NAME_MISSING = "Article : tapez un nom."
 NAME_TOO_LONG = f"Article : {LABEL_MAX} caractères au plus."
 QUANTITY_REFUSED = f"Quantité : un nombre plus grand que 0, {QUANTITY_PLACES} décimales au plus."
+#: A unit (`unite`) the name typed, or the card's item, does not offer - any
+#: for a free text, which counts what it names.
+UNIT_REFUSED = "Unité : choisissez-en une de la liste proposée."
 NOTE_TOO_LONG = f"Note : {NOTE_MAX} caractères au plus."
 ADDED = "« {name} » ajouté à la liste ({quantity})."
 #: A ticked (bought) item added again: put back to buy (AddOutcome.RELISTED).
@@ -2992,13 +3020,19 @@ def _packs(quantity, unit: str, product_name: str, pack_size) -> str:
     return pack_words(quantity, pack_size) if product_name and not unit else ""
 
 
-def _counted_words(quantity, unit: str, product_name: str, pack_size) -> str:
-    """What a message says an item counts: « 2 L », « 3 », and for the
-    store's product sold in packs, how many - « 24 · 1 colis de 24 », « 2 ·
-    à l'unité · colis de 24 » -, so a number is never read as packs."""
-    words = quantity_words(quantity, unit)
+def _counted_words(quantity, unit: str, product_name: str, pack_size, item_size=None, size_unit: str = "") -> str:
+    """What a message says an item counts: « 2 L », « 3 », « 3 bouteilles de
+    70 cl », and for the store's product sold in packs, how many - « 24 · 1
+    colis de 24 », « 6 bouteilles de 70 cl · 1 colis de 6 », « 2 · à l'unité
+    · colis de 24 » -, so a number is never read as packs."""
+    words = quantity_words(quantity, unit, item_size, size_unit, product_name=product_name)
     packs = _packs(quantity, unit, product_name, pack_size)
     return f"{words} · {packs}" if packs else words
+
+
+def _item_words(item) -> str:
+    """`_counted_words` of an item as stored."""
+    return _counted_words(item.quantity, item.unit, item.product_name, item.pack_size, item.item_size, item.size_unit)
 
 
 def _list_page_url(store_id: int, *, run: bool = False, item: int | None = None, anchor: str = "") -> str:
@@ -3021,17 +3055,33 @@ def _items_of(shopping_list) -> list:
     return list(shopping_list.items.select_related("stock_type").order_by("added_at", "pk"))
 
 
+def _card_counts(item) -> str:
+    """What the card's number counts, in grey beside it: for an article's
+    item the store's product it names (its select says the unit); for a free
+    text still counting something - an article deleted (SET_NULL), or merged
+    beside a twin counting something else - that unit, « L » or « bouteilles
+    de 70 cl », then the product after « · » (it has no select to say it). A
+    free text typed counts what it names: its product, if any, alone."""
+    if item.stock_type_id is not None:
+        return item.product_name
+    said = counted_unit_words(item.unit, item.item_size, item.size_unit, item.product_name)
+    return " · ".join(words for words in (said, item.product_name) if words)
+
+
 def _item_rows(items, store_id: int) -> list[dict]:
-    """Items as the pages draw them: the quantity in words, and its bare
-    number (what it sorts by, what its card's field holds); what it counts
-    (the article's unit, else the store's product) and the packs that
+    """Items as the pages draw them: the quantity in words - with what it
+    counts: « 2 L », « 3 bouteilles de 70 cl » - and its bare number (what it
+    sorts by, what its card's field holds); what that number counts, in
+    grey beside the card's unit (`_card_counts`), and the packs the store's
     product makes; the address of its card."""
     return [
         {
             "item": item,
-            "quantity": quantity_words(item.quantity, item.unit),
+            "quantity": quantity_words(
+                item.quantity, item.unit, item.item_size, item.size_unit, product_name=item.product_name
+            ),
             "plain": plain_number(item.quantity),
-            "counts": UNIT_SYMBOLS.get(item.unit, "") if item.unit else item.product_name,
+            "counts": _card_counts(item),
             "packs": _packs(item.quantity, item.unit, item.product_name, item.pack_size),
             "edit_url": _list_page_url(store_id, item=item.pk, anchor=EDIT_ANCHOR),
         }
@@ -3041,6 +3091,55 @@ def _item_rows(items, store_id: int) -> list[dict]:
 
 def _ticked_count(items) -> int:
     return sum(1 for item in items if item.checked_at is not None)
+
+
+def _item_now(item, store, today: date):
+    """What one item (« une bouteille ») of `item`'s article is at `store`
+    now (shopping_lists.article_item_of, through `usual_figures` - its
+    usual purchase here); None for a free text, or an article whose unit
+    already counts pieces. Read for the card only: up to five queries."""
+    article = item.stock_type
+    if article is None or article.unit not in MEASURED:
+        return None
+    return article_item_of(article, usual_figures(today, store, article))
+
+
+def _own_product(item, store, item_now) -> ItemOf | None:
+    """The product `item` names found again at `store` under its article,
+    with the size of one (entries.item_size) - read only where the card's
+    items option would count it (shopping_lists.card_item: the item counts a
+    measure and names a product `item_now` does not), so that option says,
+    and stores, that product's bottles rather than a bare number. None when
+    not needed or not found: up to two queries."""
+    article = item.stock_type
+    if article is None or (item.unit or ITEMS) == ITEMS or not item.product_name:
+        return None
+    if item_now is not None and item_now.product_name == item.product_name:
+        return None
+    product = (
+        Product.objects.filter(supplier=store, raw_name=item.product_name, stock_type=article)
+        .order_by("pk")
+        .only("id", "raw_name", "unit", "stock_equivalent")
+        .first()
+    )
+    if product is None:
+        return None
+    size = item_size(product, product_counting_ratios([product.pk]))
+    return ItemOf(size, article.unit if size is not None else "", product.pk, product.raw_name, None)
+
+
+def _card_units(item, store, today: date) -> list[tuple[str, str, bool]]:
+    """The card's unit select for `item` (shopping_lists.card_units /
+    card_labels, through card_item: what its items option counts, the
+    item's own product found again when it names one the store's usual does
+    not): (value, label, selected), its present terms selected; none for a
+    free text, which keeps its number."""
+    item_now = _item_now(item, store, today)
+    own = _own_product(item, store, item_now)
+    units = card_units(item, item_now, own)
+    if units is None:
+        return []
+    return [(value, label, value == units.default) for value, label in card_labels(item, units, item_now, own)]
 
 
 def _item_of(asked, store):
@@ -3119,12 +3218,20 @@ def shopping_lists(request):
 
 def shopping_list_page(request):
     """One store's shopping list (`fournisseur`): to prepare - add an
-    article or a free text, change a quantity or a note on the card of
-    `ligne`, remove one - or, `mode=courses`, to tick in the store. A list
-    by its id (`liste`): an open one goes to its store's address, a
-    finished one is read as it was. A GET writes nothing: a list is made by
-    its first item. A store or a list the address cannot give: the lists'
-    page, saying so."""
+    article, one of the store's products or a free text, in the unit
+    chosen; change a quantity, its unit or a note on the card of `ligne`;
+    remove one - or, `mode=courses`, to tick in the store. A list by its id
+    (`liste`): an open one goes to its store's address, a finished one is
+    read as it was. A GET writes nothing: a list is made by its first item.
+    A store or a list the address cannot give: the lists' page, saying so.
+
+    To prepare, the add form's menu (`entries`, its datalist) and what its
+    unit select reads (`entry_data`, a json_script island that
+    static/js/entry_units.js fills it from) are shopping_lists.list_entries' -
+    the chain the add itself goes through -, and the names the add also
+    accepts (`entry_aliases`, shopping_lists.list_aliases: the resolver's
+    own answers) a second island; the card's select is drawn here, for its
+    one item."""
     asked_list = request.GET.get(SHOPPING_LIST_PARAM, "")
     run = request.GET.get(MODE_PARAM) == RUN_MODE
     if asked_list:
@@ -3156,7 +3263,11 @@ def shopping_list_page(request):
     editing = next((row for row in rows if is_id(asked_item) and row["item"].pk == int(asked_item)), None)
     # The card's refusals are said in it; with no card, at the top.
     said = _messages_by_place(request, (EDIT_ANCHOR,) if editing else ())
-    here, others = article_choices(store)
+    today = timezone.localdate()
+    if editing is not None:
+        editing = {**editing, "units": _card_units(editing["item"], store, today)}
+    menu = list_entries(today, store)
+    aliases = list_aliases(store, menu)
     return render(
         request,
         "inventory/shopping_list_page.html",
@@ -3172,9 +3283,14 @@ def shopping_list_page(request):
             "editing": editing,
             "item_missing": bool(asked_item) and editing is None,
             "not_in_list": NOT_IN_LIST,
-            "articles_here": here,
-            "articles_other": others,
-            "label_max": LABEL_MAX,
+            "entries": [entry.name for entry in menu],
+            # A dict: json_script writes it (never a JSON string printed |safe).
+            "entry_data": {entry.name: entry.as_data() for entry in menu},
+            # The names the server also accepts, for the select to follow them.
+            "entry_aliases": aliases,
+            "usual_word": USUAL_WORD,
+            # A menu name is never cut: the longest one the vocabulary makes.
+            "entry_max": ENTRY_MAX,
             "note_max": NOTE_MAX,
             "edit_url": _list_page_url(store.pk),
             "run_url": _list_page_url(store.pk, run=True),
@@ -3208,44 +3324,71 @@ def _finished_list_page(request, shopping_list):
     )
 
 
-def _read_line(post, refused: list) -> tuple | None:
+def _read_line(post, store, refused: list) -> tuple | None:
     """« Ajouter » on a forecast line: (article, label, figures) - the
-    quantity typed, counting the product posted (one of that article's;
-    its pack size a hint, never a refusal) or, with none, the article's own
-    unit. None when something is refused (said in `refused`)."""
+    quantity typed, counting the product posted (one of that article's at
+    `store`: another store's is refused; its pack size a hint, never a
+    refusal; the size of one item kept, in the article's unit, when it has
+    one - entries.item_size) or, with none, the article's own unit. `unite`
+    is never read: the line's number counts what its product, or its
+    absence, says. With no store read, the product is not looked up: the
+    store's refusal alone is said. None when something is refused (said in
+    `refused`)."""
     asked = post.get(EXCLUDED_ARTICLE_PARAM, "")
     article = StockType.objects.filter(pk=int(asked)).first() if is_id(asked) else None
     if article is None:
         refused.append(ARTICLE_NOT_FOUND)
     asked_product = post.get(PRODUCT_PARAM, "")
     product = None
-    if article is not None and asked_product:
+    if article is not None and store is not None and asked_product:
         product = (
-            Product.objects.filter(pk=int(asked_product), stock_type=article).first() if is_id(asked_product) else None
+            Product.objects.filter(pk=int(asked_product), stock_type=article, supplier=store).first()
+            if is_id(asked_product)
+            else None
         )
         if product is None:
             refused.append(PRODUCT_NOT_FOUND)
     quantity = read_quantity(post.get(QUANTITY_PARAM, ""))
     if quantity is None:
         refused.append(QUANTITY_REFUSED)
-    if article is None or quantity is None or (asked_product and product is None):
+    if article is None or store is None or quantity is None or (asked_product and product is None):
         return None
     if product is None:
         return article, article.name, Figures(quantity, article.unit, None, "", None)
     pack = read_bounded_number(post.get(PACK_PARAM), *PACK_RANGE)
-    return article, article.name, Figures(quantity, "", product.pk, product.raw_name, pack)
+    size = item_size(product, product_counting_ratios([product.pk]))
+    figures = Figures(quantity, "", product.pk, product.raw_name, pack, size, article.unit if size is not None else "")
+    return article, article.name, figures
 
 
-def _read_name(post, store, refused: list) -> tuple | None:
+def _read_entry(post, store, refused: list) -> tuple | None:
     """« Ajouter » on the list page: (article, label, figures) for the name
-    typed - an article it names (shopping_lists.find_article) with, when no
-    quantity is typed, its usual purchase at the store (else 1 in its own
-    unit), a typed quantity counting what that usual purchase counts; or a
-    free text, 1 unless typed. None when something is refused."""
+    typed (`nom`), in the unit chosen (`unite`; empty or not posted: the
+    entry's own default - an old page, no JavaScript).
+
+    The name goes through the stock take's resolver, scoped to the store
+    (entries.EntryResolver, forgiving): one of the store's products by its
+    menu name or its own, an article by its menu name or its name typed
+    otherwise - an article always before a product reading alike -, else a
+    free text, kept as typed. A product adds its article: the product only
+    says what the number counts. What each unit stores is
+    shopping_lists.entry_figures', the chain the page's menu goes through
+    (list_entries): the number typed counts the unit chosen, never
+    converted; nothing typed, the store's usual figure in that unit.
+
+    A unit the entry does not offer - any for a free text - is refused
+    (UNIT_REFUSED), judged once the name reads, the quantity refused or
+    not. The name's length is judged by what is stored (NAME_TOO_LONG): a
+    text longer than any menu name can be (entries.ENTRY_MAX) before it is
+    read; a free text, stored as typed, over LABEL_MAX - an entry stores its
+    article's name, which always fits. None when something is refused (said
+    in `refused`)."""
+    names_at = len(refused)
     text = clean_text(post.get(NAME_PARAM, ""))
     if not text:
         refused.append(NAME_MISSING)
-    elif len(text) > LABEL_MAX:
+    elif len(text) > ENTRY_MAX:
+        # Longer than any name the menu offers: nothing it could name.
         refused.append(NAME_TOO_LONG)
     typed = post.get(QUANTITY_PARAM, "")
     quantity = None
@@ -3253,32 +3396,51 @@ def _read_name(post, store, refused: list) -> tuple | None:
         quantity = read_quantity(typed)
         if quantity is None:
             refused.append(QUANTITY_REFUSED)
+    asked = post.get(UNIT_PARAM, "")
+    if store is None or NAME_MISSING in refused or NAME_TOO_LONG in refused:
+        return None
+    entry = EntryResolver(supplier_id=store.pk).resolve(text, forgiving=True)
+    if entry is None:
+        if len(text) > LABEL_MAX:
+            # A free text is stored as typed; an entry stores its article's
+            # name, which always fits. Said where the name's refusals are.
+            refused.insert(names_at, NAME_TOO_LONG)
+            return None
+        if asked:
+            refused.append(UNIT_REFUSED)
+        if refused:
+            return None
+        return None, text, entry_figures(None, "", quantity, usual=None, item=None, product_size=None)
+    article = entry.article
+    usual = usual_figures(timezone.localdate(), store, article)
+    item = article_item_of(article, usual) if entry.kind == ARTICLE_KIND else None
+    product_size, discrete = None, False
+    if entry.product is not None:
+        ratios = product_counting_ratios([entry.product.pk])
+        product_size = item_size(entry.product, ratios)
+        discrete = is_discrete_count(ratios, entry.product.pk)
+    units = entry_units(entry, usual=usual, item=item, discrete=discrete)
+    unit = asked or units.default
+    if unit not in units.choices:
+        refused.append(UNIT_REFUSED)
     if refused:
         return None
-    article = find_article(text)
-    if article is None:
-        return None, text, Figures(quantity or Decimal(1), "", None, "", None)
-    usual = usual_figures(timezone.localdate(), store, article)
-    if quantity is None:
-        figures = usual or Figures(Decimal(1), article.unit, None, "", None)
-    elif usual is not None:
-        figures = Figures(quantity, usual.unit, usual.product_id, usual.product_name, usual.pack_size)
-    else:
-        figures = Figures(quantity, article.unit, None, "", None)
+    figures = entry_figures(entry, unit, quantity, usual=usual, item=item, product_size=product_size)
     return article, article.name, figures
 
 
 def shopping_list_add(request):
     """« Ajouter »: one item on the store's open list, made by this first
-    item. From the list page a name typed (`nom`, _read_name), back to the
-    list; from « Prévoir les courses » a line (`article`, `produit`,
-    `colis`, the quantity its cell shows, _read_line), back to the section
-    it came from (`retour`), its days kept. Every refusal is said, and
-    nothing is written - a figure wider than the list holds (a usual
-    purchase misread) included; an item still to buy is said already there,
-    unchanged - a double submit adds nothing -, and one ticked as bought is
-    put back to buy with the figures posted (« remis dans la liste »). The
-    message says what the number counts (_counted_words)."""
+    item. From the list page a name typed in the unit chosen (`nom`,
+    `unite`, _read_entry), back to the list; from « Prévoir les courses » a
+    line (`article`, `produit`, `colis`, the quantity its cell shows,
+    _read_line), back to the section it came from (`retour`), its days
+    kept. Every refusal is said, and nothing is written - a figure wider
+    than the list holds (a usual purchase misread) included; an item still
+    to buy is said already there, unchanged - a double submit adds nothing
+    -, and one ticked as bought is put back to buy with the figures posted
+    (« remis dans la liste »). The message says what the number counts
+    (_counted_words: « 3 bouteilles de 70 cl · à l'unité · colis de 6 »)."""
     if request.method != "POST":
         return redirect("inventory:shopping_lists")
     landing = request.POST.get(LANDING_PARAM, "")
@@ -3289,9 +3451,9 @@ def shopping_list_add(request):
     if store is None:
         refused.append(STORE_NOT_FOUND_ADD)
     if request.POST.get(EXCLUDED_ARTICLE_PARAM, ""):
-        read = _read_line(request.POST, refused)
+        read = _read_line(request.POST, store, refused)
     else:
-        read = _read_name(request.POST, store, refused)
+        read = _read_entry(request.POST, store, refused)
     note = clean_text(request.POST.get(NOTE_PARAM, ""))
     if len(note) > NOTE_MAX:
         refused.append(NOTE_TOO_LONG)
@@ -3307,10 +3469,7 @@ def shopping_list_add(request):
         except QuantityTooWide as refusal:
             messages.error(request, str(refusal), extra_tags=tag)
         else:
-            words = {
-                "name": item.name,
-                "quantity": _counted_words(item.quantity, item.unit, item.product_name, item.pack_size),
-            }
+            words = {"name": item.name, "quantity": _item_words(item)}
             if outcome is AddOutcome.ADDED:
                 messages.success(request, ADDED.format(**words), extra_tags=tag)
             elif outcome is AddOutcome.RELISTED:
@@ -3325,10 +3484,12 @@ def shopping_list_add(request):
 def shopping_list_add_all(request):
     """« Tout ajouter (N) »: every line of « À acheter » not on the store's
     open list to buy yet, with the figures the page shows - the plan worked
-    out again, as the page does it, the typed days (`dans`) included. An
-    item ticked as bought there is put back to buy and counted as added; a
-    line whose figure the list cannot hold is left out and counted. Said
-    above « À acheter »; a second submit adds nothing."""
+    out again, as the page does it, the typed days (`dans`) included -, a
+    line counting the store's product keeping the size of one item
+    (entries.product_item_sizes, two queries), as « Ajouter » does. An item
+    ticked as bought there is put back to buy and counted as added; a line
+    whose figure the list cannot hold is left out and counted. Said above
+    « À acheter »; a second submit adds nothing."""
     if request.method != "POST":
         return redirect("inventory:shopping_lists")
     store = _offered_store(request.POST.get(STORE_PARAM, ""))
@@ -3348,6 +3509,7 @@ def shopping_list_add_all(request):
         ).values_list("stock_type_id", flat=True)
     )
     articles = StockType.objects.in_bulk([line.article_id for line in plan.to_buy])
+    sizes = product_item_sizes({line.product_id for line in plan.to_buy if line.product_id})
     by = _username(request)
     added = already = too_wide = 0
     with transaction.atomic():
@@ -3360,7 +3522,7 @@ def shopping_list_add_all(request):
                 continue
             try:
                 _item, outcome = add_item(
-                    store, by=by, label=article.name, figures=line_figures(line), stock_type=article
+                    store, by=by, label=article.name, figures=line_figures(line, sizes), stock_type=article
                 )
             except QuantityTooWide:
                 # Refused before anything is read or written: the others go on.
@@ -3379,11 +3541,20 @@ def shopping_list_add_all(request):
 
 
 def shopping_list_item_edit(request):
-    """The card's « Enregistrer »: an item's quantity and note (the note may
-    be emptied), on an open list only - the write filtered on one, so a list
-    finished meanwhile is never written. A refusal is said in the card,
-    drawn again, and nothing is written. The message says what the number
-    counts (_counted_words)."""
+    """The card's « Enregistrer »: an item's quantity, the unit it counts
+    (`unite`, one of the card's select: shopping_lists.card_units) and its
+    note (which may be emptied), on an open list only - ONE write filtered
+    on one, so a list finished meanwhile is never written. The number is
+    never converted: it counts the unit chosen (shopping_lists.card_figures
+    - from bottles to litres the product's name is kept, its packs and size
+    cleared; from litres to bottles, those of the article's usual purchase
+    here - or, when the item names another product, that product's, found
+    again at the store, else a bare number of it: what the card's label
+    said, shopping_lists.card_item). No unit posted (an old page): the item
+    keeps its own. A refusal -
+    a unit the card does not offer, any for a free text, included - is said
+    in the card, drawn again, and nothing is written. The message says what
+    the number counts (_counted_words)."""
     if request.method != "POST":
         return redirect("inventory:shopping_lists")
     store = store_of(request.POST.get(STORE_PARAM, ""))
@@ -3396,18 +3567,48 @@ def shopping_list_item_edit(request):
         return redirect(_list_page_url(store.pk))
     quantity = read_quantity(request.POST.get(QUANTITY_PARAM, ""))
     note = clean_text(request.POST.get(NOTE_PARAM, ""))
+    asked = request.POST.get(UNIT_PARAM, "")
+    # What one item of its article is now, and the item's own product found
+    # again: read only to count items again from a measure (the units
+    # offered and what they store, shopping_lists.card_item).
+    item_now = own = None
+    if asked and asked != (item.unit or ITEMS):
+        item_now = _item_now(item, store, timezone.localdate())
+        own = _own_product(item, store, item_now)
+    units = card_units(item, item_now, own)
+    unit_refused = bool(asked) and (units is None or asked not in units.choices)
     refused = [
-        said for said, wrong in ((QUANTITY_REFUSED, quantity is None), (NOTE_TOO_LONG, len(note) > NOTE_MAX)) if wrong
+        said
+        for said, wrong in (
+            (QUANTITY_REFUSED, quantity is None),
+            (UNIT_REFUSED, unit_refused),
+            (NOTE_TOO_LONG, len(note) > NOTE_MAX),
+        )
+        if wrong
     ]
-    if refused:
+    if refused or quantity is None:
         for said in refused:
             messages.error(request, said, extra_tags=EDIT_ANCHOR)
         return redirect(_list_page_url(store.pk, item=item.pk, anchor=EDIT_ANCHOR))
+    figures = card_figures(item, asked or None, quantity, item_now, own)
     changed = ShoppingListItem.objects.filter(pk=item.pk, shopping_list__finished_at__isnull=True).update(
-        quantity=quantity, note=note
+        quantity=figures.quantity,
+        note=note,
+        unit=figures.unit,
+        product_name=figures.product_name,
+        pack_size=figures.pack_size,
+        item_size=figures.item_size,
+        size_unit=figures.size_unit,
     )
     if changed:
-        counted = _counted_words(quantity, item.unit, item.product_name, item.pack_size)
+        counted = _counted_words(
+            figures.quantity,
+            figures.unit,
+            figures.product_name,
+            figures.pack_size,
+            figures.item_size,
+            figures.size_unit,
+        )
         messages.success(request, CHANGED.format(name=item.name, quantity=counted))
     else:
         messages.warning(request, _gone_or_finished(item))

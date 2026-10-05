@@ -6183,6 +6183,39 @@ when it arrived, and hiding it would drop real stock out of a count.
 A row being **deleted** is never re-judged. Validating a row on its way out
 traps the user in an inventory they can no longer fix.
 
+**What can be typed, and in which unit, is shared with the shopping
+lists** (05/10, the owner: « essaie quand même de faire quelque chose en
+commun avec l'inventaire »). `inventory/entries.py` holds the entry
+vocabulary (« RAW — Enseigne », « Nom (article) », the old « (type de
+stock) »), the matcher (`EntryResolver`: the stock take's two exact rules,
+every store's products; `supplier_id` and `forgiving` are the lists'),
+the units (`product_units`, the stock take's rule: a product counts items
+or its article's measure, items by default unless weighed -
+`services.is_discrete_count`, written once; `article_units`) and the size
+of one item (`item_size`, `variance.stock_units_per_item` quantized);
+`ENTRY_MAX` is the longest name the vocabulary makes, read off the columns
+(a product's raw name, « — », a store's name). `forms` imports only what
+it uses (no re-export kept for views.py, which imports `entries` itself,
+and no blanket `noqa`: `test_entries`), and `stock_take_entry_lookup`
+prints the same island byte for byte. One script fills a row's unit
+select on both pages, `static/js/entry_units.js`
+(`MarginMateEntryUnits.lookup` / `fill`; nodes and text only, no storage;
+a select marked `data-entry-units` / `data-entry-field` wires itself - the
+list's add form, which also names its aliases' island,
+`data-entry-aliases`; the count calls it from `updateUnitChoices` and
+`priceRow` with no aliases - its server is exact, so is its lookup - and
+starts without it should the deferred file not arrive). Two fixes came
+with it: a name typed with spaces around it gets its units and its live
+price (the save already took the spaces off), and a name edited into one
+nobody knows gives the select back the options the server drew - never
+the previous entry's units. The lists' old one-argument `find_article`
+and `article_choices` are gone (`shopping_lists` keeps no second copy of
+the entry rule: `MovedNamesTests`); `entries.find_article` is the rule's
+reference, which the resolver's rule 4 runs over what it loaded.
+Counting an ARTICLE in bottles is not done here: it would need a size on
+`StockTakeLine` and its valuation reading counted × size (money code, the
+owner's call).
+
 **One row per product or article, and no negative count.**
 `BaseStockTakeLineFormSet.clean()` keys each live row on its product or
 article and says « Déjà compté plus haut » on the second - never summed
@@ -7172,6 +7205,27 @@ reference; it never imports the views); the views are thin, at the end of
   never by the database: an article deleted turns its items into free
   texts, which must never trip a constraint. **No `Meta.ordering` and no
   position**: every read orders `("added_at", "pk")`, and nothing reorders.
+- **Bottles** (inventory 0023, the owner 04/10: « généralement on parle en
+  bouteilles »): `item_size` (10,4) is how much of `size_unit` (the
+  article's unit when added) ONE counted item holds - 0.7 for a 70 cl
+  bottle -, set only beside `unit` "" (the number counts items: a
+  product's, or the article's usual format). The check constraint
+  `shopping_list_item_size_of_an_item`: both or neither, the size above 0,
+  `size_unit` a known unit, only with `unit` "" - its second branch says
+  `item_size IS NOT NULL` too: in SQL `NULL > 0` is NULL, which a CHECK lets
+  through, and a unit with no size would pass. So every writer (the add,
+  the relist UPDATE, the card's UPDATE, `finish`'s copy, a merge) sets or
+  clears `unit`, `item_size` and `size_unit` together. The column has no
+  top bound in the database: a size goes through `entries.quantized_size`
+  (four places half up, 0 < size < 10^6) before anything stores it, and
+  `add_item` refuses any other (a plain ValueError: only code makes one).
+  **A snapshot**, like `StockTakeLine.unit`: « 3 bouteilles de 70 cl »
+  keeps meaning that when the usual product changes, the article's unit is
+  edited or the article is deleted (the free text keeps its sizes). **No
+  FK to `Product`, decided**: the name and the size already are the
+  snapshot, and an FK would make every product deletion (an invoice's, a
+  supplier's, « Données ») visit the items. No backfill: an item added
+  before 0023 has no size and reads as before (« 24 » and its product).
 
 **The rules** (`shopping_lists.py`):
 - The stores offered are the forecast's (`offered_stores()`: no supplier
@@ -7194,7 +7248,7 @@ reference; it never imports the views); the views are thin, at the end of
   a double submit or two phones adding at once leave one item. **A ticked
   (bought) one is put back to buy** (RELISTED): one UPDATE, filtered on an
   open list and an item still ticked, unticks it and writes the quantity,
-  unit, product and pack asked for over its own, the note only when one is
+  unit, product, pack and sizes asked for over its own, the note only when one is
   typed; who added it and when are kept (it sorts among the unticked by its
   first add). With `relist=False` it stays bought (ALREADY). An item ticked
   on a trip whose list nobody finished would otherwise hide the article for
@@ -7215,42 +7269,140 @@ reference; it never imports the views); the views are thin, at the end of
   out and counts it. `line_figures` and `usual_figures` give a figure as it
   is: `add_item` is the one writer, and refuses it. A merge never sums a
   pair whose total would not fit: the source's item becomes a free text.
+  A size is `size_fits`' (10, 4): quantized first, never refused in French.
 - **A tick names the WANTED state** (`set_ticked`): one UPDATE on an item
   of an open list, `Coalesce` keeping the first tick's who and when; False
   when the list was finished meanwhile or the item went.
 - **Finishing carries the rest over** (`finish`): one conditional UPDATE
   closes the list - none closed means it already was: a double submit
   carries nothing twice -, then, with « Garder… », a copy of each unticked
-  item goes to the store's next open list (figures, note, `added_at` and
-  `added_by` kept, never the tick); an article, or a free text reading the
+  item goes to the store's next open list (figures and sizes, note,
+  `added_at` and `added_by` kept, never the tick); an article, or a free text reading the
   same, already there is skipped. The finished list keeps every item as it
   was.
 - **A merge keeps every line** (`carry_on_merge`, called by
   `services.merge_stock_types` before the source goes), list by list,
   finished lists included: with no item of the target, the item names the
-  target; beside one counting the same thing (`unit` and `product_name`),
+  target; beside one counting the same thing (`unit`, `product_name`,
+  `item_size` and `size_unit`: 70 cl bottles are no litre ones),
   one item - quantities added, notes joined with « · » (cut to 200 with
   « … »), the pack kept if equal else the target's, ticked only if both
   were; beside one counting something else - or the same thing when the
   sum would not fit (`fits`) -, the source's item becomes a free text under
   the name the list showed.
 - What a forecast line counts is `line_figures` (the product's units when
-  known, else the article's; 3 places half up; the pack a whole colisage
-  of `PACK_RANGE` only); a name typed on the list page with no quantity
-  takes the store's usual purchase (`usual_figures`, two queries), else 1
-  in the article's unit; a typed quantity counts what that usual purchase
-  counts - the item shows the product, so what was understood is visible
-  and can be changed. A name is an article when it is one's name, or the
-  ONE whose `search_key` it reads as; else a free text, kept as typed.
+  known - with the size of one, `entries.product_item_sizes` -, else the
+  article's; 3 places half up; the pack a whole colisage of `PACK_RANGE`
+  only). Its « Ajouter » never reads `unite`: its number counts its
+  product (`produit`, which must be THIS store's: another store's is
+  « Produit introuvable »), or the article's measure with none.
+- **The add form is the stock take's** (the owner: « le système pour
+  rentrer les éléments devrait être similaire à celui de l'inventaire »):
+  a name, a quantity, a unit. The name goes through `entries.EntryResolver`
+  scoped to the store (`supplier_id`), forgiving, in this order: a product
+  of THIS store by its menu name (« RAW — Enseigne »); an article by its
+  menu name (« Nom (article) », the old « (type de stock) » too); the
+  suffix written otherwise; an article by its name alone (exact, else the
+  ONE reading the same - every habit typed before keeps working); a
+  product of the store by its raw name, exact else the ONE alike; else a
+  free text, kept as typed. An article always wins over a product reading
+  alike, and another store's product is no product here. A product entry
+  adds its ARTICLE (one item per article per list): the product only says
+  what the number counts. **The length is judged by what is stored**: a
+  menu name may be longer than the label's column (a long product at a
+  store, a long article and its suffix) and stores its article's name,
+  which always fits; so a text over `entries.ENTRY_MAX` (the longest menu
+  name there can be) is refused before it is read, and only a free text,
+  stored as typed, is held to `LABEL_MAX` (« Article : 255 caractères au
+  plus. », said first among the refusals). The add field's `maxlength` is
+  `ENTRY_MAX`: a menu pick is never cut into a free text.
+- **What one bottle of an article is, at a store** (`article_item`, ONE
+  rule the menu and the add both go through): an item of the usual product
+  here when the usual purchase counts it (its size `entries.item_size`;
+  none for a weighed product: a bare number); else, for an article in
+  litres or kilos, the format it is most bought in ANYWHERE, weighed
+  products left out (`typical_item_sizes(discrete_only=True)`); else none
+  - a UNIT article's unit already counts pieces.
+- **The units and the default** (`entry_units`, the stock take's values:
+  `UNIT` items, the article's `L`/`KG`): a product entry follows the stock
+  take's rule (`entries.product_units`: items by default unless weighed);
+  an article offers items then its measure when an item is known - items
+  by default where its usual purchase here counts a product, else the
+  measure; never bought here, items for an article in litres
+  (`ITEMS_BY_DEFAULT`: « on parle en bouteilles »), kilos for one in kilos
+  -; no item known, its measure alone (« litres (format inconnu) »). A UNIT
+  article offers items alone. `unite` empty or not posted (an old page, no
+  JavaScript): the entry's default. A unit the entry does not offer - any
+  for a free text - is refused, nothing written (« Unité : choisissez-en
+  une de la liste proposée. »). What each stores is `entry_figures`: the
+  number typed counts the unit chosen, never converted; nothing typed, the
+  store's usual figure in that unit (in litres, the usual bottles times
+  the size of one - for the article entry, and for the product entry of
+  the usual product here, whose « litres » means what the article's does;
+  `_product_figures`), else 1 (any other product in litres).
+- **The select follows every name the server accepts.** The island holds
+  the menu's names only; a second one, `shopping-entry-aliases`
+  (`list_aliases`), maps what the add also resolves - each article's own
+  name, each of the store's products' raw name, exactly (`exact`), and
+  those and the menu names folded by `same_name` (`folded`) - to its menu
+  name. Never a second rule: every alias is answered by the add's own
+  resolver and kept only when it names that very entry; a folded key is
+  kept only when ONE article folds to it (an article wins over a product),
+  or none and ONE product - two articles reading alike leave it out, as
+  the resolver finds neither. `entry_units.js` tries the island, then
+  `exact`, then `folded` (its `fold`: case, accents and spacing aside), on
+  the list page only. A name it misses keeps « habituelle »: the entry's
+  default, never a unit the post would refuse (`AddUnitsTests` posts every
+  alias with every unit its entry offers).
+- **The card's unit** (`card_units`, a select drawn by the server, none for
+  a free text): items when the card knows what one is, the article's
+  measure, and the item's own measure when the article's unit was edited
+  since - its present terms selected, so saving it unchanged is never
+  refused. **What its items option counts is ONE rule, `card_item`**, which
+  `card_units`, `card_labels` and `card_figures` all go through, so the
+  label says what the save stores: an item counting items keeps its own;
+  one counting a measure takes the item known now (the usual product's
+  bottles here, or the format) - unless it names a product that one does
+  not (another product of the store added in litres, or a usual product
+  changed since): then that product, found again at the store with its
+  size (`views._own_product`: its raw name under the article, two
+  queries, read only then), « bouteilles de 1 L »; not found, a bare
+  number of it, « unités ». Bottles to litres keep the product's name and
+  clear the packs and sizes. The number is never converted, and the card
+  writes quantity, unit, product, pack and sizes in ONE UPDATE filtered on
+  an open list. No `unite` posted: the item keeps its terms. **A free text
+  still counting something** - an article deleted (SET_NULL), or merged
+  beside a twin counting something else - has no select, and says in grey
+  what its number counts (`views._card_counts`: « L », « bouteilles de
+  70 cl », then its product), as its row does; a free text typed says
+  nothing.
+- **The words** (`quantity_words(quantity, unit, item_size, size_unit,
+  product_name)`, every display - the list, the tick page, a finished
+  list, the messages, the forecast's « Dans la liste (N) » / « Pris (N) »):
+  « 2 L », « 1.5 kg », « 12 u. » with a unit; items of a size « 3
+  bouteilles de 70 cl », « 1 fût de 30 L », « 1 pack de 4.5 L », « 2
+  paquets de 500 g », « 2 paquets de 50 u. » - singular below 2; a UNIT
+  size of 1 is the piece the article counts: the beer's « 24 » stays a
+  bare number, as does an item with no size. **The noun follows what the
+  item is** (`_nouns`), not its size alone: in litres, a product whose
+  name prints a count of several times a size (quantity_extraction's
+  `COUNT_X_SIZE_RE`, `SIZE_X_COUNT_RE`, `SPACED_SIZE_X_COUNT_RE`) and one
+  item of which holds more than that size is a « pack » (a carton of six
+  75 cl bottles bought as one invoice unit, a pack of cans) - « GIN
+  EXEMPLE 70CL X6 » counted by the 70 cl bottle stays a bottle sold by
+  six; otherwise a bottle up to `KEG_FROM` litres and a « fût » (keg,
+  bag-in-box) above, the only rule when no product is named (a format).
+  The selects say the same nouns in the plural (`unit_label`). The
+  quantity cell still sorts by the bare number.
 - **What a number counts is said, never read as packs.** A typed quantity
-  counts units (the usual product's bottles, else the article's unit),
-  never packs, and the add form says so (« Quantité : en unités, jamais en
-  colis »). `pack_words` is « N colis de P » for a whole number of packs,
+  counts the unit chosen, never packs, and the add form says so
+  (« Quantité : dans l'unité choisie, jamais en colis »). `pack_words` is « N colis de P » for a whole number of packs,
   else « à l'unité · colis de P » - never a bare « colis de P », which
   beside « 2 » read as two cartons. The « ajouté », « remis », « déjà » and
   « Modifié » messages say the packs the number makes
   (`views._counted_words`: « (2 · à l'unité · colis de 24) », « (48 · 2
-  colis de 24) »), and so does the « Modifier » card beside its field.
+  colis de 24) », « (6 bouteilles de 70 cl · 1 colis de 6) »), and so does
+  the « Modifier » card beside its unit.
 - **Who did what never shows an address** (`display_names(usernames, me,
   tenant_id)`, the views passing the bound espace's pk): « Vous » for the
   viewer; a login of THIS espace by its first name, else by its role -
@@ -7269,9 +7421,15 @@ answers a GET with a redirect to the lists):
   (the last `RECENT_FINISHED`, newest first, who finished them, never an
   address); the same queries whatever the lists.
 - `courses/liste/` (`shopping_list_page`): `?fournisseur=` a store's list
-  to prepare - the card of `?ligne=` at `#modifier` (quantity, note), the
-  add form (`nom`, the store's articles first in its datalist), the items
-  with « Modifier » and « Retirer » -, with `&mode=courses` to tick;
+  to prepare - the card of `?ligne=` at `#modifier` (quantity, `unite`,
+  note), the add form (`nom`, `quantite`, `unite`, `note`; its datalist
+  `list_entries`' names - the articles bought here, the store's products,
+  the other articles, seven queries whatever the history -, its unit
+  select filled from a json_script island by `static/js/entry_units.js`,
+  and from the aliases' island for a name typed otherwise - two queries
+  more -, one « habituelle » option without it), the items with « Modifier » and
+  « Retirer » -, with `&mode=courses` to tick (no menu, no island, no
+  script there, nor on a finished list);
   `?liste=` a list by its id: an open one redirects to its store's
   address, a finished one is drawn read-only. A store or a list the
   address cannot give: the lists, saying so.
@@ -7345,6 +7503,13 @@ list route, « Prévoir les courses » itself (it reads the store's open
 list), deleting or merging an article and deleting a supplier (Django's
 collector reads the new tables) answer « no such table » - 0021's
 situation. Until 0005, employees simply do not have the box ticked.
+`inventory/0023` (`item_size`, `size_unit` and their check constraint; no
+data moved) is WRITTEN too, never applied by a session: the owner, after a
+backup, `migrate_tenants` on data-dev and every espace; deploy.cmd in
+production with 0022. Until it is applied, the list pages, « Prévoir les
+courses » (it reads the open list's sizes) and merging an article (whole
+rows) answer « no such column »; with no FK, deleting a product or an
+invoice is untouched.
 
 **Tests**: `inventory/tests/test_shopping_list_models.py` (the
 constraints, CASCADE and SET_NULL, the merge - a sum too wide kept as two
@@ -7359,16 +7524,40 @@ cost at 2 and 20 items, markup never echoed, no address to an employee;
 the views' race paths staged by patching `views._item_of` with
 `read_then` - another phone finishing the list or removing the item
 between the read and the write: dropping the edit's open-list filter, or
-answering « terminée » for a removed item, fails them),
-`test_shopping_page.py` (the « Liste » column - « Pris (N) » -, « Tout
-ajouter »), `tests/test_views_smoke.py` (`make_shopping_lists`, the
-parameter sweep), `tests/test_ui.py` (`ShoppingListStylesheetTests`, the
-cards' labels), `tests/test_navigation.py` (« Courses » lit),
+answering « terminée » for a removed item, fails them; `AddUnitsTests`:
+every menu entry read off the page posted with every unit its island
+offers, stored as its label says, every alias posted with every unit its
+entry offers, stored as the menu name is, a carton said a pack; the
+card's unit - each option it draws for another product of the store,
+posted as drawn, stored as its label says -, a free text's card saying
+what it counts, a menu name longer than the label's column, the
+forecast's size and another store's product refused),
+`test_shopping_lists.py`'s `CardItemTests` and
+`CardLabelsTests.test_the_items_option_says_what_the_card_stores` (every
+card item with every item known now: the label is what the save stores),
+`test_shopping_page.py` (the « Liste » column - « Dans la liste (3
+bouteilles de 70 cl) », a carton « 1 pack », « Pris (N) » -, « Tout
+ajouter »),
+`test_entries.py` (the shared resolver, units and sizes, `ENTRY_MAX`,
+forms keeping no unused re-export, entry_units.js and its aliases - the
+stock take's lookup exact),
+`tests/test_views_smoke.py` (`make_shopping_lists`,
+`make_shopping_bottles` - a gin in 70 cl bottles, a juice by measure, a
+keg, packets of cups, a weighed cheese, a vodka bought elsewhere -, the
+parameter sweep, `unite` included), `tests/test_ui.py`
+(`ShoppingListStylesheetTests`, the cards' labels, `EntryUnitsScriptTests`),
+`tests/test_json_islands.py` (`ShoppingListPageTests`: both islands),
+`tests/test_navigation.py` (« Courses » lit),
 `accounts/tests/test_access.py` (`ShoppingAreaTests`,
 `ShoppingAreaMigrationTests`: no employee's start page moves), and in
 Chrome `tests/test_phone_width_browser.py` (the lists' page, a list to
 prepare with a one-word free text and a 60-letter note, its card, the tick
-page, a finished list, at 320, 375 and 430 px; the owner runs it).
+page, a finished list, at 320, 375 and 430 px; the add form's select
+filled, a card counting bottles; the owner runs it) and
+`inventory/tests/test_shopping_entry_units_browser.py` (the select
+following the name typed - a menu name, or « vodka exemple » through the
+aliases -, « habituelle » back for a free text, the stock take's row; the
+owner runs it).
 `tests/factories.py` has no shopping-list builder yet: the modules build
 their own. No browser test drives the htmx tick swap itself (spec §14's
 optional `test_shopping_run_browser`, not written).

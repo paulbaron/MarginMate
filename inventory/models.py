@@ -572,6 +572,15 @@ class ShoppingListItem(models.Model):
     (bought) when `checked_at` is set. `added_at` is a default, not
     auto_now_add: a carry-over to the next list copies it.
 
+    `item_size` is how much of `size_unit` (the article's unit when added)
+    one counted item holds (0.7 for a 70 cl bottle). It is set only when
+    `unit` is "" and the number counts items: a product's, or the article's
+    usual format. It is a snapshot, like `StockTakeLine.unit`: a change of
+    the usual product, of the article's unit, or the article deleted leaves
+    « 3 bouteilles de 70 cl » meaning what it meant. No foreign key to the
+    product: `product_name` and `item_size` already say what one would be
+    read for.
+
     One item per article per list; free texts are kept apart by the page
     (their search_key), never by the database - an article deleted turns its
     items into free texts, which must never trip a constraint. No ordering:
@@ -586,6 +595,8 @@ class ShoppingListItem(models.Model):
     pack_size = models.PositiveIntegerField(null=True, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     unit = models.CharField(max_length=4, choices=UnitChoices.choices, blank=True)
+    item_size = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    size_unit = models.CharField(max_length=4, choices=UnitChoices.choices, blank=True)
     note = models.CharField(max_length=200, blank=True)
     added_at = models.DateTimeField(default=timezone.now)
     added_by = models.CharField(max_length=150, blank=True)
@@ -604,6 +615,20 @@ class ShoppingListItem(models.Model):
                 name="shopping_list_item_pack_of_several",
             ),
             models.UniqueConstraint(fields=["shopping_list", "stock_type"], name="shopping_list_item_article_once"),
+            # Both or neither, the size above 0, only beside a number of
+            # items. `item_size__isnull=False` is not redundant: NULL > 0 is
+            # NULL, which a CHECK lets through, so without it a `size_unit`
+            # with no size passed beside `unit` "".
+            models.CheckConstraint(
+                condition=(models.Q(item_size__isnull=True) & models.Q(size_unit=""))
+                | (
+                    models.Q(item_size__isnull=False)
+                    & models.Q(item_size__gt=0)
+                    & models.Q(size_unit__in=UnitChoices.values)
+                    & models.Q(unit="")
+                ),
+                name="shopping_list_item_size_of_an_item",
+            ),
         ]
 
     def __str__(self):

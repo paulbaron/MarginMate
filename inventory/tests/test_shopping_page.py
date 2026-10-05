@@ -1532,6 +1532,60 @@ class ListColumnTests(ShoppingPageTestCase):
         self.assertNotIn("Pris", list_cell_of(row_of(table_of(html, MAYBE), "Olives exemple")))
         self.assertTrue(self.add_form(html, MAYBE, "Olives exemple"))
 
+    def test_listed_says_what_the_item_counts(self):
+        """« Dans la liste (…) » and « Pris (…) » say the item's number in the
+        words the list says it: bottles of a size, packets of a weight, the
+        article's measure. Read with the open list, in its one query."""
+        shopping_list = ShoppingList.objects.create(supplier=self.made.wholesaler)
+        ShoppingListItem.objects.create(
+            shopping_list=shopping_list,
+            stock_type=self.made.syrup,
+            label=self.made.syrup.name,
+            quantity=Decimal("3"),
+            product_name="SIROP EXEMPLE 70CL",
+            item_size=Decimal("0.7"),
+            size_unit=UnitChoices.LITRE,
+        )
+        ShoppingListItem.objects.create(
+            shopping_list=shopping_list,
+            stock_type=self.made.olives,
+            label=self.made.olives.name,
+            quantity=Decimal("2"),
+            item_size=Decimal("0.5"),
+            size_unit=UnitChoices.KILOGRAM,
+            checked_at=timezone.now(),
+        )
+        html = self.html()
+        page = f"{reverse(LIST_PAGE)}?fournisseur={self.made.wholesaler.pk}"
+        cell = list_cell_of(row_of(table_of(html, TO_BUY), "Sirop exemple"))
+        self.assertEqual(cell.strip(), f'<a href="{page}">Dans la liste (3 bouteilles de 70 cl)</a>')
+        cell = list_cell_of(row_of(table_of(html, MAYBE), "Olives exemple"))
+        self.assertTrue(
+            cell.strip().startswith('<span class="muted small">Pris (2 paquets de 500 g)</span>'), cell[:120]
+        )
+        # Changed to litres on the card, then ticked: the measure.
+        ShoppingListItem.objects.filter(stock_type=self.made.syrup).update(
+            quantity=Decimal("2"), unit=UnitChoices.LITRE, item_size=None, size_unit="", checked_at=timezone.now()
+        )
+        cell = list_cell_of(row_of(table_of(self.html(), TO_BUY), "Sirop exemple"))
+        self.assertTrue(cell.strip().startswith('<span class="muted small">Pris (2 L)</span>'), cell[:120])
+
+    def test_listed_says_a_carton_is_a_pack(self):
+        """An item counting cartons of its product (six 75 cl bottles, 4.5 L
+        each) is « 1 pack de 4.5 L », as the list says it - never a keg."""
+        ShoppingListItem.objects.create(
+            shopping_list=ShoppingList.objects.create(supplier=self.made.wholesaler),
+            stock_type=self.made.syrup,
+            label=self.made.syrup.name,
+            quantity=Decimal("1"),
+            product_name="SIROP EXEMPLE CARTON 6X75CL",
+            item_size=Decimal("4.5"),
+            size_unit=UnitChoices.LITRE,
+        )
+        page = f"{reverse(LIST_PAGE)}?fournisseur={self.made.wholesaler.pk}"
+        cell = list_cell_of(row_of(table_of(self.html(), TO_BUY), "Sirop exemple"))
+        self.assertEqual(cell.strip(), f'<a href="{page}">Dans la liste (1 pack de 4.5 L)</a>')
+
     def test_the_list_s_button(self):
         page = f"{reverse(LIST_PAGE)}?fournisseur={self.made.wholesaler.pk}"
         self.assertIn(f'<a class="btn" href="{page}">Liste de courses</a>', self.html())
@@ -1576,7 +1630,8 @@ class ListColumnTests(ShoppingPageTestCase):
         response = self.post(LIST_ADD, **{**hidden_of(form), "quantite": "1"})
         html = response.content.decode()
         self.assertEqual(fold_of(html, "peut-etre"), "")
-        self.assertEqual(said_at_the_top(html), ["« Olives exemple » ajouté à la liste (1)."])
+        # Its product is a packet of 1 kg (the fixture's sizes are 1).
+        self.assertEqual(said_at_the_top(html), ["« Olives exemple » ajouté à la liste (1 paquet de 1 kg)."])
 
 
 class ViewerWhoMayNotTuneTests(ShoppingPageTestCase):
