@@ -83,6 +83,7 @@ SHOPPING_ROUTES = (
     "inventory:shopping_list_item_delete",
     "inventory:shopping_list_item_tick",
     "inventory:shopping_list_finish",
+    "inventory:shopping_list_clear",
 )
 #: The forecast's settings and exclusions: « Produits & charges »' alone.
 TUNING_ROUTES = ("inventory:shopping_settings", "inventory:shopping_exclude", "inventory:shopping_include")
@@ -892,6 +893,7 @@ class ShoppingAreaTests(TestCase):
             "inventory:shopping_list_item_delete": {"fournisseur": self.store, "ligne": self.lists.bread.pk},
             "inventory:shopping_list_item_tick": {"fournisseur": self.store, "ligne": self.lists.beer.pk, "pris": "1"},
             "inventory:shopping_list_finish": {"liste": self.lists.open.pk, "garder": "1"},
+            "inventory:shopping_list_clear": {"fournisseur": self.store},
             "inventory:shopping_settings": {"fournisseur": self.store, "seuil": "30", "memoire": "6"},
             "inventory:shopping_exclude": {
                 "fournisseur": self.store,
@@ -1014,6 +1016,26 @@ class ShoppingAreaTests(TestCase):
         rhythm = self.client.get(reverse("inventory:shopping_rhythm"), {"fournisseur": self.store}).content.decode()
         self.assertNotIn("Ne jamais proposer", rhythm)
         self.assertNotIn(f'action="{reverse("inventory:shopping_exclude")}"', rhythm)
+
+    def test_an_exclusion_s_undo_is_neither_drawn_for_him_nor_his_to_post(self):
+        """The owner's « Pas ici » said on a phone they share: its message
+        reaches him without its « Annuler »; posted all the same, the undo
+        is refused by the gate (shopping_include is « Produits & charges »')
+        and the exclusion stays."""
+        posted = self.posted()["inventory:shopping_exclude"]
+        self.assertEqual(self.client.post(reverse("inventory:shopping_exclude"), posted).status_code, 302)
+        excluded = ShoppingExclusion.objects.get(stock_type=self.made.syrup, supplier=self.made.wholesaler)
+        self.log_in("shopping")
+        html = self.forecast()
+        self.assertIn("ne sera plus proposé chez Grossiste exemple.", html)
+        self.assertNotIn(f'action="{reverse("inventory:shopping_include")}"', html)
+        self.assertNotIn(">Annuler</button>", html)
+        response = self.client.post(
+            reverse("inventory:shopping_include"),
+            {"fournisseur": self.store, "exclusion": excluded.pk, "retour": "liste"},
+        )
+        self.assertContains(response, "Page non accessible", status_code=403)
+        self.assertTrue(ShoppingExclusion.objects.filter(pk=excluded.pk).exists())
 
     def test_with_an_area_showing_costs_he_sees_the_money_and_still_no_tuning_form(self):
         self.log_in("shopping", "invoices")

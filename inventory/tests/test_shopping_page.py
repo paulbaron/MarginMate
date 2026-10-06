@@ -18,7 +18,8 @@ redirect to the list of the store they came from, opened where their
 message is said: above « À acheter » for a line of the list, in the fold
 otherwise, at the top of « Rythme d'achat » for its own. What cannot be
 read is one message, and nothing is written. A GET to any of them goes to
-the list.
+the list. An exclusion just made is taken back from its own message
+(« Annuler »), its answer said where it was pressed.
 
 The view reads today, so the data is dated relative to
 `timezone.localdate()` (tests.test_views_smoke.make_shopping_history).
@@ -113,6 +114,8 @@ DEFAULTS = "Réglages remis par défaut."
 THRESHOLD_REFUSED = "Seuil : un nombre entier de 10 à 60."
 MEMORY_REFUSED = "Mémoire : un nombre de mois de 2 à 24."
 GONE = "Cette exclusion n'existe plus : rien n'a changé."
+#: The undo an exclusion's message carries: a small button of the page's kind.
+UNDO_BUTTON = '<button class="btn btn-small btn-secondary" type="submit">Annuler</button>'
 
 
 def day_of(days_ago: int) -> str:
@@ -157,12 +160,21 @@ def opened(fold: str) -> bool:
     return bool(re.match(r"<details [^>]*\bopen\b", fold))
 
 
+def message_items(fragment: str) -> list[str]:
+    """Each message of the fragment's `ul.messages`, its inside as drawn."""
+    return re.findall(r'<li class="message message-[a-z]+">(.*?)</li>', fragment, flags=re.DOTALL)
+
+
 def said_in(fragment: str) -> list[str]:
-    """The messages a `ul.messages` of the fragment says, as they read."""
-    return [
-        readable(found)
-        for found in re.findall(r'<li class="message message-[a-z]+">(.*?)</li>', fragment, flags=re.DOTALL)
-    ]
+    """The messages a `ul.messages` of the fragment says, as they read - an
+    exclusion's « Annuler » form aside (`undo_forms` reads it)."""
+    return [readable(re.sub(r"<form\b.*?</form>", "", found, flags=re.DOTALL)) for found in message_items(fragment)]
+
+
+def undo_forms(fragment: str) -> list[str]:
+    """The « Annuler » forms the fragment's messages carry, each drawn
+    inside its message, in the order drawn."""
+    return [form for message in message_items(fragment) for form in forms_to(message, INCLUDE)]
 
 
 def horizon_said(html: str) -> str:
@@ -171,14 +183,24 @@ def horizon_said(html: str) -> str:
     return readable(found.group(1)) if found else ""
 
 
-def said_above_the_list(html: str) -> list[str]:
+def above_the_list(html: str) -> str:
+    """The messages said above « À acheter » (its `ul.messages`), or ""."""
     found = re.search(r'<h2 id="a-acheter">À acheter</h2>\s*<ul class="messages">(.*?)</ul>', html, flags=re.DOTALL)
-    return said_in(found.group(1)) if found else []
+    return found.group(1) if found else ""
+
+
+def said_above_the_list(html: str) -> list[str]:
+    return said_in(above_the_list(html))
+
+
+def at_the_top(html: str) -> str:
+    """What is printed before the page's header: base.html's messages."""
+    return html[: html.index('<div class="page-header">')]
 
 
 def said_at_the_top(html: str) -> list[str]:
     """The messages printed before the page's header: base.html's block."""
-    return said_in(html[: html.index('<div class="page-header">')])
+    return said_in(at_the_top(html))
 
 
 def warnings_of(html: str) -> list[str]:
@@ -1133,20 +1155,34 @@ class ExcludeTests(ShoppingPageTestCase):
         self.assertEqual(said_in(fold), ["« Olives exemple » ne sera plus proposé chez Grossiste exemple."])
         self.assertIn("Olives exemple pas chez Grossiste exemple", readable(fold))
 
-    def test_never_again_takes_the_article_s_store_rows_with_it(self):
+    def test_never_again_keeps_the_article_s_store_rows(self):
+        """Left out everywhere, the article keeps its « Pas ici » rows: its
+        « Annuler » puts back exactly what was there before (UndoTests)."""
         ShoppingExclusion.objects.create(stock_type=self.made.rum, supplier=self.made.wholesaler)
         ShoppingExclusion.objects.create(stock_type=self.made.rum, supplier=self.made.grocer)
         response = self.post(EXCLUDE, article=self.made.rum.pk, fournisseur=self.made.wholesaler.pk)
+        rows = sorted(
+            ShoppingExclusion.objects.values_list("stock_type", "category", "supplier"), key=lambda row: row[2] or 0
+        )
         self.assertEqual(
-            list(ShoppingExclusion.objects.values_list("stock_type", "category", "supplier")),
-            [(self.made.rum.pk, None, None)],
+            rows,
+            sorted(
+                [
+                    (self.made.rum.pk, None, None),
+                    (self.made.rum.pk, None, self.made.wholesaler.pk),
+                    (self.made.rum.pk, None, self.made.grocer.pk),
+                ],
+                key=lambda row: row[2] or 0,
+            ),
         )
         html = response.content.decode()
-        self.assertEqual(said_in(fold_of(html, "exclusions")), ["« Rhum exemple » ne sera plus proposé."])
+        fold = fold_of(html, "exclusions")
+        self.assertEqual(said_in(fold), ["« Rhum exemple » ne sera plus proposé."])
+        self.assertIn("Rhum exemple pas chez Grossiste exemple · exclu partout aussi", readable(fold))
         self.assertEqual(table_of(html, QUIET), "")
-        # Twice: still one row.
+        # Twice: still those rows.
         self.post(EXCLUDE, article=self.made.rum.pk, fournisseur=self.made.wholesaler.pk)
-        self.assertEqual(ShoppingExclusion.objects.count(), 1)
+        self.assertEqual(ShoppingExclusion.objects.count(), 3)
 
     def test_a_category(self):
         html = self.html()
@@ -1279,6 +1315,178 @@ class IncludeTests(ShoppingPageTestCase):
                 self.assertIn('<li class="message message-warning">', fold_of(html, "exclusions"))
                 self.assertFalse(ShoppingExclusion.objects.filter(pk=exclusion.pk).exists())
                 self.assertEqual(table_of(html, TO_BUY), "")
+
+
+def exclusions_fold(html: str) -> str:
+    return fold_of(html, "exclusions")
+
+
+class UndoTests(ShoppingPageTestCase):
+    """« Annuler »: an exclusion just made - « Pas ici », « Ne plus
+    proposer », « Ne jamais proposer », a category - is taken back from its
+    own message, posted as drawn, its answer said where it was pressed, the
+    page as it was before. Only the exclusion that very answer made, while
+    it exists: never an older one a double submit found already there."""
+
+    def not_here(self, html: str, label: str, article) -> str:
+        """« Pas ici » on `article`'s line of the table `label`, as drawn."""
+        (form,) = forms_to(row_of(table_of(html, label), article.name), EXCLUDE)
+        return form
+
+    def test_not_here_undone_from_the_list(self):
+        wholesaler = str(self.made.wholesaler.pk)
+        for typed in ({}, {"dans": "30"}):
+            with self.subTest(**typed):
+                form = self.not_here(self.html(**typed), TO_BUY, self.made.syrup)
+                html = self.post(EXCLUDE, **hidden_of(form)).content.decode()
+                exclusion = ShoppingExclusion.objects.get()
+                self.assertEqual(
+                    said_above_the_list(html), ["« Sirop exemple » ne sera plus proposé chez Grossiste exemple."]
+                )
+                (undo,) = undo_forms(above_the_list(html))
+                self.assertEqual(undo_forms(html), [undo])
+                self.assertEqual(
+                    hidden_of(undo),
+                    {"exclusion": str(exclusion.pk), "retour": "liste", "fournisseur": wholesaler, **typed},
+                )
+                self.assertIn(UNDO_BUTTON, undo)
+                # It is the undo: nothing asked first.
+                self.assertEqual(confirm_of(undo), "")
+                response = self.post(INCLUDE, **hidden_of(undo))
+                self.assertEqual(self.landing(response), self.list_of(self.made.wholesaler, "a-acheter", **typed))
+                html = response.content.decode()
+                self.assertEqual(said_above_the_list(html), ["Réinclus chez Grossiste exemple : « Sirop exemple »."])
+                self.assertEqual(undo_forms(html), [])
+                self.assertFalse(ShoppingExclusion.objects.exists())
+                self.assertIn("Sirop exemple", titles_in(table_of(html, TO_BUY)))
+
+    def test_not_here_undone_from_a_fold(self):
+        """« Pas ici » in « Peut-être » and « Nouveaux ici » is said in
+        « Exclusions »: its « Annuler » is there, said there, and the line is
+        back in its fold."""
+        wholesaler = str(self.made.wholesaler.pk)
+        for label, article in ((MAYBE, self.made.olives), (NEW, self.made.crisps)):
+            with self.subTest(section=label):
+                response = self.post(EXCLUDE, **hidden_of(self.not_here(self.html(), label, article)))
+                exclusion = ShoppingExclusion.objects.get()
+                fold = exclusions_fold(response.content.decode())
+                self.assertEqual(said_in(fold), [f"« {article.name} » ne sera plus proposé chez Grossiste exemple."])
+                (undo,) = undo_forms(fold)
+                self.assertEqual(
+                    hidden_of(undo), {"exclusion": str(exclusion.pk), "retour": "exclusions", "fournisseur": wholesaler}
+                )
+                response = self.post(INCLUDE, **hidden_of(undo))
+                self.assertEqual(self.landing(response), self.list_of(self.made.wholesaler, "exclusions"))
+                html = response.content.decode()
+                self.assertEqual(
+                    said_in(exclusions_fold(html)), [f"Réinclus chez Grossiste exemple : « {article.name} »."]
+                )
+                self.assertFalse(ShoppingExclusion.objects.exists())
+                self.assertIn(article.name, titles_in(table_of(html, label)))
+
+    def test_never_again_undone_leaves_the_not_here_rows(self):
+        """« Ne plus proposer » over an article left out at two stores:
+        undone, it is out at those two again - their rows were kept."""
+        here = ShoppingExclusion.objects.create(stock_type=self.made.rum, supplier=self.made.wholesaler)
+        there = ShoppingExclusion.objects.create(stock_type=self.made.rum, supplier=self.made.grocer)
+        response = self.post(EXCLUDE, article=self.made.rum.pk, fournisseur=self.made.wholesaler.pk)
+        everywhere = ShoppingExclusion.objects.get(stock_type=self.made.rum, supplier=None)
+        (undo,) = undo_forms(exclusions_fold(response.content.decode()))
+        self.assertEqual(hidden_of(undo)["exclusion"], str(everywhere.pk))
+        response = self.post(INCLUDE, **hidden_of(undo))
+        fold = exclusions_fold(response.content.decode())
+        self.assertEqual(said_in(fold), ["Réinclus : « Rhum exemple »."])
+        self.assertEqual(sorted(ShoppingExclusion.objects.values_list("pk", flat=True)), sorted([here.pk, there.pk]))
+        self.assertIn("Rhum exemple pas chez Grossiste exemple", readable(fold))
+        self.assertNotIn("exclu partout aussi", readable(fold))
+
+    def test_a_category_undone(self):
+        html = self.html()
+        (picker,) = [form for form in forms_to(exclusions_fold(html), EXCLUDE) if 'name="categorie">' in form]
+        response = self.post(EXCLUDE, **hidden_of(picker), categorie="Consignes exemple")
+        exclusion = ShoppingExclusion.objects.get()
+        (undo,) = undo_forms(exclusions_fold(response.content.decode()))
+        self.assertEqual(
+            hidden_of(undo),
+            {"exclusion": str(exclusion.pk), "retour": "exclusions", "fournisseur": str(self.made.wholesaler.pk)},
+        )
+        response = self.post(INCLUDE, **hidden_of(undo))
+        fold = exclusions_fold(response.content.decode())
+        self.assertEqual(said_in(fold), ["Réinclus : catégorie « Consignes exemple »."])
+        self.assertFalse(ShoppingExclusion.objects.exists())
+        self.assertIn("Ces articles sont surtout rendus (consignes ?) : Fût exemple.", readable(fold))
+
+    def test_never_propose_undone_on_the_rhythm(self):
+        """« Ne jamais proposer » says its message at the top of « Rythme
+        d'achat », its « Annuler » in it, which comes back there - with its
+        store, or every store."""
+        for query in ({"fournisseur": str(self.made.wholesaler.pk)}, {}):
+            with self.subTest(**query):
+                html = self.html(RHYTHM, **query)
+                (form,) = forms_to(row_of(table_of(html, RHYTHM_TABLE), "<td>Rhum exemple"), EXCLUDE)
+                html = self.post(EXCLUDE, **hidden_of(form)).content.decode()
+                exclusion = ShoppingExclusion.objects.get()
+                self.assertEqual(said_at_the_top(html), ["« Rhum exemple » ne sera plus proposé."])
+                (undo,) = undo_forms(at_the_top(html))
+                self.assertEqual(hidden_of(undo), {"exclusion": str(exclusion.pk), "retour": "rythme", **query})
+                self.assertIn(UNDO_BUTTON, undo)
+                response = self.post(INCLUDE, **hidden_of(undo))
+                rhythm = reverse(RHYTHM) + (f"?fournisseur={query['fournisseur']}" if query else "")
+                self.assertEqual(self.landing(response), rhythm)
+                html = response.content.decode()
+                self.assertEqual(said_at_the_top(html), ["Réinclus : « Rhum exemple »."])
+                self.assertEqual(undo_forms(html), [])
+                self.assertFalse(ShoppingExclusion.objects.exists())
+                self.assertEqual(len(forms_to(row_of(table_of(html, RHYTHM_TABLE), "<td>Rhum exemple"), EXCLUDE)), 1)
+
+    def test_no_undo_for_an_exclusion_already_there(self):
+        """A double submit, or a form drawn before: the second answer finds
+        the exclusion made already and offers no « Annuler » - it would take
+        back the first decision."""
+        wholesaler = self.made.wholesaler.pk
+        for data, where in (
+            ({"article": self.made.syrup.pk, "chez": wholesaler, "retour": "liste"}, above_the_list),
+            ({"article": self.made.rum.pk}, exclusions_fold),
+            ({"categorie": "Consignes exemple"}, exclusions_fold),
+        ):
+            with self.subTest(data=data):
+                first = where(self.post(EXCLUDE, fournisseur=wholesaler, **data).content.decode())
+                self.assertEqual(len(undo_forms(first)), 1)
+                second = where(self.post(EXCLUDE, fournisseur=wholesaler, **data).content.decode())
+                self.assertEqual(len(said_in(second)), 1)
+                self.assertEqual(undo_forms(second), [])
+        self.assertEqual(ShoppingExclusion.objects.count(), 3)
+
+    def test_no_undo_once_the_exclusion_is_gone(self):
+        """Taken back twice - two taps, two tabs -: the second says it no
+        longer exists, with no « Annuler ». Gone before its message is drawn
+        (taken back from « Exclusions » meanwhile): the message alone."""
+        wholesaler = self.made.wholesaler.pk
+        data = {"article": self.made.syrup.pk, "chez": wholesaler, "fournisseur": wholesaler, "retour": "liste"}
+        (undo,) = undo_forms(above_the_list(self.post(EXCLUDE, **data).content.decode()))
+        self.post(INCLUDE, **hidden_of(undo))
+        html = self.post(INCLUDE, **hidden_of(undo)).content.decode()
+        self.assertEqual(said_above_the_list(html), [GONE])
+        self.assertEqual(undo_forms(html), [])
+        self.assertEqual(self.client.post(reverse(EXCLUDE), data).status_code, 302)
+        ShoppingExclusion.objects.all().delete()
+        html = self.html(fournisseur=wholesaler)
+        self.assertEqual(said_above_the_list(html), ["« Sirop exemple » ne sera plus proposé chez Grossiste exemple."])
+        self.assertEqual(undo_forms(html), [])
+
+    def test_markup_in_a_name_is_printed_as_text_beside_its_undo(self):
+        StockType.objects.filter(pk=self.made.syrup.pk).update(name='Sirop <i>exemple</i> "test"')
+        wholesaler = self.made.wholesaler.pk
+        response = self.post(
+            EXCLUDE, article=self.made.syrup.pk, chez=wholesaler, fournisseur=wholesaler, retour="liste"
+        )
+        html = response.content.decode()
+        self.assertNotIn("<i>exemple</i>", html)
+        self.assertIn("« Sirop &lt;i&gt;exemple&lt;/i&gt; &quot;test&quot; » ne sera plus proposé", html)
+        self.assertEqual(
+            said_above_the_list(html), ['« Sirop <i>exemple</i> "test" » ne sera plus proposé chez Grossiste exemple.']
+        )
+        self.assertEqual(len(undo_forms(above_the_list(html))), 1)
 
 
 class RhythmPageTests(ShoppingPageTestCase):
@@ -1698,3 +1906,20 @@ class ViewerWhoMayNotTuneTests(ShoppingPageTestCase):
     def test_a_message_of_a_fold_he_is_not_shown_is_said_at_the_top(self):
         self.client.post(reverse(SETTINGS), {"fournisseur": self.made.wholesaler.pk, "seuil": "30", "memoire": "6"})
         self.assertEqual(said_at_the_top(self.html_as(["stock_takes"])), ["Réglages enregistrés."])
+
+    def test_an_exclusion_s_message_carries_no_undo_for_him(self):
+        """An exclusion's message read by one given the lists alone - the
+        owner's, on a phone they share - says what was done, and draws no
+        « Annuler »: taking it back is « Produits & charges »'."""
+        wholesaler = self.made.wholesaler.pk
+        data = {"article": self.made.syrup.pk, "chez": wholesaler, "fournisseur": wholesaler, "retour": "liste"}
+        self.assertEqual(self.client.post(reverse(EXCLUDE), data).status_code, 302)
+        html = self.html_as(["shopping"], fournisseur=wholesaler)
+        self.assertEqual(said_above_the_list(html), ["« Sirop exemple » ne sera plus proposé chez Grossiste exemple."])
+        self.assertEqual(forms_to(html, INCLUDE), [])
+        data = {"article": self.made.rum.pk, "fournisseur": wholesaler, "retour": "rythme"}
+        self.assertEqual(self.client.post(reverse(EXCLUDE), data).status_code, 302)
+        rhythm = self.html_as(["shopping"], RHYTHM, fournisseur=wholesaler)
+        self.assertEqual(said_at_the_top(rhythm), ["« Rhum exemple » ne sera plus proposé."])
+        self.assertEqual(forms_to(rhythm, INCLUDE), [])
+        self.assertNotIn("Annuler", at_the_top(rhythm))

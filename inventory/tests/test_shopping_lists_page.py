@@ -89,8 +89,9 @@ EDIT = "inventory:shopping_list_item_edit"
 DELETE = "inventory:shopping_list_item_delete"
 TICK = "inventory:shopping_list_item_tick"
 FINISH = "inventory:shopping_list_finish"
+CLEAR = "inventory:shopping_list_clear"
 FORECAST = "inventory:shopping_list"
-POST_ROUTES = (ADD, ADD_ALL, EDIT, DELETE, TICK, FINISH)
+POST_ROUTES = (ADD, ADD_ALL, EDIT, DELETE, TICK, FINISH, CLEAR)
 
 STORE_TO_CHOOSE = "Enseigne introuvable : choisissez-en une."
 STORE_NOT_FOUND_ADD = "Enseigne introuvable : rien n'a été ajouté."
@@ -109,6 +110,7 @@ TICK_UNREADABLE = "Rien n'a changé : rechargez la page."
 ALREADY_FINISHED = "Ces courses sont déjà terminées."
 ALREADY_FINISHED_NEXT = "Ces courses étaient déjà terminées : voici la liste en cours."
 UNIT_REFUSED = "Unité : choisissez-en une de la liste proposée."
+NOTHING_TO_CLEAR = "Rien à retirer : la liste est déjà vide."
 ADD_FORM_HELP = (
     "Un nom inconnu s'ajoute tel quel. Quantité : dans l'unité choisie, jamais en colis ; vide : celle d'habitude ici."
 )
@@ -362,6 +364,7 @@ class SentencesTests(SimpleTestCase):
             ("ALREADY_FINISHED", ALREADY_FINISHED),
             ("ALREADY_FINISHED_NEXT", ALREADY_FINISHED_NEXT),
             ("UNIT_REFUSED", UNIT_REFUSED),
+            ("NOTHING_TO_CLEAR", NOTHING_TO_CLEAR),
         ):
             with self.subTest(name=name):
                 self.assertEqual(getattr(views, name), said)
@@ -447,6 +450,15 @@ class SentencesTests(SimpleTestCase):
         ):
             with self.subTest(counted=counted):
                 self.assertEqual(views._counted_words(*counted), said)
+
+    def test_how_many_were_cleared(self):
+        for count, said in (
+            (1, "Liste vidée : 1 article retiré."),
+            (2, "Liste vidée : 2 articles retirés."),
+            (12, "Liste vidée : 12 articles retirés."),
+        ):
+            with self.subTest(count=count):
+                self.assertEqual(views._cleared_words(count), said)
 
     def test_the_shopping_done(self):
         for done, said in (
@@ -2161,6 +2173,167 @@ class EditDeleteTests(ListPageTestCase):
                 before = everything_listed()
                 response = self.post(DELETE, data)
                 self.assertEqual(said_at_the_top(response.content.decode()), [said])
+                self.assertEqual(everything_listed(), before)
+
+
+def header_actions(html: str) -> str:
+    """The buttons of the page's header (its `.actions`), or ""."""
+    found = re.search(r'<div class="page-header">.*?<div class="actions">(.*?)</div>', html, flags=re.DOTALL)
+    return found.group(1) if found else ""
+
+
+class ClearTests(ListPageTestCase):
+    """« Vider la liste »: every item of the store's OPEN list off it at
+    once, ticked ones too - never a finished list, nor another store's -,
+    asked first, from the header of the list to prepare."""
+
+    def clear_form(self, store=None, client=None) -> str:
+        (form,) = forms_to(header_actions(self.html(client=client, fournisseur=(store or self.wholesaler).pk)), CLEAR)
+        return form
+
+    def test_the_button(self):
+        form = self.clear_form()
+        self.assertEqual(hidden_of(form), {"fournisseur": str(self.wholesaler.pk), "liste": str(self.lists.open.pk)})
+        self.assertEqual(confirm_of(form), "Retirer les 3 articles de la liste ?")
+        self.assertEqual(busy_button_of(form), ("Retrait…", "Vider la liste"))
+        self.assertIn('<button class="btn btn-danger" type="submit" data-busy-label="Retrait…">', form)
+        # One left: said so.
+        ShoppingListItem.objects.filter(pk__in=[self.lists.beer.pk, self.lists.syrup.pk]).delete()
+        self.assertEqual(confirm_of(self.clear_form()), "Retirer 1 article de la liste ?")
+
+    def test_drawn_only_where_there_is_a_list_to_empty(self):
+        """Not on the tick page, nor on a finished list, nor on an empty one
+        - a store with no list, one whose list was finished, one emptied."""
+        for number, html in enumerate(
+            (
+                self.run_page(),
+                self.html(liste=self.lists.finished.pk),
+                self.html(fournisseur=self.market.pk),
+                self.html(fournisseur=self.grocer.pk),
+            )
+        ):
+            with self.subTest(page=number):
+                self.assertEqual(forms_to(html, CLEAR), [])
+        ShoppingListItem.objects.filter(shopping_list=self.lists.open).delete()
+        html = self.html(fournisseur=self.wholesaler.pk)
+        self.assertIn('<div class="empty-state"><p>Liste vide.</p></div>', html)
+        self.assertEqual(forms_to(html, CLEAR), [])
+
+    def test_posted_as_drawn_empties_the_open_list_and_only_it(self):
+        """Its ticked item too. The store's finished lists, another store's
+        open list and the list itself stay as they were."""
+        now = timezone.now()
+        old = ShoppingList.objects.create(
+            supplier=self.wholesaler,
+            created_at=now - timedelta(days=9),
+            finished_at=now - timedelta(days=8),
+            finished_by=TEST_EMAIL,
+        )
+        ShoppingListItem.objects.create(shopping_list=old, label="Pain exemple", quantity=Decimal("1"))
+        ShoppingListItem.objects.create(
+            shopping_list=ShoppingList.objects.create(supplier=self.market),
+            stock_type=self.made.strawberries,
+            label=self.made.strawberries.name,
+            quantity=Decimal("2"),
+            unit=UnitChoices.KILOGRAM,
+        )
+        others = ShoppingListItem.objects.exclude(shopping_list=self.lists.open).order_by("pk")
+        before = (list(others.values()), list(ShoppingList.objects.order_by("pk").values()))
+        response = self.post(CLEAR, hidden_of(self.clear_form()))
+        self.assertEqual(self.landing(response), self.page_of(self.wholesaler))
+        html = response.content.decode()
+        self.assertEqual(said_at_the_top(html), ["Liste vidée : 3 articles retirés."])
+        self.assertIn('<li class="message message-success">', html)
+        self.assertFalse(ShoppingListItem.objects.filter(shopping_list=self.lists.open).exists())
+        self.assertEqual((list(others.values()), list(ShoppingList.objects.order_by("pk").values())), before)
+        self.assertIn('<div class="empty-state"><p>Liste vide.</p></div>', html)
+        self.assertEqual(forms_to(html, CLEAR), [])
+        # No longer in progress; the market's still is.
+        rows = body_rows(table_of(self.html(INDEX), "listes en cours"))
+        self.assertEqual([cells_of(row)[0] for row in rows], ["Marché exemple"])
+
+    def test_a_list_finished_meanwhile_is_left_as_it_is(self):
+        """Another phone pressed « Courses terminées », « Garder… » ticked,
+        between this page and « Vider »: the list the page showed is
+        finished, and the next one - its unticked items carried over - is not
+        the one asked to be emptied. Nothing removed, said."""
+        hidden = hidden_of(self.clear_form())
+        finish(self.lists.open, keep=True, by=TEST_EMAIL, now=timezone.now())
+        self.assertTrue(open_items(self.wholesaler))
+        before = everything_listed()
+        response = self.post(CLEAR, hidden)
+        self.assertEqual(self.landing(response), self.page_of(self.wholesaler))
+        html = response.content.decode()
+        self.assertEqual(said_at_the_top(html), [views.CLEARED_LIST_FINISHED])
+        self.assertIn('<li class="message message-warning">', html)
+        self.assertEqual(everything_listed(), before)
+
+    def test_another_store_s_list_named_empties_nothing(self):
+        """A list id that is not this store's open list (another store's, a
+        made-up one): nothing removed anywhere."""
+        market_list = ShoppingList.objects.create(supplier=self.market)
+        ShoppingListItem.objects.create(shopping_list=market_list, label="Pain exemple", quantity=Decimal("1"))
+        before = everything_listed()
+        for liste in (market_list.pk, 999999):
+            with self.subTest(liste=liste):
+                response = self.post(CLEAR, {"fournisseur": self.wholesaler.pk, "liste": liste})
+                self.assertEqual(said_at_the_top(response.content.decode()), [views.CLEARED_LIST_FINISHED])
+                self.assertEqual(everything_listed(), before)
+
+    def test_one_article(self):
+        ShoppingListItem.objects.filter(pk__in=[self.lists.beer.pk, self.lists.syrup.pk]).delete()
+        response = self.post(CLEAR, hidden_of(self.clear_form()))
+        self.assertEqual(said_at_the_top(response.content.decode()), ["Liste vidée : 1 article retiré."])
+        self.assertEqual(open_items(self.wholesaler), [])
+
+    def test_twice_or_empty_already(self):
+        """A double submit, another phone's: nothing more removed, said empty
+        already. A store with no list, or only a finished one: the same."""
+        hidden = hidden_of(self.clear_form())
+        self.post(CLEAR, hidden)
+        for store, data in (
+            (self.wholesaler, hidden),
+            (self.market, {"fournisseur": self.market.pk}),
+            (self.grocer, {"fournisseur": self.grocer.pk}),
+        ):
+            with self.subTest(store=store.name):
+                before = everything_listed()
+                response = self.post(CLEAR, data)
+                self.assertEqual(self.landing(response), self.page_of(store))
+                html = response.content.decode()
+                self.assertEqual(said_at_the_top(html), [NOTHING_TO_CLEAR])
+                self.assertIn('<li class="message message-warning">', html)
+                self.assertEqual(everything_listed(), before)
+
+    def test_an_employee_given_the_lists_empties_it(self):
+        phone = self.phone()
+        response = self.post(CLEAR, hidden_of(self.clear_form(client=phone)), client=phone)
+        self.assertEqual(said_at_the_top(response.content.decode()), ["Liste vidée : 3 articles retirés."])
+        self.assertEqual(open_items(self.wholesaler), [])
+
+    def test_a_get_goes_to_the_lists_and_does_nothing(self):
+        before = everything_listed()
+        self.assertEqual(self.redirected(CLEAR, fournisseur=self.wholesaler.pk), reverse(INDEX))
+        self.assertEqual(everything_listed(), before)
+
+    def test_a_store_that_cannot_be_read(self):
+        charges = make_supplier(name="Assurance exemple", expenses_only=True)
+        retired = retired_ai_supplier(self.made.beer)
+        for data in (
+            {},
+            {"fournisseur": ""},
+            {"fournisseur": "abc"},
+            {"fournisseur": "999999"},
+            {"fournisseur": "\N{SUPERSCRIPT TWO}"},
+            {"fournisseur": "-1"},
+            {"fournisseur": charges.pk},
+            {"fournisseur": retired.pk},
+        ):
+            with self.subTest(data=data):
+                before = everything_listed()
+                response = self.post(CLEAR, data)
+                self.assertEqual(self.landing(response), reverse(INDEX))
+                self.assertEqual(said_at_the_top(response.content.decode()), [STORE_NOT_FOUND_CHANGE])
                 self.assertEqual(everything_listed(), before)
 
 

@@ -813,6 +813,7 @@ class PageSmokeTests(TestCase):
             "inventory:shopping_list_item_delete",
             "inventory:shopping_list_item_tick",
             "inventory:shopping_list_finish",
+            "inventory:shopping_list_clear",
         )
         for name in routes:
             with self.subTest(get=name):
@@ -838,6 +839,9 @@ class PageSmokeTests(TestCase):
             ("inventory:shopping_list_item_tick", {"ligne": bread, "pris": "1"}, f"{page}&mode=courses#courses"),
             ("inventory:shopping_list_item_delete", {"ligne": bread}, page),
             ("inventory:shopping_list_finish", {"liste": lists.open.pk, "garder": "1"}, index),
+            # The list carried over by « Garder » emptied: the list stays.
+            ("inventory:shopping_list_clear", {}, page),
+            ("inventory:shopping_list_clear", {}, page),
         ):
             with self.subTest(name=name, data=data):
                 response = self.client.post(reverse(name), {"fournisseur": store, **data})
@@ -1267,6 +1271,7 @@ class EmptyDatabasePageSmokeTests(TestCase):
             "inventory:shopping_list_item_delete",
             "inventory:shopping_list_item_tick",
             "inventory:shopping_list_finish",
+            "inventory:shopping_list_clear",
         ):
             for data in (everything, {**everything, "retour": "liste"}, {}):
                 with self.subTest(action=name, data=data):
@@ -3087,3 +3092,19 @@ class ShoppingListParameterSmokeTests(TestCase):
                 carried = ShoppingList.objects.filter(supplier=market, finished_at__isnull=True).exists()
                 self.assertEqual(carried, bool(value))
                 ShoppingList.objects.filter(supplier=market).delete()
+
+    def test_the_clear_form(self):
+        """« Vider la liste » under every `fournisseur` but the store's own
+        id: refused, nothing removed. Under its id: its open list emptied -
+        the finished list untouched -, as its message says."""
+        for value in self.VALUES:
+            with self.subTest(fournisseur=value[:20]):
+                before = self.snapshot()
+                content = self.act("inventory:shopping_list_clear", {"fournisseur": value})
+                self.assertIn("Enseigne introuvable : rien n&#x27;a changé.", content)
+                self.assertNotIn("Liste vidée", content)
+                self.assertEqual(self.snapshot(), before)
+        content = self.act("inventory:shopping_list_clear", {"fournisseur": self.store})
+        self.assertIn("Liste vidée : 3 articles retirés.", content)
+        self.assertFalse(ShoppingListItem.objects.filter(shopping_list=self.lists.open).exists())
+        self.assertEqual(ShoppingListItem.objects.filter(shopping_list=self.lists.finished).count(), 2)

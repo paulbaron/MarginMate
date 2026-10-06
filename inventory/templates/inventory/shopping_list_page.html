@@ -29,7 +29,8 @@ One store's shopping list (views.shopping_list_page), in one of three modes:
   island) as the name is typed - or a name the server also accepts
   (`entry_aliases`, a second island: an article's own name, a product's
   raw name, in any case) -; the items with their « Modifier » and
-  « Retirer ». The script is loaded in this mode only (extra_js).
+  « Retirer », and « Vider la liste » in the header while it holds any
+  (asked first). The script is loaded in this mode only (extra_js).
 {% endcomment %}
 <div class="shopping-list-page{% if run %} shopping-run-page{% endif %}">
     <div class="page-header">
@@ -49,6 +50,14 @@ One store's shopping list (views.shopping_list_page), in one of three modes:
             {% else %}
             {% if rows %}<a class="btn" href="{{ run_url }}">Faire les courses</a>{% endif %}
             <a class="btn btn-secondary" href="{% url 'inventory:shopping_list' %}?{{ store_param }}={{ store.pk }}">Ajouter depuis la prévision</a>
+            {% if rows %}
+            <form method="post" action="{% url 'inventory:shopping_list_clear' %}" data-confirm="{% if total == 1 %}Retirer 1 article de la liste ?{% else %}Retirer les {{ total }} articles de la liste ?{% endif %}">
+                {% csrf_token %}
+                <input type="hidden" name="{{ store_param }}" value="{{ store.pk }}">
+                <input type="hidden" name="{{ list_param }}" value="{{ shopping_list.pk }}">
+                <button class="btn btn-danger" type="submit" data-busy-label="Retrait…">Vider la liste</button>
+            </form>
+            {% endif %}
             {% endif %}
         </div>
         {% endif %}
