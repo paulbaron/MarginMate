@@ -5,7 +5,7 @@
 {% block messages %}
     {% if top_messages %}
         <ul class="messages">
-            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in top_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
     {% endif %}
 {% endblock %}

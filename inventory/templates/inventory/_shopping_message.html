@@ -1,0 +1,17 @@
+{% comment %}
+One message of « Prévoir les courses » or « Rythme d'achat », in its
+`ul.messages`. A message saying an exclusion just made, which still exists,
+carries its undo (views._mark_undos, for a viewer who may tune the
+forecast): `message.undo` the exclusion, `message.undo_landing` where the
+answer is said. « Annuler » posts them to shopping_include with the page's
+store and days - no data-confirm: it is the undo.
+{% endcomment %}
+<li class="message message-{{ message.level_tag }}">{{ message }}{% if message.undo %}
+    <form method="post" action="{% url 'inventory:shopping_include' %}" class="inline-action">
+        {% csrf_token %}
+        <input type="hidden" name="{{ exclusion_param }}" value="{{ message.undo }}">
+        <input type="hidden" name="{{ landing_param }}" value="{{ message.undo_landing }}">
+        {% if store %}<input type="hidden" name="{{ store_param }}" value="{{ store.store_id }}">{% endif %}
+        {% if horizon %}<input type="hidden" name="{{ horizon_param }}" value="{{ horizon }}">{% endif %}
+        <button class="btn btn-small btn-secondary" type="submit">Annuler</button>
+    </form>{% endif %}</li>

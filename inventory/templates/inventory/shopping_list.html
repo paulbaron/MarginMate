@@ -5,7 +5,7 @@
 {% block messages %}
     {% if top_messages %}
         <ul class="messages">
-            {% for message in top_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in top_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
     {% endif %}
 {% endblock %}
@@ -85,7 +85,7 @@
     <h2 id="a-acheter">À acheter</h2>
     {% if list_messages %}
         <ul class="messages">
-            {% for message in list_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in list_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
     {% endif %}
     <p class="muted">Si vous y allez aujourd'hui : de quoi tenir {{ horizon_days }} jour{{ horizon_days|pluralize }}, jusqu'au passage suivant{% if not plan.horizon_typed %}{% if gap_measured %} (votre rythme ici){% else %} (par défaut){% endif %}{% endif %}.{% if plan.few_visits %} Peu de passages ici : liste indicative.{% endif %}</p>
@@ -114,7 +114,7 @@
         <summary>Peut-être ({{ maybe|length }})</summary>
         {% if maybe_messages %}
         <ul class="messages">
-            {% for message in maybe_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in maybe_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
         {% endif %}
         {% include "inventory/_shopping_lines.html" with rows=maybe label="peut-être" quantity=True chance=True words=True action="here" landing="exclusions" add_landing="peut-etre" %}
@@ -126,7 +126,7 @@
         <summary>Nouveaux ici ({{ new|length }})</summary>
         {% if new_messages %}
         <ul class="messages">
-            {% for message in new_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in new_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
         {% endif %}
         {% include "inventory/_shopping_lines.html" with rows=new label="nouveaux ici" quantity=True chance=True words=False action="here" landing="exclusions" add_landing="nouveaux" %}
@@ -237,7 +237,7 @@
         <summary>Réglages · à partir de {{ setting.threshold_percent }} %, mémoire {{ setting.memory_months }} mois{% if not setting.use_till %}, sans la caisse{% endif %}</summary>
         {% if settings_messages %}
         <ul class="messages">
-            {% for message in settings_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in settings_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
         {% endif %}
         <form method="post" action="{% url 'inventory:shopping_settings' %}" class="inline-form shopping-form">
@@ -268,7 +268,7 @@
         <summary>Exclusions ({{ exclusions|length }}){% if deposits %} · {{ deposits|length }} consigne{{ deposits|length|pluralize }} ?{% endif %}</summary>
         {% if exclusion_messages %}
         <ul class="messages">
-            {% for message in exclusion_messages %}<li class="message message-{{ message.level_tag }}">{{ message }}</li>{% endfor %}
+            {% for message in exclusion_messages %}{% include "inventory/_shopping_message.html" %}{% endfor %}
         </ul>
         {% endif %}
         {% if exclusions %}

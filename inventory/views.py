@@ -2356,6 +2356,11 @@ SHOPPING_ANCHORS = {
     EXCLUSION_MESSAGES: "exclusions",
 }
 SHOPPING_PLACES = tuple(SHOPPING_ANCHORS)
+#: The extra tag an exclusion's message carries beside its place when the
+#: answer MADE the exclusion (« annuler-12 »): its « Annuler » takes that one
+#: back (_mark_undos). _messages_by_place finds the place among the tags, so
+#: this one never moves the message.
+UNDO_TAG = "annuler-"
 #: The sections whose lines « Ajouter » to the store's shopping list: its
 #: answer comes back to the section the line came from.
 FORECAST_ADD_PLACES = (LIST_MESSAGES, MAYBE_MESSAGES, NEW_MESSAGES)
@@ -2472,6 +2477,40 @@ def _said_at(landing: str) -> str:
     """The extra tag of a message said where `landing` lands: none on
     « Rythme d'achat », which says every message at its top."""
     return "" if landing == RHYTHM_LANDING else landing
+
+
+def _with_undo(tag: str, exclusion, created: bool) -> str:
+    """The extra tags of an exclusion's message: its place, then the
+    exclusion it made (UNDO_TAG). None for one found already there - a
+    double submit, a page drawn before -: undoing it would take back an
+    older decision."""
+    return f"{tag} {UNDO_TAG}{exclusion.pk}".strip() if created else tag
+
+
+def _mark_undos(said: dict[str, list], landing: str = "") -> None:
+    """Hand each message saying an exclusion just made (UNDO_TAG), while
+    that exclusion exists, what its « Annuler » posts
+    (_shopping_message.html): `undo`, the exclusion's id, and
+    `undo_landing`, where the answer is said - `landing` when given
+    (« Rythme d'achat »), else the place the message is said in, the top
+    being « Exclusions »' (the exclusion forms' default). One query for every
+    message, none without such a message."""
+    wanted = []
+    for place, found in said.items():
+        for message in found:
+            for tag in (message.extra_tags or "").split():
+                digits = tag.removeprefix(UNDO_TAG)
+                if digits != tag and is_id(digits):
+                    wanted.append((message, int(digits), landing or place or EXCLUSION_MESSAGES))
+    if not wanted:
+        return
+    alive = set(
+        ShoppingExclusion.objects.filter(pk__in={pk for _message, pk, _landing in wanted}).values_list("pk", flat=True)
+    )
+    for message, pk, undo_landing in wanted:
+        if pk in alive:
+            message.undo = pk
+            message.undo_landing = undo_landing
 
 
 def _back_to_the_list(request, landing: str):
@@ -2660,9 +2699,12 @@ def shopping_list(request):
     beside it); « Tout ajouter (N) » puts every line of « À acheter » not on
     it to buy yet. « Réglages », « Exclusions » and the lines' « Pas ici » /
     « Ne plus proposer » are « Produits & charges »' (`may_tune`): a viewer
-    who may not post them is not shown them."""
+    who may not post them is not shown them - nor the « Annuler » an
+    exclusion's message carries, which takes it back where it was said."""
     said = _messages_by_place(request, SHOPPING_PLACES)
     may_tune = access_of(request).allows("products")
+    if may_tune:
+        _mark_undos(said)
     setting = ShoppingSetting.current()
     settings = settings_from(setting)
     today = timezone.localdate()
@@ -2802,8 +2844,12 @@ def shopping_rhythm(request):
     list. « Caisse / semaine » counts the days the till import covers, so a
     lagging import is said, as on the list. A store the address cannot give
     is said, and every store shown. « Ne jamais proposer » is drawn for a
-    viewer who may post it (`may_tune`, as on the list)."""
+    viewer who may post it (`may_tune`, as on the list), and so is the
+    « Annuler » its message carries, which comes back here."""
     said = _messages_by_place(request, ())
+    may_tune = access_of(request).allows("products")
+    if may_tune:
+        _mark_undos(said, RHYTHM_LANDING)
     settings = settings_from(ShoppingSetting.current())
     prepared = prepare(timezone.localdate(), settings, timezone.now())
     choices = store_choices(prepared)
@@ -2822,7 +2868,7 @@ def shopping_rhythm(request):
             "rows": rows,
             "till_note": till_note(prepared, settings),
             "rhythm_landing": RHYTHM_LANDING,
-            "may_tune": access_of(request).allows("products"),
+            "may_tune": may_tune,
         },
     )
 
@@ -2862,8 +2908,10 @@ def shopping_exclude(request):
     """Never propose an article again (`article`) - everywhere, or at one
     store only (`chez`, « Pas ici ») - or a whole category (`categorie`, one
     some article carries). See ShoppingExclusion. Left out everywhere, an
-    article's « Pas ici » rows go: they say nothing more. Anything that
-    cannot be read is one message, and nothing is written."""
+    article keeps its « Pas ici » rows: taken back, it is out at those
+    stores again, as before. The message of an exclusion this answer made
+    carries it (_with_undo), for its « Annuler ». Anything that cannot be
+    read is one message, and nothing is written."""
     if request.method != "POST":
         return redirect("inventory:shopping_list")
     landing = _shopping_landing(request)
@@ -2880,17 +2928,25 @@ def shopping_exclude(request):
         elif asked_store is not None and store is None:
             messages.error(request, "Enseigne introuvable : rien n'a été exclu.", extra_tags=tag)
         elif store is not None:
-            ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=store)
-            messages.success(request, f"« {stock_type.name} » ne sera plus proposé chez {store.name}.", extra_tags=tag)
+            exclusion, created = ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=store)
+            messages.success(
+                request,
+                f"« {stock_type.name} » ne sera plus proposé chez {store.name}.",
+                extra_tags=_with_undo(tag, exclusion, created),
+            )
         else:
-            with transaction.atomic():
-                ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=None)
-                ShoppingExclusion.objects.filter(stock_type=stock_type, supplier__isnull=False).delete()
-            messages.success(request, f"« {stock_type.name} » ne sera plus proposé.", extra_tags=tag)
+            exclusion, created = ShoppingExclusion.objects.get_or_create(stock_type=stock_type, supplier=None)
+            messages.success(
+                request, f"« {stock_type.name} » ne sera plus proposé.", extra_tags=_with_undo(tag, exclusion, created)
+            )
         return _back_to_the_list(request, landing)
     if category is not None and StockType.objects.filter(category=category).exists():
-        ShoppingExclusion.objects.get_or_create(category=category)
-        messages.success(request, f"Catégorie {_category_words(category)} : plus proposée.", extra_tags=tag)
+        exclusion, created = ShoppingExclusion.objects.get_or_create(category=category)
+        messages.success(
+            request,
+            f"Catégorie {_category_words(category)} : plus proposée.",
+            extra_tags=_with_undo(tag, exclusion, created),
+        )
     else:
         messages.error(request, "Catégorie introuvable : rien n'a été exclu.", extra_tags=tag)
     return _back_to_the_list(request, landing)
@@ -2962,6 +3018,9 @@ NOT_IN_LIST = "Cet article n'est plus dans la liste."
 LIST_FINISHED = "Cette liste est terminée : rien n'a changé."
 CHANGED = "Modifié : « {name} » ({quantity})."
 REMOVED = "« {name} » retiré de la liste."
+#: « Vider la liste » finding nothing to remove: a double submit, another phone.
+NOTHING_TO_CLEAR = "Rien à retirer : la liste est déjà vide."
+CLEARED_LIST_FINISHED = "Cette liste a été terminée entre-temps : rien n'a été retiré."
 TICK_UNREADABLE = "Rien n'a changé : rechargez la page."
 ALREADY_FINISHED = "Ces courses sont déjà terminées."
 #: « Courses terminées » posted for a list finished meanwhile (another phone,
@@ -2990,6 +3049,11 @@ def _added_all_words(added: int, already: int, too_wide: int = 0) -> str:
     if too_wide:
         said += f" {too_wide} non {'ajouté' if too_wide == 1 else 'ajoutés'} : quantité trop grande."
     return said
+
+
+def _cleared_words(count: int) -> str:
+    """« Vider la liste »'s message: « Liste vidée : 3 articles retirés. »."""
+    return "Liste vidée : 1 article retiré." if count == 1 else f"Liste vidée : {count} articles retirés."
 
 
 def _finished_words(store_name: str, done) -> str:
@@ -3633,6 +3697,44 @@ def shopping_list_item_delete(request):
         messages.success(request, REMOVED.format(name=item.name))
     else:
         messages.warning(request, _gone_or_finished(item))
+    return redirect(_list_page_url(store.pk))
+
+
+def shopping_list_clear(request):
+    """« Vider la liste »: every item of the store's OPEN list off it at
+    once, ticked ones included (asked first, on the page). ONE delete
+    filtered on that open list, as it stands when it runs: a finished list
+    is never touched, and the message says how many went. The list itself
+    stays (an open list with no item is no list in progress). Nothing to
+    remove - a double submit, another phone - is said, nothing done."""
+    if request.method != "POST":
+        return redirect("inventory:shopping_lists")
+    store = store_of(request.POST.get(STORE_PARAM, ""))
+    if store is None:
+        messages.warning(request, STORE_NOT_FOUND_CHANGE)
+        return redirect("inventory:shopping_lists")
+    on_the_list = ShoppingListItem.objects.filter(
+        shopping_list__supplier=store, shopping_list__finished_at__isnull=True
+    )
+    # The page names the list it showed (`liste`): emptied only while it is
+    # still this store's open list. Finished by another phone in between,
+    # the next open list - its unticked items carried over - was never the
+    # one asked to be emptied. A post naming none (an older page) empties
+    # the store's open list as it stands.
+    asked = request.POST.get(SHOPPING_LIST_PARAM)
+    if asked is not None:
+        if (
+            not is_id(asked)
+            or not ShoppingList.objects.filter(pk=int(asked), supplier=store, finished_at__isnull=True).exists()
+        ):
+            messages.warning(request, CLEARED_LIST_FINISHED)
+            return redirect(_list_page_url(store.pk))
+        on_the_list = on_the_list.filter(shopping_list_id=int(asked))
+    deleted, _counts = on_the_list.delete()
+    if deleted:
+        messages.success(request, _cleared_words(deleted))
+    else:
+        messages.warning(request, NOTHING_TO_CLEAR)
     return redirect(_list_page_url(store.pk))
 
 

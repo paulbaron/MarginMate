@@ -71,6 +71,7 @@ SHOPPING_LIST_ROUTES = (
     "shopping_list_item_delete",
     "shopping_list_item_tick",
     "shopping_list_finish",
+    "shopping_list_clear",
 )
 
 
@@ -112,6 +113,8 @@ def shopping_list_landings(client, made, lists) -> list:
         ),
         client.post(reverse("inventory:shopping_list_finish"), {"liste": lists.open.pk, "garder": "1"}, follow=True),
         client.post(reverse("inventory:shopping_list_finish"), {"liste": "abc"}, follow=True),
+        client.post(reverse("inventory:shopping_list_clear"), {"fournisseur": store}, follow=True),
+        client.post(reverse("inventory:shopping_list_clear"), {"fournisseur": "abc"}, follow=True),
         client.get(add, follow=True),
     ]
     assert ShoppingList.objects.filter(pk=lists.open.pk, finished_at__isnull=False).exists()

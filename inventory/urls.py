@@ -44,6 +44,7 @@ urlpatterns = [
     path("courses/liste/retirer/", views.shopping_list_item_delete, name="shopping_list_item_delete"),
     path("courses/liste/cocher/", views.shopping_list_item_tick, name="shopping_list_item_tick"),
     path("courses/liste/terminer/", views.shopping_list_finish, name="shopping_list_finish"),
+    path("courses/liste/vider/", views.shopping_list_clear, name="shopping_list_clear"),
     path("review/", views.review_queue, name="review_queue"),
     path("review/approve-all/", views.approve_all_suggestions, name="approve_all_suggestions"),
     path("review/<int:product_id>/assign/", views.assign_product, name="assign_product"),

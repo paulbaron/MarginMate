@@ -256,6 +256,7 @@ VIEW_AREAS = {
     "inventory:shopping_list_item_delete": _SHOPPING,
     "inventory:shopping_list_item_tick": _SHOPPING,
     "inventory:shopping_list_finish": _SHOPPING,
+    "inventory:shopping_list_clear": _SHOPPING,
     # Old addresses of « Données »'s associations: they only redirect there.
     "inventory:export_associations": OWNER_ONLY,
     "inventory:import_associations": OWNER_ONLY,

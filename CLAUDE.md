@@ -7189,8 +7189,10 @@ there:
   « Ne jamais proposer » change it for everybody - their routes
   (`shopping_settings`, `shopping_exclude`, `shopping_include`) stay
   « Produits & charges »' (no `VIEW_AREAS` entry) and the pages draw them
-  for `may_tune` only, the exclusions then not read at all. « Les plus
-  achetés ici »' « Total HT » is drawn for `can.sees_costs` only.
+  for `may_tune` only - an exclusion's « Annuler » too, even in a message he
+  is shown on a phone the owner used -, the exclusions then not read at
+  all. « Les plus achetés ici »' « Total HT » is drawn for `can.sees_costs`
+  only.
 - « Réglages » (`shopping_settings`, `#reglages`): `seuil` 10-60, `memoire`
   2-24 months, `caisse` (a checkbox); ASCII digits only, a refusal per
   field and nothing written; « Valeurs par défaut » (`defaut`) deletes the
@@ -7202,7 +7204,8 @@ there:
   one row, pk 1, absent until something is saved - `current()` never
   writes).
 - `shopping_exclude`: `article` everywhere (« Ne plus proposer », with
-  `data-confirm`; it deletes the article's « Pas ici » rows), `article` +
+  `data-confirm`; it KEEPS the article's « Pas ici » rows, so its undo puts
+  back exactly what was there), `article` +
   `chez` (« Pas ici », the store left out at - its own field: `fournisseur`
   only says which list to go back to, and every form carries it) or
   `categorie` (one some article carries; "" is the articles with none).
@@ -7213,6 +7216,23 @@ there:
 - `shopping_include` (`exclusion`): « Réinclus : … », « Cette exclusion
   n'existe plus : rien n'a changé. », or « … reste exclu : … » when the
   article stays out through its category or its everywhere row.
+- **« Annuler » is in the exclusion's own message** (the owner, 06/10/2026:
+  « pouvoir facilement revert cette action »). Only an exclusion THIS answer
+  made: its message carries `annuler-<pk>` beside its place tag
+  (`views.UNDO_TAG`, `_with_undo`; `_messages_by_place` finds the place by
+  membership, so the extra token never moves it); one `get_or_create` found
+  already there (a double submit, a page drawn before) offers none -
+  undoing it would take back an older decision. Both pages mark, after
+  `_messages_by_place` and for `may_tune` only, each message whose
+  exclusion still exists (`_mark_undos`, one query for them all, none
+  without such a message): `message.undo`, and the landing its form posts
+  as `retour` - the place it is said in (the top: `exclusions`), `rythme`
+  on « Rythme d'achat ». Every placed message is drawn by ONE include,
+  `_shopping_message.html`: a small « Annuler » posting to
+  `shopping_include` with the page's store and days, no `data-confirm` (it
+  is the undo), so the « Réinclus … » lands where it was pressed. An
+  exclusion gone meanwhile (taken back twice, from « Exclusions ») draws
+  the message alone.
 - `ShoppingExclusion` (inventory 0021): an article XOR a category, a
   category always everywhere, an article once everywhere and once per
   store - check and unique constraints, `test_shopping_models`. **Neither
@@ -7251,7 +7271,10 @@ till's first day: `TillWindowTests`, `TillStartOnTheLineTests`;
 `PurchaseFilterTests`, `UsualPurchaseAtTests`), `test_shopping_page` (every
 state and form of both pages, each form posted as the page draws it,
 placed messages, markup never echoed, the query cost; `LineRowsTests`, the
-« Liste » column, `ViewerWhoMayNotTuneTests`), and the sweeps in
+« Liste » column, `UndoTests` - each « Annuler » read off its message and
+posted, none for an exclusion already there or gone -,
+`ViewerWhoMayNotTuneTests`; its `said_in` reads a message without its
+form), and the sweeps in
 `tests/test_views_smoke.py` (`make_shopping_history`, the invented fixture
 the others import; `ShoppingParameterSmokeTests`), `tests/test_ui.py`
 (the cards' labels, the wide « Pourquoi », `data-sort` on « À acheter »),
@@ -7325,7 +7348,8 @@ reference; it never imports the views); the views are thin, at the end of
   in progress, so a list stays reachable once its store's documents are
   gone. Ids through `is_id`.
 - **An open list with no item is no list in progress.** Emptied by
-  « Retirer », it keeps no store reachable (`store_of` needs an item), it
+  « Retirer » or « Vider la liste », it keeps no store reachable
+  (`store_of` needs an item), it
   is not under « En cours » (the index filters `total > 0`), and its next
   item starts it again: `add_item`, in the savepoint that writes, sets its
   `created_at` and `created_by` to that add's - never the day of a first
@@ -7523,7 +7547,20 @@ answers a GET with a redirect to the lists):
   address, a finished one is drawn read-only. A store or a list the
   address cannot give: the lists, saying so.
 - POST `ajouter/`, `tout-ajouter/`, `modifier/`, `retirer/` (no
-  confirmation: adding back is one form), `cocher/`, `terminer/`. **Every
+  confirmation: adding back is one form), `cocher/`, `terminer/`, `vider/`.
+  **« Vider la liste »** (`shopping_list_clear`, the owner, 06/10/2026:
+  « supprimer tous les éléments de la liste de course d'un coup »): in the
+  header of the list to prepare while it holds an item - never on the tick
+  page nor a finished list -, asked first (« Retirer les N articles de la
+  liste ? »), it removes every item of the store's OPEN list, ticked ones
+  too, in ONE delete filtered on the open list (the message counts what
+  went: « Liste vidée : N articles retirés. »); the list row stays and no
+  finished list is touched; nothing left - a double submit, another phone
+  - is « Rien à retirer : la liste est déjà vide. ». The form names the
+  list it showed (`liste`): finished by another phone in between, the next
+  open list - its unticked items carried over - is not emptied (« Cette
+  liste a été terminée entre-temps : rien n'a été retiré. »).
+  **Every
   refusal is said and nothing written** (the sentences are the views'
   constants, tested word for word); an item is looked up among its store's
   lists only, and a write is filtered on an open list - none changed says
@@ -7621,6 +7658,9 @@ card's unit - each option it draws for another product of the store,
 posted as drawn, stored as its label says -, a free text's card saying
 what it counts, a menu name longer than the label's column, the
 forecast's size and another store's product refused),
+`ClearTests` (« Vider la liste » drawn only where a list holds items,
+posted as drawn: the open list emptied and only it, the message singular
+and plural, a double submit, a store that cannot be read),
 `test_shopping_lists.py`'s `CardItemTests` and
 `CardLabelsTests.test_the_items_option_says_what_the_card_stores` (every
 card item with every item known now: the label is what the save stores),
@@ -10306,7 +10346,7 @@ page ouverte » with none).
   area of `COST_AREAS`). A barman counting bottles learnt every purchase price otherwise - the
   margin - from a box ticked by default.
 - **« Liste de courses »** (`shopping`, the owner, 04/10/2026; « Listes de courses »): the shopping
-  lists' eight routes, « Prévoir les courses » and « Rythme d'achat » are `_SHOPPING` =
+  lists' nine routes (« Vider la liste » included), « Prévoir les courses » and « Rythme d'achat » are `_SHOPPING` =
   {`products`, `shopping`} in `VIEW_AREAS`. The forecast's settings and exclusions
   (`shopping_settings`, `shopping_exclude`, `shopping_include`) have no entry and stay their app's,
   `products`: they change the forecast for everybody, so its pages draw their forms only for one
